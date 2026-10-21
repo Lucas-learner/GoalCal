@@ -1,0 +1,10 @@
+streamlit>=1.40
+streamlit-calendar>=1.4.0
+sqlalchemy>=2.0
+pydantic>=2.7
+python-dotenv>=1.0
+python-dateutil>=2.9
+dateparser>=1.2
+openai>=1.40
+icalendar>=6.0
+pytest>=8.0

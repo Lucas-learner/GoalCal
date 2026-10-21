@@ -1,0 +1,46 @@
+{"id": "add-01", "now": "2026-10-21T09:00:00+08:00", "text": "Add a meeting tomorrow 10am", "expect": {"intent": "add_event", "start": "2026-10-22T10:00", "title_contains": "meeting"}}
+{"id": "add-02", "now": "2026-10-21T09:00:00+08:00", "text": "Schedule gym Friday 7pm", "expect": {"intent": "add_event", "start": "2026-10-23T19:00", "title_contains": "gym"}}
+{"id": "add-03", "now": "2026-10-21T09:00:00+08:00", "text": "Block 90 minutes for writing tomorrow", "expect": {"intent": "add_event", "start": "2026-10-22T09:00", "duration_min": 90}}
+{"id": "add-04", "now": "2026-10-21T09:00:00+08:00", "text": "Put lunch with Amy on Friday at noon", "expect": {"intent": "add_event", "start": "2026-10-23T12:00"}}
+{"id": "add-05", "now": "2026-10-21T09:00:00+08:00", "text": "Add a call with the sponsor on Oct 28 at 3pm", "expect": {"intent": "add_event", "start": "2026-10-28T15:00"}}
+{"id": "add-06", "now": "2026-10-21T09:00:00+08:00", "text": "Book a 30 minute review tomorrow at 4pm", "expect": {"intent": "add_event", "start": "2026-10-22T16:00", "duration_min": 30}}
+{"id": "add-07", "now": "2026-10-21T09:00:00+08:00", "text": "set up a dentist appointment next Monday at 9am", "expect": {"intent": "add_event", "start": "2026-10-26T09:00"}}
+{"id": "add-08", "now": "2026-10-21T09:00:00+08:00", "text": "add standup every morning at 10", "expect": {"intent": "add_event"}}
+{"id": "move-01", "now": "2026-10-21T09:00:00+08:00", "text": "Move tomorrow's workout to Friday", "expect": {"intent": "move_event", "start": "2026-10-23T09:00"}}
+{"id": "move-02", "now": "2026-10-21T09:00:00+08:00", "text": "Reschedule my dentist appointment to next Monday", "expect": {"intent": "move_event", "start": "2026-10-26T09:00"}}
+{"id": "move-03", "now": "2026-10-21T09:00:00+08:00", "text": "Push the team meeting to Friday afternoon", "expect": {"intent": "move_event"}}
+{"id": "move-04", "now": "2026-10-21T09:00:00+08:00", "text": "帮我 把明天的健身改到周五", "expect": {"intent": "move_event"}}
+{"id": "delete-01", "now": "2026-10-21T09:00:00+08:00", "text": "Cancel the dentist appointment", "expect": {"intent": "delete_event"}}
+{"id": "delete-02", "now": "2026-10-21T09:00:00+08:00", "text": "Delete tomorrow's gym", "expect": {"intent": "delete_event"}}
+{"id": "delete-03", "now": "2026-10-21T09:00:00+08:00", "text": "Remove the standup on Friday", "expect": {"intent": "delete_event"}}
+{"id": "query-01", "now": "2026-10-21T09:00:00+08:00", "text": "What do I have tomorrow?", "expect": {"intent": "query_events"}}
+{"id": "query-02", "now": "2026-10-21T09:00:00+08:00", "text": "Am I free this afternoon?", "expect": {"intent": "query_events"}}
+{"id": "query-03", "now": "2026-10-21T09:00:00+08:00", "text": "Show my schedule for next week", "expect": {"intent": "query_events"}}
+{"id": "query-04", "now": "2026-10-21T09:00:00+08:00", "text": "我明天有什么安排", "expect": {"intent": "query_events"}}
+{"id": "goal-01", "now": "2026-10-21T09:00:00+08:00", "text": "I want to publish my first short video in 30 days", "expect": {"intent": "create_goal", "deadline": "2026-11-20"}}
+{"id": "goal-02", "now": "2026-10-21T09:00:00+08:00", "text": "Help me learn guitar in 60 days", "expect": {"intent": "create_goal", "deadline": "2026-12-20"}}
+{"id": "goal-03", "now": "2026-10-21T09:00:00+08:00", "text": "My goal is to finish my side project by Dec 20", "expect": {"intent": "create_goal", "deadline": "2026-12-20"}}
+{"id": "goal-04", "now": "2026-10-21T09:00:00+08:00", "text": "I want to run a half marathon in 90 days", "expect": {"intent": "create_goal", "deadline": "2027-01-19"}}
+{"id": "goal-05", "now": "2026-10-21T09:00:00+08:00", "text": "我想在30天内发布第一条短视频", "expect": {"intent": "create_goal"}}
+{"id": "prog-01", "now": "2026-10-21T09:00:00+08:00", "text": "I finished the script today", "expect": {"intent": "log_progress"}}
+{"id": "prog-02", "now": "2026-10-21T09:00:00+08:00", "text": "Done with the first draft", "expect": {"intent": "log_progress"}}
+{"id": "prog-03", "now": "2026-10-21T09:00:00+08:00", "text": "I wrote the opening today", "expect": {"intent": "log_progress"}}
+{"id": "prog-04", "now": "2026-10-21T09:00:00+08:00", "text": "完成了一半的脚本", "expect": {"intent": "log_progress"}}
+{"id": "state-01", "now": "2026-10-21T09:00:00+08:00", "text": "I'm tired", "expect": {"intent": "set_state", "state": "tired"}}
+{"id": "state-02", "now": "2026-10-21T09:00:00+08:00", "text": "I'm swamped today", "expect": {"intent": "set_state", "state": "busy"}}
+{"id": "state-03", "now": "2026-10-21T09:00:00+08:00", "text": "I have no idea where to start", "expect": {"intent": "set_state", "state": "uninspired"}}
+{"id": "state-04", "now": "2026-10-21T09:00:00+08:00", "text": "Feeling fresh this morning", "expect": {"intent": "set_state", "state": "fresh"}}
+{"id": "state-05", "now": "2026-10-21T09:00:00+08:00", "text": "我有点累", "expect": {"intent": "set_state", "state": "tired"}}
+{"id": "chat-01", "now": "2026-10-21T09:00:00+08:00", "text": "hello", "expect": {"intent": "chat"}}
+{"id": "chat-02", "now": "2026-10-21T09:00:00+08:00", "text": "thanks!", "expect": {"intent": "chat"}}
+{"id": "chat-03", "now": "2026-10-21T09:00:00+08:00", "text": "what can you do", "expect": {"intent": "chat"}}
+{"id": "hard-01", "now": "2026-10-21T09:00:00+08:00", "text": "remind me to call mom tomorrow at 6pm", "expect": {"intent": "add_event", "start": "2026-10-22T18:00"}}
+{"id": "hard-02", "now": "2026-10-21T09:00:00+08:00", "text": "Let's do lunch next Thursday at 12", "expect": {"intent": "add_event"}}
+{"id": "hard-03", "now": "2026-10-21T09:00:00+08:00", "text": "Can we do the review Thursday instead?", "expect": {"intent": "move_event"}}
+{"id": "hard-04", "now": "2026-10-21T09:00:00+08:00", "text": "what's my day look like", "expect": {"intent": "query_events"}}
+{"id": "hard-05", "now": "2026-10-21T09:00:00+08:00", "text": "Move the gym from Friday to Saturday", "expect": {"intent": "move_event", "start": "2026-10-24T09:00"}}
+{"id": "hard-06", "now": "2026-10-21T09:00:00+08:00", "text": "Push my 3pm to 4pm", "expect": {"intent": "move_event"}}
+{"id": "hard-07", "now": "2026-10-21T09:00:00+08:00", "text": "Add a meeting next Friday at 10am", "expect": {"intent": "add_event", "start": "2026-10-30T10:00"}}
+{"id": "hard-08", "now": "2026-10-21T09:00:00+08:00", "text": "I need 2 hours for the video on Sunday", "expect": {"intent": "add_event", "duration_min": 120}}
+{"id": "hard-09", "now": "2026-10-21T09:00:00+08:00", "text": "把周五的会议挪到下周一", "expect": {"intent": "move_event"}}
+{"id": "hard-10", "now": "2026-10-21T09:00:00+08:00", "text": "I'm exhausted, push everything to tomorrow", "expect": {"intent": "set_state"}}
