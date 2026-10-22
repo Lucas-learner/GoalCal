@@ -3,6 +3,7 @@ from datetime import date, datetime
 from sqlalchemy import select
 
 from goalcal.domain import goals as svc
+from goalcal.domain import refine
 from goalcal.models import Checkin, Event, User
 
 
@@ -13,21 +14,22 @@ def _user(session):
     return u
 
 
-def test_goal_has_ten_leaf_steps(session):
+def test_goal_stores_outline_and_first_batch_only(session):
     u = _user(session)
     g = svc.create_goal(session, u.id, "Publish my first short video", deadline=date(2026, 11, 20))
-    assert len(g.steps) == 10
+    assert svc.outline_phases(g) == ["定位与选题", "脚本与分镜", "拍摄", "剪辑与发布"]
+    assert len(g.steps) == 2  # 滚动拆解：只落第一阶段的步骤
+    assert all(s.milestone == "定位与选题" for s in g.steps)
     assert all(s.est_min <= 90 for s in g.steps)
-    assert all(s.milestone for s in g.steps)
 
 
-def test_progress_is_weighted_by_estimated_minutes(session):
+def test_progress_is_phase_based(session):
     u = _user(session)
     g = svc.create_goal(session, u.id, "Learn guitar")
     first = sorted(g.steps, key=lambda s: s.seq)[0]
     svc.complete_step(session, first)
-    expected = first.est_min / sum(s.est_min for s in g.steps)
-    assert abs(svc.progress(g) - expected) < 1e-6
+    # learn 模板 4 个阶段；当前阶段 2 步完成 1 步 → (0 + 1/2) / 4
+    assert svc.progress(g) == round(0.5 / 4, 6)
 
 
 def test_complete_step_uses_injected_now(session):
@@ -56,11 +58,29 @@ def test_next_step_skips_done(session):
     assert svc.next_step(g).id == steps[1].id
 
 
-def test_goal_completes(session):
+def test_goal_completes_only_after_all_outline_phases_have_steps(session):
     u = _user(session)
     g = svc.create_goal(session, u.id, "Finish my side project")
     for s in list(g.steps):
         svc.complete_step(session, s)
+    # 滚动拆解：首批做完但大纲后续阶段还没拆出来，不能提前判完成
+    assert g.status == "active"
+
+    while g.status != "done":
+        created = refine.refine_upcoming(session, g)
+        assert created, "模板步骤用完前目标不该卡住"
+        for s in created:
+            svc.complete_step(session, s)
+        session.refresh(g)
+    assert svc.progress(g) == 1.0
+
+
+def test_goal_without_outline_completes_when_all_steps_done(session):
+    u = _user(session)
+    g = svc.create_goal(session, u.id, "My own plan", with_template=False)
+    step = svc.add_step(session, g, "Only step")
+    session.refresh(g)
+    svc.complete_step(session, step)
     assert g.status == "done"
     assert svc.progress(g) == 1.0
 
@@ -84,8 +104,8 @@ def test_add_custom_step(session):
     step = svc.add_step(session, g, "Practice chord changes", est_min=30, energy=0, kind="physical")
     session.refresh(g)
 
-    assert len(g.steps) == 11
-    assert step.seq == 11
+    assert len(g.steps) == 3
+    assert step.seq == 3
     assert step.title == "Practice chord changes"
     assert (step.est_min, step.energy, step.kind) == (30, 0, "physical")
 
@@ -119,7 +139,7 @@ def test_delete_step_removes_checkins(session):
     session.refresh(g)
     session.refresh(linked)
 
-    assert len(g.steps) == 9
+    assert len(g.steps) == 1
     assert session.scalars(select(Checkin).where(Checkin.step_id == step_id)).all() == []
     assert linked.step_id is None
 

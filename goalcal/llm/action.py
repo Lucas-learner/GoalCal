@@ -13,6 +13,7 @@ Intent = Literal[
     "create_goal",
     "delete_goal",
     "schedule_step",
+    "refine_steps",
     "log_progress",
     "set_state",
     "chat",

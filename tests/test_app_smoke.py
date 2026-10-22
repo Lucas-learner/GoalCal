@@ -102,14 +102,14 @@ def test_piano_goal_clarifies_then_builds_complex_plan():
     with session_scope() as s:
         assert s.scalar(select(Goal).where(Goal.title == "学会弹钢琴")) is None
 
-    next(b for b in at.button if b.label.startswith("零基础")).click().run()
+    next(b for b in at.button if b.label == "3 个月").click().run()
     assert not at.exception, at.exception
     assert any("Goal set" in m.value for m in at.markdown)
     assert at.session_state["goal_brief"] is None
     with session_scope() as s:
         goal = s.scalar(select(Goal).where(Goal.title == "学会弹钢琴"))
         assert goal is not None and goal.template_key == "piano"
-        assert len(goal.steps) == 12
+        assert len(goal.steps) == 2  # 滚动拆解：只落首批步骤
 
 
 def test_goal_replan_preview_is_applied_only_after_confirmation():

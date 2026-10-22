@@ -85,7 +85,8 @@ def test_create_goal_returns_steps_and_candidates(session, user):
     assert reply.action.intent == "create_goal"
     assert reply.goal_id is not None and reply.step_id is not None
     goal = goal_svc.active_goals(session, user.id)[0]
-    assert len(goal.steps) == 8
+    assert len(goal.steps) == 2  # 滚动拆解：只落首批步骤
+    assert goal_svc.outline_phases(goal)
     assert 1 <= len(reply.candidates) <= 3
     assert all(c.reasons for c in reply.candidates)
 
@@ -110,7 +111,8 @@ def test_piano_goal_is_created_after_clarification(session, user):
     assert "Goal set" in reply.text
     goal = goal_svc.active_goals(session, user.id)[0]
     assert goal.template_key == "piano"
-    assert len(goal.steps) == 12
+    assert len(goal.steps) == 2
+    assert goal_svc.outline_phases(goal) == ["准备与基线", "手型与音阶", "读谱与节奏", "第一首曲子", "巩固与下一步"]
     assert goal.deadline == NOW.date() + timedelta(days=90)
     assert 1 <= len(reply.candidates) <= 3
 
@@ -124,6 +126,7 @@ def test_llm_generated_plan_is_stored_for_custom_goal(session, user, monkeypatch
         deadline=NOW.date() + timedelta(days=7),
         complexity="simple",
     )
+    outline = ["范围", "练习", "模拟"]
     plan = [
         {
             "seq": 1,
@@ -136,7 +139,7 @@ def test_llm_generated_plan_is_stored_for_custom_goal(session, user, monkeypatch
         },
         {
             "seq": 2,
-            "milestone": "练习",
+            "milestone": "范围",
             "title": "限时做一套往年题并整理错题",
             "outcome": "错题清单",
             "est_min": 60,
@@ -144,12 +147,13 @@ def test_llm_generated_plan_is_stored_for_custom_goal(session, user, monkeypatch
             "kind": "deep",
         },
     ]
-    monkeypatch.setattr(agent, "generate_plan", lambda *args, **kwargs: plan)
+    monkeypatch.setattr(agent, "generate_outline_plan", lambda *args, **kwargs: (outline, plan))
 
     goal, source = agent.create_goal_from_brief(session, user.id, brief, NOW, TZ)
 
     assert source == "llm"
     assert goal.template_key == "llm"
+    assert goal_svc.outline_phases(goal) == outline
     assert [step.title for step in goal.steps] == [
         "整理 IBA6104 考试范围和往年题",
         "限时做一套往年题并整理错题",
@@ -221,7 +225,7 @@ def test_piano_goal_defaults_when_answer_is_vague(session, user):
 
     assert "Assumptions" in reply.text
     goal = goal_svc.active_goals(session, user.id)[0]
-    assert len(goal.steps) == 12
+    assert len(goal.steps) == 2
     assert goal.deadline == NOW.date() + timedelta(days=90)
 
 

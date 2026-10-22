@@ -116,6 +116,13 @@ def render_goal(
         meta = []
         if goal.get("days_left") is not None:
             meta.append(f"{goal['days_left']} days left")
+        phases = goal.get("phases") or []
+        if phases:
+            idx = next(
+                (i + 1 for i, p in enumerate(phases) if p["state"] == "current"),
+                len(phases),
+            )
+            meta.append(f"阶段 {idx}/{len(phases)}·{goal.get('current_phase') or '—'}")
         meta.append(f"{goal['done']}/{goal['total']} steps")
         if goal.get("template_key") == "llm":
             meta.append("AI plan")
@@ -141,18 +148,37 @@ def render_goal(
             st.caption("All steps are done. 🎉")
 
         with st.expander("All steps", expanded=False):
+            steps_by_phase: dict[str, list] = {}
             for s in goal["steps"]:
-                block = blocks_by_step.get(s.id)
-                icon = STATUS_ICON[step_display_status(s, block is not None)]
-                line = f"{icon} {s.seq}. {s.title} · {s.est_min}m"
-                if block is not None:
-                    line += f" · 📌 {block['start']:%a %b %d %H:%M}"
-                st.markdown(line)
-                if s.status == "todo":
-                    _step_actions(
-                        s, block, "all", on_schedule, on_complete, on_unschedule,
-                        on_delete_step, on_edit_step,
-                    )
+                steps_by_phase.setdefault(s.milestone, []).append(s)
+            if phases:
+                phase_groups = [
+                    (p["name"], steps_by_phase.get(p["name"], []), p["state"])
+                    for p in phases
+                ]
+                stray = [s for s in goal["steps"] if s.milestone not in {p["name"] for p in phases}]
+                if stray:
+                    phase_groups.append(("其他", stray, "current"))
+            else:
+                phase_groups = [("", goal["steps"], "current")]
+
+            for phase_name, phase_steps, phase_state in phase_groups:
+                if phase_name:
+                    icon = {"done": "✅", "current": "▶️", "todo": "○"}[phase_state]
+                    suffix = "" if phase_steps else " · 做到这里再细化"
+                    st.caption(f"{icon} {phase_name}{suffix}")
+                for s in phase_steps:
+                    block = blocks_by_step.get(s.id)
+                    icon = STATUS_ICON[step_display_status(s, block is not None)]
+                    line = f"{icon} {s.seq}. {s.title} · {s.est_min}m"
+                    if block is not None:
+                        line += f" · 📌 {block['start']:%a %b %d %H:%M}"
+                    st.markdown(line)
+                    if s.status == "todo":
+                        _step_actions(
+                            s, block, "all", on_schedule, on_complete, on_unschedule,
+                            on_delete_step, on_edit_step,
+                        )
 
             if on_add_step is not None:
                 with st.form(f"add_step_{goal['id']}"):
@@ -264,7 +290,9 @@ def render_goal(
 
 
 def render_summary(goal: dict) -> None:
+    phases = goal.get("phases") or []
+    done_phases = sum(1 for p in phases if p["state"] == "done")
     c1, c2, c3 = st.columns(3)
     c1.metric("Progress", f"{goal['progress'] * 100:.0f}%")
-    c2.metric("Steps done", f"{goal['done']}/{goal['total']}")
+    c2.metric("Phases done", f"{done_phases}/{len(phases)}" if phases else "—")
     c3.metric("Days left", goal.get("days_left") or "—")

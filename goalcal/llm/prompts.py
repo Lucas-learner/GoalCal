@@ -11,6 +11,7 @@ Allowed intents:
 - create_goal: user states a longer-term goal. Needs title (+ when_text for the deadline if any).
 - delete_goal: user wants to remove/archive a goal. Put the goal title in target.
 - schedule_step: user wants to find time for a goal step ("安排下一步", "find time to write the script").
+- refine_steps: user wants the next step broken into smaller actions ("下一步拆细一点", "break this step down").
 - log_progress: user reports work already done on a goal step.
 - set_state: user reports energy/availability state (tired/busy/uninspired/fresh).
 - chat: none of the above.

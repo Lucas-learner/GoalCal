@@ -23,6 +23,27 @@ KINDS = {"deep", "admin", "physical", "social", "research"}
 MAX_BY_COMPLEXITY = {"simple": 6, "standard": 9, "complex": 12}
 MIN_BY_COMPLEXITY = {"simple": 4, "standard": 5, "complex": 7}
 
+OUTLINE_SYSTEM = """You are GoalCal's goal decomposition planner.
+Today is {now} ({tz}). Weekday: {weekday}.
+
+Plan the goal as a ROLLING plan: a phase outline plus only the first batch of
+concrete steps. Later batches are generated just-in-time, so do NOT decompose
+the whole goal now. Return ONE JSON object:
+{{"outline":["阶段1","阶段2","阶段3"],"steps":[{{"milestone":"阶段1","title":"...","outcome":"...","est_min":30,"energy":1,"kind":"deep"}}]}}
+
+Rules:
+1. outline: 3-5 short phase names covering the whole goal, in order.
+2. steps: 2-3 concrete steps for the FIRST phase only; their milestone must be
+   exactly outline[0]. The very first step should be small enough to start today.
+3. Every step must be specific to THIS goal. One step = one observable action
+   that can fit in 15-60 minutes. Do not put dates or clock times in steps.
+4. Each step needs an observable outcome, est_min, energy (0=low, 1=medium,
+   2=deep focus), and kind: deep | admin | physical | social | research.
+5. Use the same language as the goal title. Chinese goal -> Chinese outline and steps.
+6. Do not use placeholder labels such as "Topic A", "Part B", or "Step 1".
+7. Output only JSON, no markdown.
+"""
+
 PLAN_SYSTEM = """You are GoalCal's goal decomposition planner.
 Today is {now} ({tz}). Weekday: {weekday}.
 
@@ -107,6 +128,81 @@ class PlanStep(BaseModel):
 
 class Plan(BaseModel):
     steps: list[PlanStep]
+
+
+class OutlinePlan(BaseModel):
+    outline: list[str]
+    steps: list[PlanStep]
+
+
+def generate_outline_plan(
+    title: str,
+    deadline: date | None,
+    *,
+    today: date | None = None,
+    level: str = "",
+    target: str = "",
+    complexity: str = "standard",
+    raw: str = "",
+    tz: str = "Asia/Shanghai",
+) -> tuple[list[str], list[dict[str, Any]]] | None:
+    """建目标的滚动拆解：3–5 个阶段的大纲 + 第一阶段 2–3 个具体步骤。
+
+    返回 (outline, step_defs)；未启用、失败或校验不通过时返回 None，
+    由调用方回退到模板路径（模板步骤有序，天然适合滚动）。
+    """
+    if not settings.llm_ready:
+        return None
+
+    today = today or date.today()
+    payload = {
+        "goal_title": title,
+        "deadline": deadline.isoformat() if deadline else None,
+        "days_left": (deadline - today).days if deadline else None,
+        "complexity": complexity,
+        "current_level": level or "unspecified",
+        "target_outcome": target or "unspecified",
+        "original_user_text": raw,
+    }
+    system = OUTLINE_SYSTEM.format(
+        now=today.isoformat(), tz=tz, weekday=today.strftime("%A")
+    )
+    try:
+        data = LLMClient().complete_json(
+            system,
+            json.dumps(payload, ensure_ascii=False),
+            temperature=0.0,
+        )
+        plan = OutlinePlan.model_validate(data)
+    except ValidationError as exc:
+        log.warning("LLM 大纲结构校验失败: %s", exc)
+        return None
+    except Exception as exc:  # noqa: BLE001 - 拆解失败必须能回退
+        log.warning("LLM 大纲生成失败(%s)，回退模板", exc)
+        return None
+
+    outline = [str(p).strip()[:120] for p in plan.outline if str(p).strip()][:5]
+    if len(outline) < 2:
+        log.warning("LLM 大纲阶段太少: %s", len(outline))
+        return None
+    if not plan.steps:
+        log.warning("LLM 大纲没有首批步骤")
+        return None
+
+    steps = []
+    for seq, step in enumerate(plan.steps[:3], 1):
+        steps.append(
+            {
+                "seq": seq,
+                "milestone": outline[0],
+                "title": step.title,
+                "outcome": step.outcome.strip()[:200],
+                "est_min": step.est_min,
+                "energy": step.energy,
+                "kind": step.kind,
+            }
+        )
+    return outline, steps
 
 
 def generate_plan(

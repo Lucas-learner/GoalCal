@@ -48,6 +48,11 @@ SCHEDULE_STEP_MARKERS = re.compile(
     r"找个?时间|安排(一下)?下一步|下一步|推进目标",
     re.I,
 )
+REFINE_STEP_MARKERS = re.compile(
+    r"\bbreak\b[^。.;!?]{0,20}\bdown\b|\bsmaller steps?\b|\bsplit\b[^。.;!?]{0,15}\bsteps?\b|"
+    r"拆细|拆成更小|拆小|细化|更细一点|太粗了|分小",
+    re.I,
+)
 DONE_MARKERS = re.compile(
     r"\b(done|finished|completed|wrote|did|made|published|recorded)\b|完成|写完|做完|做好了|发布了", re.I
 )
@@ -86,6 +91,7 @@ NEW_COMMAND_INTENTS = {
     "delete_goal",
     "query_events",
     "schedule_step",
+    "refine_steps",
     "create_goal",
 }
 
@@ -264,7 +270,24 @@ def parse_with_rules(text: str, now: datetime) -> Action:
             raw=raw,
         )
 
-    # 5) 给目标步骤找时间（"安排下一步" 要先于泛化的 "帮我安排…" 加日程）
+    # 5) 把下一步拆细（要先于“安排下一步”：“下一步拆细一点”也含“下一步”）
+    if REFINE_STEP_MARKERS.search(raw):
+        # 不走 _clean_title：步骤名里的“分”等字可能被 natdate 当成时间片段剥掉
+        target = re.sub(r"^\s*(?:把|请|帮我|帮忙)\s*", "", raw)
+        target = re.sub(
+            r"\bbreak\b|\bdown\b|\bsmaller\b|\bsteps?\b|\bsplit\b|"
+            r"拆细一点|拆细|拆小|拆成更小[的]?|细化一下|细化|更细一点|太粗了|分小|下一步",
+            " ", target, flags=re.I,
+        )
+        target = re.sub(r"\s+", " ", target).strip(" ,.'\"") or None
+        return Action(
+            intent="refine_steps",
+            progress_target=target,
+            confidence=0.7,
+            raw=raw,
+        )
+
+    # 6) 给目标步骤找时间（"安排下一步" 要先于泛化的 "帮我安排…" 加日程）
     if SCHEDULE_STEP_MARKERS.search(raw):
         target = _clean_title(raw, spans)
         if re.fullmatch(r"(下一步|next step)", target, re.I):
@@ -276,7 +299,7 @@ def parse_with_rules(text: str, now: datetime) -> Action:
             raw=raw,
         )
 
-    # 6) 加日程（显式指令，早于建目标/查询："帮我安排明天10点开会"、"help me add …"）
+    # 7) 加日程（显式指令，早于建目标/查询："帮我安排明天10点开会"、"help me add …"）
     if ADD_MARKERS.search(raw):
         when = _attach(dates[0][1], now) if dates else None
         title = _clean_title(raw, spans)
@@ -289,7 +312,7 @@ def parse_with_rules(text: str, now: datetime) -> Action:
             raw=raw,
         )
 
-    # 7) 建目标（"I want to ... in 30 days"）
+    # 8) 建目标（"I want to ... in 30 days"）
     if GOAL_MARKERS.search(raw):
         deadline = None
         if dates:
@@ -313,16 +336,16 @@ def parse_with_rules(text: str, now: datetime) -> Action:
             raw=raw,
         )
 
-    # 8) 报进度（否定句 "I did not finish …" / "没做完" 不算完成）
+    # 9) 报进度（否定句 "I did not finish …" / "没做完" 不算完成）
     if DONE_MARKERS.search(raw) and not ADD_MARKERS.search(raw) and not NEGATED_DONE.search(raw):
         target = _clean_title(raw, spans)
         return Action(intent="log_progress", progress_target=target, confidence=0.6, raw=raw)
 
-    # 9) 查
+    # 10) 查
     if QUERY_MARKERS.search(raw):
         return Action(intent="query_events", confidence=0.6, raw=raw)
 
-    # 10) 隐式加日程：只有日期/时间、没有指令词（"明天10点开会"、"周五下午3点半开会"）
+    # 11) 隐式加日程：只有日期/时间、没有指令词（"明天10点开会"、"周五下午3点半开会"）
     if dates and (duration or extract_time(raw)):
         when = _attach(dates[0][1], now)
         title = _clean_title(raw, spans)

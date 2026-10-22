@@ -222,10 +222,11 @@ def _complete_step(step_id: int) -> None:
         title = step.title
         goal_svc.complete_step(s, step, raw_text="completed from UI", now=as_utc_naive(_now(), TZ))
         cal.cancel_future_blocks(s, step_id, as_utc_naive(_now(), TZ))
+        note = agent.auto_refine_if_low(s, st.session_state["user_id"], step.goal, _now())
     pending = st.session_state.get("pending")
     if pending and pending.get("step_id") == step_id:
         st.session_state["pending"] = None
-    _flash(f"“{title}” marked done.")
+    _flash(f"“{title}” marked done." + (f" {note}" if note else ""))
     st.rerun()
 
 
@@ -723,7 +724,7 @@ with cal_col:
             new_deadline = st.date_input(
                 "Deadline", value=_now().date() + timedelta(days=30)
             )
-            with_template = st.checkbox("Auto-decompose with AI (4–12 steps)", value=True)
+            with_template = st.checkbox("Auto-decompose with AI (outline + first steps)", value=True)
             created = st.form_submit_button("Create goal", use_container_width=True)
         if created:
             if new_title.strip():

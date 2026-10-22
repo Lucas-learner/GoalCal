@@ -142,8 +142,15 @@ def pick_template(text: str) -> str:
 
 def build_steps(text: str, complexity: str = "full") -> tuple[str, list[dict]]:
     key = pick_template(text)
-    tpl = TEMPLATES[key]
-    raw_steps = [
+    raw_steps = full_steps(key)
+    step_defs = _select_steps(raw_steps, complexity)
+    return key, step_defs
+
+
+def full_steps(key: str) -> list[dict]:
+    """模板的完整有序步骤（不按复杂度抽减），供滚动拆解按批取。"""
+    tpl = TEMPLATES.get(key, TEMPLATES["generic"])
+    return [
         {
             "seq": i,
             "milestone": milestone,
@@ -155,8 +162,17 @@ def build_steps(text: str, complexity: str = "full") -> tuple[str, list[dict]]:
         }
         for i, (milestone, title, outcome, est, energy, kind) in enumerate(tpl["steps"], 1)
     ]
-    step_defs = _select_steps(raw_steps, complexity)
-    return key, step_defs
+
+
+def first_batch(steps: list[dict], min_n: int = 2, max_n: int = 3) -> list[dict]:
+    """取一批：优先同一阶段的连续步骤，数量限制在 min_n–max_n。"""
+    if not steps:
+        return []
+    first_ms = steps[0]["milestone"]
+    batch = [s for s in steps if s["milestone"] == first_ms][:max_n]
+    if len(batch) < min_n:
+        batch = steps[:min_n]
+    return [dict(s) for s in batch]
 
 
 def _select_steps(steps: list[dict], complexity: str) -> list[dict]:

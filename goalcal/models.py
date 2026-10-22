@@ -34,6 +34,7 @@ class Goal(Base):
     status: Mapped[str] = mapped_column(String(20), default="active")  # active|done|paused|archived
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
     template_key: Mapped[str] = mapped_column(String(40), default="generic")
+    outline: Mapped[str] = mapped_column(Text, default="")  # JSON 数组：阶段大纲（滚动拆解的总骨架）
 
     user: Mapped[User] = relationship(back_populates="goals")
     steps: Mapped[list["Step"]] = relationship(

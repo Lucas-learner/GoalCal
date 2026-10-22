@@ -21,7 +21,7 @@ from .domain import refine
 from .domain.scheduler import Candidate, Preferences, Requirement, propose
 from .llm.action import Action
 from .llm.parser import parse
-from .llm.plan import generate_plan
+from .llm.plan import generate_outline_plan, generate_plan
 from .llm.rules import NEW_COMMAND_INTENTS, parse_with_rules
 from .models import Event, Goal, RescheduleLog, StateLog, Step
 from .timeutil import as_local, as_utc_naive
@@ -98,6 +98,7 @@ def handle(
         "create_goal": _create_goal,
         "delete_goal": _delete_goal,
         "schedule_step": _schedule_step,
+        "refine_steps": _refine_steps,
         "log_progress": _log_progress,
         "set_state": _set_state,
     }.get(action.intent)
@@ -206,6 +207,27 @@ def looks_like_new_command(text: str, now: datetime) -> bool:
     return action.intent in NEW_COMMAND_INTENTS
 
 
+def auto_refine_if_low(
+    session: Session, user_id: int, goal: Goal, now: datetime
+) -> str:
+    """剩余 todo 步骤少于 2 个时，按阶段大纲自动补下一批；返回一句告知（没补则 ""）。"""
+    if goal.status != "active":
+        return ""
+    pending = [s for s in goal.steps if s.status == "todo"]
+    if len(pending) >= 2:
+        return ""
+    created = refine.refine_upcoming(session, goal)
+    if not created:
+        return ""
+    metrics.record(
+        session, user_id, metrics.PLAN_REFINED, now,
+        goal_id=goal.id,
+        payload={"created": len(created), "auto": True},
+    )
+    titles = "、".join(f"「{s.title}」" for s in created)
+    return f"剩下的步骤不多了，我按阶段大纲补了 {len(created)} 步：{titles}。"
+
+
 def _create_goal(session, user_id, action, now, tz, parser) -> Reply:
     brief = planner.assess(
         action.title or "New goal",
@@ -255,9 +277,12 @@ def create_goal_from_brief(
     now: datetime,
     tz: str = "Asia/Shanghai",
 ) -> tuple[Goal, str]:
-    """LLM 生成专属步骤；失败才用模板。返回 (goal, source)。"""
+    """LLM 生成阶段大纲 + 首批步骤；失败才用模板（模板内部也是大纲 + 首批）。
+
+    返回 (goal, source)。滚动拆解：只落第一批 2–3 步，后续由 refine_upcoming 补。
+    """
     deadline = brief.deadline or (now.date() + timedelta(days=90))
-    plan = generate_plan(
+    plan = generate_outline_plan(
         brief.title,
         deadline,
         today=now.date(),
@@ -268,13 +293,15 @@ def create_goal_from_brief(
         tz=tz,
     )
     if plan:
+        outline, step_defs = plan
         goal = goal_svc.create_goal(
             session,
             user_id,
             brief.title,
             deadline=deadline,
-            step_defs=plan,
+            step_defs=step_defs,
             template_key="llm",
+            outline=outline,
         )
         return goal, "llm"
     goal = goal_svc.create_goal(
@@ -288,6 +315,7 @@ def create_goal_from_brief(
 
 
 def _create_goal_now(session, user_id, brief, action, now, tz, parser) -> Reply:
+    brief = planner.fill_defaults(brief, today=now.date())
     deadline = brief.deadline or (now.date() + timedelta(days=90))
     goal, source = create_goal_from_brief(session, user_id, brief, now, tz)
     session.flush()
@@ -300,11 +328,13 @@ def _create_goal_now(session, user_id, brief, action, now, tz, parser) -> Reply:
     candidates = _propose(session, user_id, first, now, tz, goal.deadline)
 
     label = planner.complexity_label(brief.complexity)
+    phase_names = goal_svc.outline_phases(goal)
     body = (
         f"Goal set: **{goal.title}** — deadline {deadline:%b %d} "
         f"({(deadline - now.date()).days} days).\n"
-        f"I treated it as a **{label}** goal and split it into {len(steps)} steps "
-        f"across {len({s.milestone for s in steps})} milestones:\n{preview}\n  …\n"
+        f"I treated it as a **{label}** goal and sketched {len(phase_names)} phases: "
+        f"{' → '.join(phase_names)}.\n"
+        f"Here are the first {len(steps)} steps (the rest are planned just-in-time):\n{preview}\n"
     )
     if source == "llm":
         body += "These steps were generated for this specific goal.\n"
@@ -413,19 +443,59 @@ def _schedule_step(session, user_id, action, now, tz, parser) -> Reply:
         )
     goal = goals[0]
     step = _pick_step(goal, target=action.progress_target or action.title)
+    note = ""
+    if step is None:
+        # 没有待办步骤不一定是目标完成：滚动拆解下可能只是下一批还没补
+        note = auto_refine_if_low(session, user_id, goal, now)
+        step = _pick_step(goal)
     if step is None:
         return Reply(f"“{goal.title}” is already complete. 🎉", action, parser)
 
     candidates = _propose(session, user_id, step, now, tz, goal.deadline)
     if not candidates:
         return Reply(
-            f"I couldn't find a free slot for “{step.title}” in the next 5 days. "
+            (note + "\n" if note else "")
+            + f"I couldn't find a free slot for “{step.title}” in the next 5 days. "
             "Try a shorter step or move the deadline.",
             action, parser,
         )
     return Reply(
-        f"Here are 3 slots for “{step.title}” ({step.est_min}m). Pick one and I'll book it.",
+        (note + "\n" if note else "")
+        + f"Here are 3 slots for “{step.title}” ({step.est_min}m). Pick one and I'll book it.",
         action, parser, candidates=candidates, goal_id=goal.id, step_id=step.id,
+    )
+
+
+def _refine_steps(session, user_id, action, now, tz, parser) -> Reply:
+    """用户主动要求“下一步拆细一点”：把当前步骤拆成更小的动作（同卡住了的细化）。"""
+    goals = goal_svc.active_goals(session, user_id)
+    if not goals:
+        return Reply(
+            "You don't have an active goal yet. Tell me one and I'll break it down.",
+            action, parser,
+        )
+    goal = goals[0]
+    step = _pick_step(goal, target=action.progress_target or action.title)
+    if step is None:
+        return Reply(f"「{goal.title}」没有可以拆的步骤了。", action, parser)
+
+    created = refine.refine_next_steps(session, goal, step)
+    metrics.record(
+        session, user_id, metrics.PLAN_REFINED, now,
+        goal_id=goal.id, step_id=step.id,
+        payload={"created": len(created), "auto": False},
+    )
+    lines = "\n".join(f"• {s.title}（{s.est_min} 分钟）" for s in created)
+    text = (
+        f"好，把「{step.title}」拆成了 {len(created)} 个小动作，"
+        f"原步骤保留在后面：\n{lines}\n先从第一个 5 分钟的启动动作开始。"
+    )
+    candidates = _propose(session, user_id, created[0], now, tz, goal.deadline)
+    if candidates:
+        text += "\n给启动动作留了几个时间，挑一个？"
+    return Reply(
+        text, action, parser, candidates=candidates,
+        goal_id=goal.id, step_id=created[0].id,
     )
 
 
@@ -446,6 +516,7 @@ def _log_progress(session, user_id, action, now, tz, parser) -> Reply:
     if not partial:
         # 步骤已完成，取消还挂在日历上的未来目标块，避免“做完了还留着块”
         cal.cancel_future_blocks(session, step.id, as_utc_naive(now, tz))
+    note = auto_refine_if_low(session, user_id, goal, now)
     pct = int(goal_svc.progress(goal) * 100)
     nxt = _pick_step(goal)
     if partial:
@@ -456,6 +527,8 @@ def _log_progress(session, user_id, action, now, tz, parser) -> Reply:
         candidates = _propose(session, user_id, nxt, now, tz, goal.deadline) if nxt else []
         if nxt and candidates:
             text += f"\nNext: “{nxt.title}” ({nxt.est_min}m). Here are 3 slots."
+    if note:
+        text += "\n" + note
     return Reply(
         text, action, parser, candidates=candidates, goal_id=goal.id,
         step_id=(nxt.id if nxt else None),
@@ -917,8 +990,16 @@ def _checkin_outcome(session, user_id, ctx, action, text, now, tz, parser) -> Re
         if ev.step_id is not None:
             cal.cancel_future_blocks(session, ev.step_id, now_utc)
         goal = step.goal if step is not None else None
+        refine_note = ""
+        if goal is not None and goal.status == "active":
+            refine_note = auto_refine_if_low(session, user_id, goal, now)
         pct = int(goal_svc.progress(goal) * 100) if goal is not None else 0
         text_out = f"太好了，「{_block_title(session, ev)}」记为完成！目标进度 {pct}%。"
+        if goal is not None and sum(1 for s in goal.steps if s.status == "done") == 1:
+            # 第一次签到顺带校正水平：澄清时不追问，在这里补一句
+            text_out += "\n顺带问一下：这一步感觉偏难还是偏简单？后面我会按你的反馈调整。"
+        if refine_note:
+            text_out += "\n" + refine_note
         cands: list[Candidate] = []
         nxt_step = goal_svc.next_step(goal) if goal is not None and goal.status == "active" else None
         if nxt_step is not None:

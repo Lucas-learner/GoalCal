@@ -14,8 +14,9 @@ def test_seed_creates_demo_data(session):
     goal = session.scalar(select(Goal))
     assert goal is not None and goal.title == "Publish my first short video"
     steps = list(session.scalars(select(Step).order_by(Step.seq)))
-    assert len(steps) == 10
-    assert [s.status for s in steps[:2]] == ["done", "done"]
+    assert len(steps) == 5  # 首批 2 步 + 滚出来的下一批 3 步
+    assert steps[0].status == "done"
+    assert [s.status for s in steps[1:]] == ["todo"] * 4
 
 
 def test_seed_is_idempotent(session):

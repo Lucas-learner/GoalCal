@@ -136,52 +136,26 @@ def classify(
 
 
 def ready(brief: GoalBrief) -> bool:
-    return brief.deadline is not None and (
-        not is_skill(brief.title) or bool(brief.level)
-    )
+    """只在没有截止日时追问；水平先按默认值，第一次签到时顺带校正。"""
+    return brief.deadline is not None
 
 
 def clarification_text(brief: GoalBrief) -> str:
-    missing_level = is_skill(brief.title) and not brief.level
-    missing_deadline = brief.deadline is None
     label = complexity_label(brief.complexity)
 
-    if missing_level and missing_deadline:
-        return (
-            f"“{brief.title}”我判断是一个**{label}目标**，不适合直接套固定 10 步。\n"
-            "先确认两件事：\n"
-            "① 你现在是什么水平？（零基础 / 有基础）\n"
-            "② 想在多久内达到什么程度？（例如：3 个月 / 能弹一首简单曲子）\n\n"
-            "回一句就行，例如：**零基础，3 个月，能弹一首简单曲子**。"
-        )
-    if missing_level:
-        return (
-            f"“{brief.title}”我会按**{label}目标**来拆。\n"
-            "你现在的水平是？可以回：**零基础** / **有基础** / **先按零基础**。"
-        )
-    if is_exam(brief.title) and missing_deadline:
+    if is_exam(brief.title):
         return (
             f"“{brief.title}”先确认考试时间。\n"
-            "可以回：**7 天后** / **14 天后** / **10 月 29 日**。"
+            "可以回：**7 天后** / **14 天后** / **10 月 29 日**。其他按默认来，做起来再调。"
         )
     return (
-        f"“{brief.title}”我会按**{label}目标**来拆。\n"
+        f"“{brief.title}”我判断是一个**{label}目标**，先确认一下时间：\n"
         "想多久完成？可以回：**3 个月** / **6 个月** / **1 年**。"
+        "水平先按默认（零基础）来，第一次做完会再跟你校正。"
     )
 
 
 def quick_options(brief: GoalBrief) -> list[str]:
-    missing_level = is_skill(brief.title) and not brief.level
-    missing_deadline = brief.deadline is None
-    if missing_level and missing_deadline:
-        return [
-            "零基础 · 3 个月 · 能弹一首简单曲子",
-            "有基础 · 6 个月 · 能流畅弹奏",
-            "先按 90 天入门计划",
-            "先不建了",
-        ]
-    if missing_level:
-        return ["零基础", "有基础", "先按零基础", "先不建了"]
     if is_exam(brief.title):
         return ["7 天后", "14 天后", "1 个月后", "先不建了"]
     return ["3 个月", "6 个月", "1 年", "先不建了"]

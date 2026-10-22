@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import difflib
+import json
 from datetime import date, datetime, timedelta
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
-from ..data.goal_templates import build_steps, milestones, pick_template
+from ..data.goal_templates import first_batch, full_steps, milestones, pick_template
 from ..models import Checkin, Event, Goal, Step, User
 from ..timeutil import now_utc
 
@@ -30,19 +31,23 @@ def create_goal(
     complexity: str = "full",
     step_defs: list[dict] | None = None,
     template_key: str | None = None,
+    outline: list[str] | None = None,
     now: datetime | None = None,
 ) -> Goal:
-    """建目标。
+    """建目标（滚动拆解：阶段大纲 + 第一批具体步骤）。
 
-    step_defs 不为空时使用调用方给的步骤（例如 LLM 拆解）；
-    否则按复杂度从模板库取步骤。with_template=False 建空目标。
+    step_defs 不为空时使用调用方给的步骤（例如 LLM 拆解的首批步骤），
+    outline 传对应的阶段大纲；否则按模板取大纲，第一批只落前 2–3 步，
+    后续步骤由 refine.refine_upcoming 在做完前补出来。with_template=False 建空目标。
     """
     today = now.date() if now is not None else date.today()
     deadline = deadline or (today + timedelta(days=30))
     if step_defs is not None:
         key = template_key or "llm"
     elif with_template:
-        key, step_defs = build_steps(title, complexity)
+        key = pick_template(title)
+        outline = milestones(key)
+        step_defs = first_batch(full_steps(key))
     else:
         key, step_defs = "custom", []
 
@@ -52,6 +57,7 @@ def create_goal(
         outcome=outcome or title.strip(),
         deadline=deadline,
         template_key=key,
+        outline=json.dumps(outline, ensure_ascii=False) if outline else "",
     )
     session.add(goal)
     session.flush()
@@ -225,11 +231,72 @@ def replace_steps(
     session.refresh(goal)
 
 
+def outline_phases(goal: Goal) -> list[str]:
+    """读 Goal.outline（JSON 数组）；没有或解析失败返回 []。"""
+    if not goal.outline:
+        return []
+    try:
+        parsed = json.loads(goal.outline)
+    except ValueError:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [str(p) for p in parsed if str(p).strip()]
+
+
+def phases(goal: Goal) -> list[str]:
+    """阶段顺序：outline 优先；旧数据没有 outline 时按步骤 milestone 顺序推导。"""
+    names = outline_phases(goal)
+    if names:
+        return names
+    derived = list(
+        dict.fromkeys(
+            s.milestone for s in sorted(goal.steps, key=lambda x: x.seq) if s.milestone
+        )
+    )
+    return derived or milestones(goal.template_key or pick_template(goal.title))
+
+
+def phase_status(goal: Goal) -> list[dict]:
+    """每个阶段的步骤统计与状态：done（无待办）/ current（最早有待办）/ todo。"""
+    steps = sorted(goal.steps, key=lambda x: x.seq)
+    out = []
+    current_assigned = False
+    for name in phases(goal):
+        pst = [s for s in steps if s.milestone == name]
+        done = sum(1 for s in pst if s.status == "done")
+        todo = sum(1 for s in pst if s.status == "todo")
+        if todo and not current_assigned:
+            state, current_assigned = "current", True
+        elif todo:
+            state = "todo"
+        elif pst:
+            state = "done"
+        else:
+            state = "todo"
+        out.append({"name": name, "done": done, "todo": todo, "state": state})
+    return out
+
+
 def progress(goal: Goal) -> float:
-    """按预估时长加权的完成度，避免“小任务刷进度”。"""
-    total = sum(s.est_min for s in goal.steps) or 1
-    done = sum(s.est_min for s in goal.steps if s.status == "done")
-    return round(done / total, 6)
+    """按阶段：已完成阶段数 + 当前阶段完成比例，除以总阶段数。
+
+    滚动拆解下总步骤数未知（后续阶段还没拆），不能再按预估时长加权。
+    没有完成步骤的阶段记 0；dropped 步骤不计入。
+    """
+    if goal.status == "done":
+        return 1.0
+    stats = phase_status(goal)
+    if not stats:
+        return 0.0
+    done_phases = sum(1 for p in stats if p["state"] == "done")
+    fraction = 0.0
+    for p in stats:
+        if p["state"] == "current":
+            total = p["done"] + p["todo"]
+            fraction = p["done"] / total if total else 0.0
+            break
+    return round((done_phases + fraction) / len(stats), 6)
 
 
 def next_step(goal: Goal) -> Step | None:
@@ -279,10 +346,25 @@ def complete_step(
     )
     session.add(checkin)
     session.flush()
-    goal = step.goal
-    if all(s.status == "done" for s in goal.steps):
-        goal.status = "done"
+    if _all_phases_done(step.goal):
+        step.goal.status = "done"
+        session.flush()
     return checkin
+
+
+def _all_phases_done(goal: Goal) -> bool:
+    """全部步骤完成、且大纲里的每个阶段都已有步骤落库，目标才算完成。
+
+    滚动拆解下前一批步骤做完时后续阶段还没拆出来，不能提前判完成。
+    """
+    steps = goal.steps
+    if not steps or any(s.status == "todo" for s in steps):
+        return False
+    outline = outline_phases(goal)
+    if not outline:
+        return True
+    instantiated = {s.milestone for s in steps}
+    return all(name in instantiated for name in outline)
 
 
 def snapshot(goal: Goal, now: datetime | None = None) -> dict:
@@ -290,6 +372,8 @@ def snapshot(goal: Goal, now: datetime | None = None) -> dict:
     done = [s for s in steps if s.status == "done"]
     nxt = next_step(goal)
     today = now.date() if now is not None else date.today()
+    phase_stats = phase_status(goal)
+    current = next((p["name"] for p in phase_stats if p["state"] == "current"), None)
     return {
         "id": goal.id,
         "title": goal.title,
@@ -297,8 +381,9 @@ def snapshot(goal: Goal, now: datetime | None = None) -> dict:
         "progress": progress(goal),
         "done": len(done),
         "total": len(steps),
-        "milestones": list(dict.fromkeys(s.milestone for s in steps))
-        or milestones(goal.template_key),
+        "milestones": [p["name"] for p in phase_stats],
+        "phases": phase_stats,
+        "current_phase": current,
         "next_step": nxt,
         "steps": steps,
         "days_left": (goal.deadline - today).days if goal.deadline else None,
