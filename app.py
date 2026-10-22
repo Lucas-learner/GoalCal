@@ -140,7 +140,7 @@ def _complete_step(step_id: int) -> None:
         if step is None or step.status == "done":
             return
         title = step.title
-        goal_svc.complete_step(s, step, raw_text="completed from UI")
+        goal_svc.complete_step(s, step, raw_text="completed from UI", now=as_utc_naive(_now(), TZ))
         cal.cancel_future_blocks(s, step_id, as_utc_naive(_now(), TZ))
     pending = st.session_state.get("pending")
     if pending and pending.get("step_id") == step_id:
@@ -153,7 +153,7 @@ def _unschedule_step(step_id: int, event_id: int) -> None:
     with session_scope() as s:
         ev = s.get(Event, event_id)
         if ev is not None:
-            cal.delete_event(s, ev, as_utc_naive(_now(), TZ))
+            cal.delete_event(s, ev)
     _flash("Block removed — the step is back to todo.")
     st.rerun()
 
@@ -358,7 +358,7 @@ def _delete_calendar_event(event_id: int) -> None:
         ev = s.get(Event, event_id)
         title = ev.title if ev is not None else ""
         if ev is not None:
-            cal.delete_event(s, ev, as_utc_naive(_now(), TZ))
+            cal.delete_event(s, ev)
     st.session_state["selected_event_id"] = None
     st.session_state["confirm_delete_id"] = None
     _flash(f"Deleted “{title}”." if title else "Event already gone.")
@@ -405,7 +405,9 @@ with st.sidebar:
     backend = "LLM + rules fallback" if settings.llm_ready else "rules only (no API key)"
     st.caption(f"Parser: {backend}")
     st.caption(f"Last turn: {st.session_state.get('last_parser', '—')}")
-    if st.button("Reset demo data", use_container_width=True):
+    if settings.db_url.startswith("sqlite") and st.button(
+        "Reset demo data", use_container_width=True
+    ):
         _reset_demo()
         st.rerun()
 
@@ -574,7 +576,7 @@ with cal_col:
         goals = goal_svc.active_goals(s, st.session_state["user_id"])
         step_ids = [step.id for goal in goals for step in goal.steps]
         blocks = _blocks_by_step(s, st.session_state["user_id"], step_ids)
-        snaps = [goal_svc.snapshot(g) for g in goals]
+        snaps = [goal_svc.snapshot(g, now=now_local) for g in goals]
     if not snaps:
         st.info("No active goal yet — tell me one in the chat.")
     for snap in snaps:

@@ -16,4 +16,4 @@ def test_init_db_creates_tables(tmp_path):
 
     engine = db.init_db(f"sqlite:///{tmp_path / 'schema.db'}")
     tables = set(inspect(engine).get_table_names())
-    assert {"users", "goals", "steps", "events", "checkins", "state_logs", "reschedule_logs"} <= tables
+    assert {"users", "goals", "steps", "events", "checkins", "state_logs", "reschedule_logs", "interactions"} <= tables

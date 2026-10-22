@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import streamlit as st
 
-STATUS_ICON = {"done": "✅", "scheduled": "📌", "todo": "○", "skipped": "↷"}
+from ..domain.goals import step_display_status
+
+STATUS_ICON = {"done": "✅", "scheduled": "📌", "todo": "○", "dropped": "↷"}
 KINDS = ["deep", "admin", "physical", "social", "research"]
 
 
@@ -141,12 +143,12 @@ def render_goal(
         with st.expander("All steps", expanded=False):
             for s in goal["steps"]:
                 block = blocks_by_step.get(s.id)
-                icon = STATUS_ICON[s.status]
+                icon = STATUS_ICON[step_display_status(s, block is not None)]
                 line = f"{icon} {s.seq}. {s.title} · {s.est_min}m"
                 if block is not None:
                     line += f" · 📌 {block['start']:%a %b %d %H:%M}"
                 st.markdown(line)
-                if s.status in {"todo", "scheduled"}:
+                if s.status == "todo":
                     _step_actions(
                         s, block, "all", on_schedule, on_complete, on_unschedule,
                         on_delete_step, on_edit_step,

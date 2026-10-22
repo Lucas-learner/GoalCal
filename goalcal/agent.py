@@ -139,7 +139,7 @@ def _delete_event(session, user_id, action, now, tz, parser) -> Reply:
     if ev is None:
         return Reply(f"I couldn't find “{target}”. Nothing was deleted.", action, parser)
     title = ev.title
-    cal.delete_event(session, ev, as_utc_naive(now, tz))
+    cal.delete_event(session, ev)
     return Reply(f"Deleted “{title}”.", action, parser)
 
 
@@ -158,7 +158,7 @@ def _query(session, user_id, action, now, tz, parser) -> Reply:
 
 def _pick_step(goal, prefer_low_energy: bool = False, target: str | None = None) -> Step | None:
     steps = sorted(goal.steps, key=lambda s: s.seq)
-    pending = [s for s in steps if s.status in {"todo", "scheduled"}]
+    pending = [s for s in steps if s.status == "todo"]
     if target:
         needle = target.lower().replace(" ", "")
         for s in pending:
@@ -421,7 +421,8 @@ def _log_progress(session, user_id, action, now, tz, parser) -> Reply:
 
     partial = bool(PARTIAL.search(action.raw or ""))
     goal_svc.complete_step(
-        session, step, verdict="partial" if partial else "done", raw_text=action.raw
+        session, step, verdict="partial" if partial else "done", raw_text=action.raw,
+        now=as_utc_naive(now, tz),
     )
     if not partial:
         # 步骤已完成，取消还挂在日历上的未来目标块，避免“做完了还留着块”
@@ -522,6 +523,5 @@ def accept(
         step_id=step.id,
         tz=tz,
     )
-    step.status = "scheduled"
     session.flush()
     return f"Booked “{step.title}” on {candidate.start:%a %b %d, %H:%M}–{candidate.end:%H:%M}."

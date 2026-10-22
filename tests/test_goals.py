@@ -30,6 +30,24 @@ def test_progress_is_weighted_by_estimated_minutes(session):
     assert abs(svc.progress(g) - expected) < 1e-6
 
 
+def test_complete_step_uses_injected_now(session):
+    u = _user(session)
+    g = svc.create_goal(session, u.id, "Learn guitar")
+    step = sorted(g.steps, key=lambda s: s.seq)[0]
+    svc.complete_step(session, step, now=datetime(2026, 10, 22, 1, 0))
+    assert step.completed_at == datetime(2026, 10, 22, 1, 0)
+
+
+def test_step_display_status_derives_scheduled(session):
+    u = _user(session)
+    g = svc.create_goal(session, u.id, "Learn guitar")
+    step = sorted(g.steps, key=lambda s: s.seq)[0]
+    assert svc.step_display_status(step, has_future_block=False) == "todo"
+    assert svc.step_display_status(step, has_future_block=True) == "scheduled"
+    svc.complete_step(session, step)
+    assert svc.step_display_status(step, has_future_block=True) == "done"
+
+
 def test_next_step_skips_done(session):
     u = _user(session)
     g = svc.create_goal(session, u.id, "Run a half marathon")
@@ -109,8 +127,6 @@ def test_delete_step_removes_checkins(session):
 def test_archive_goal_hides_it_from_active_list(session):
     u = _user(session)
     g = svc.create_goal(session, u.id, "Learn guitar")
-    step = sorted(g.steps, key=lambda s: s.seq)[0]
-    step.status = "scheduled"
 
     svc.archive_goal(session, g)
     assert g.status == "archived"

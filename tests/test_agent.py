@@ -254,7 +254,7 @@ def test_proposals_do_not_overlap_existing_events(session, user):
         assert not (c.start < busy_start + timedelta(hours=2) and c.end > busy_start)
 
 
-def test_accept_books_block_and_marks_step_scheduled(session, user):
+def test_accept_books_block_and_step_reads_as_scheduled(session, user):
     reply = agent.handle(
         session, user.id, "I want to publish my first short video in 30 days", NOW, TZ
     )
@@ -262,11 +262,13 @@ def test_accept_books_block_and_marks_step_scheduled(session, user):
     message = agent.accept(session, user.id, reply.step_id, chosen, TZ)
 
     step = session.get(Step, reply.step_id)
-    assert step.status == "scheduled"
+    # scheduled 不落库：步骤仍是 todo，由未来目标块推导出 scheduled
+    assert step.status == "todo"
     ev = session.scalar(select(Event).where(Event.source == "proposal"))
     assert ev.kind == "block"
     assert ev.step_id == step.id
     assert ev.start_utc == as_utc_naive(chosen.start, TZ)
+    assert goal_svc.step_display_status(step, has_future_block=True) == "scheduled"
     assert "Booked" in message
 
 
@@ -309,7 +311,8 @@ def test_accept_twice_replaces_block_instead_of_stacking(session, user):
 
     blocks = list(session.scalars(select(Event).where(Event.step_id == reply.step_id)))
     assert len(blocks) == 1
-    assert session.get(Step, reply.step_id).status == "scheduled"
+    step = session.get(Step, reply.step_id)
+    assert goal_svc.step_display_status(step, has_future_block=bool(blocks)) == "scheduled"
 
 
 def test_completing_a_step_cancels_its_block(session, user):
@@ -324,8 +327,9 @@ def test_completing_a_step_cancels_its_block(session, user):
 def test_deleting_a_block_sends_the_step_back_to_todo(session, user):
     step_id = _book_first_step(session, user)
     ev = session.scalar(select(Event).where(Event.step_id == step_id))
-    cal.delete_event(session, ev, as_utc_naive(NOW, TZ))
-    assert session.get(Step, step_id).status == "todo"
+    cal.delete_event(session, ev)
+    step = session.get(Step, step_id)
+    assert goal_svc.step_display_status(step, has_future_block=False) == "todo"
 
 
 def test_deleting_one_of_two_blocks_keeps_step_scheduled(session, user):
@@ -340,8 +344,10 @@ def test_deleting_one_of_two_blocks_keeps_step_scheduled(session, user):
     session.flush()
 
     existing = session.scalars(select(Event).where(Event.step_id == step_id)).all()
-    cal.delete_event(session, existing[0], as_utc_naive(NOW, TZ))
-    assert session.get(Step, step_id).status == "scheduled"
+    cal.delete_event(session, existing[0])
+    remaining = session.scalars(select(Event).where(Event.step_id == step_id)).all()
+    step = session.get(Step, step_id)
+    assert goal_svc.step_display_status(step, has_future_block=bool(remaining)) == "scheduled"
 
 
 def test_propose_for_step_skips_done_steps(session, user):
@@ -383,7 +389,6 @@ def test_delete_goal_by_title(session, user):
         session, user, f"{goal.title}: {step.title}", NOW + timedelta(days=1), 45,
         kind="block",
     ).step_id = step.id
-    step.status = "scheduled"
     session.flush()
 
     reply = agent.handle(session, user.id, 'delete "track my goal"', NOW, TZ)

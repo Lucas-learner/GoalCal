@@ -59,7 +59,7 @@ class Step(Base):
     est_min: Mapped[int] = mapped_column(Integer, default=45)
     energy: Mapped[int] = mapped_column(Integer, default=1)
     kind: Mapped[str] = mapped_column(String(20), default="deep")
-    status: Mapped[str] = mapped_column(String(20), default="todo")  # todo|scheduled|done|skipped
+    status: Mapped[str] = mapped_column(String(20), default="todo")  # todo|done|dropped
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     minutes_spent: Mapped[int] = mapped_column(Integer, default=0)
 
@@ -77,9 +77,10 @@ class Event(Base):
     start_utc: Mapped[datetime] = mapped_column(DateTime, index=True)
     end_utc: Mapped[datetime] = mapped_column(DateTime)
     kind: Mapped[str] = mapped_column(String(20), default="external")
-    status: Mapped[str] = mapped_column(String(20), default="planned")  # planned|done|missed|moved
+    status: Mapped[str] = mapped_column(String(20), default="planned")  # planned|done|partial|missed|skipped|moved
     source: Mapped[str] = mapped_column(String(20), default="chat")  # chat|seed|import|proposal
     step_id: Mapped[int | None] = mapped_column(ForeignKey("steps.id"), nullable=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 
@@ -88,9 +89,11 @@ class Checkin(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     step_id: Mapped[int] = mapped_column(ForeignKey("steps.id"), index=True)
+    event_id: Mapped[int | None] = mapped_column(ForeignKey("events.id"), nullable=True)
     ts: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
     raw_text: Mapped[str] = mapped_column(Text, default="")
     verdict: Mapped[str] = mapped_column(String(20), default="done")  # done|partial|not_done
+    reason: Mapped[str | None] = mapped_column(String(20), nullable=True)  # tired|no_time|stuck|unwilling
     minutes: Mapped[int] = mapped_column(Integer, default=0)
     note: Mapped[str] = mapped_column(Text, default="")
 
@@ -111,7 +114,24 @@ class RescheduleLog(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     event_id: Mapped[int] = mapped_column(ForeignKey("events.id"), index=True)
+    new_event_id: Mapped[int | None] = mapped_column(ForeignKey("events.id"), nullable=True)
     ts: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
     reason: Mapped[str] = mapped_column(String(40), default="unknown")
     moved_to_utc: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     auto: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class Interaction(Base):
+    """埋点：ts_sim 用注入的模拟时间，ts_wall 用真实墙钟。"""
+
+    __tablename__ = "interactions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    ts_sim: Mapped[datetime] = mapped_column(DateTime)
+    ts_wall: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
+    kind: Mapped[str] = mapped_column(String(40))
+    goal_id: Mapped[int | None] = mapped_column(ForeignKey("goals.id"), nullable=True)
+    step_id: Mapped[int | None] = mapped_column(ForeignKey("steps.id"), nullable=True)
+    event_id: Mapped[int | None] = mapped_column(ForeignKey("events.id"), nullable=True)
+    payload: Mapped[str] = mapped_column(Text, default="{}")

@@ -106,32 +106,9 @@ def move_event(session: Session, event: Event, new_start: datetime, tz: str) -> 
     return event
 
 
-def delete_event(
-    session: Session, event: Event, reference_utc: datetime | None = None
-) -> None:
-    """硬删事件；如果它是某个步骤最后一个未来目标块，步骤退回 todo。"""
-    step_id = event.step_id
-    kind = event.kind
+def delete_event(session: Session, event: Event) -> None:
+    """硬删事件。scheduled 由未来目标块推导，步骤状态无需回写。"""
     session.delete(event)
-    session.flush()
-    if step_id is None or kind != "block":
-        return
-
-    from ..models import Step
-
-    step = session.get(Step, step_id)
-    if step is None or step.status != "scheduled":
-        return
-    reference = reference_utc or _utcnow()
-    remaining = session.scalar(
-        select(Event).where(
-            Event.step_id == step_id,
-            Event.kind == "block",
-            Event.start_utc >= reference,
-        )
-    )
-    if remaining is None:
-        step.status = "todo"
     session.flush()
 
 
@@ -150,7 +127,7 @@ def cancel_future_blocks(
         )
     )
     for ev in events:
-        delete_event(session, ev, reference)
+        delete_event(session, ev)
     return len(events)
 
 

@@ -30,13 +30,15 @@ def create_goal(
     complexity: str = "full",
     step_defs: list[dict] | None = None,
     template_key: str | None = None,
+    now: datetime | None = None,
 ) -> Goal:
     """建目标。
 
     step_defs 不为空时使用调用方给的步骤（例如 LLM 拆解）；
     否则按复杂度从模板库取步骤。with_template=False 建空目标。
     """
-    deadline = deadline or (date.today() + timedelta(days=30))
+    today = now.date() if now is not None else date.today()
+    deadline = deadline or (today + timedelta(days=30))
     if step_defs is not None:
         key = template_key or "llm"
     elif with_template:
@@ -208,9 +210,16 @@ def progress(goal: Goal) -> float:
 
 def next_step(goal: Goal) -> Step | None:
     for s in sorted(goal.steps, key=lambda x: x.seq):
-        if s.status in {"todo", "scheduled"}:
+        if s.status == "todo":
             return s
     return None
+
+
+def step_display_status(step: Step, has_future_block: bool = False) -> str:
+    """展示用状态：scheduled 不落库，由"是否还有未来目标块"推导。"""
+    if step.status == "todo" and has_future_block:
+        return "scheduled"
+    return step.status
 
 
 def complete_step(
@@ -219,8 +228,9 @@ def complete_step(
     minutes: int | None = None,
     verdict: str = "done",
     raw_text: str = "",
+    now: datetime | None = None,
 ) -> None:
-    """记录一次打卡。
+    """记录一次打卡。now 为 UTC naive，为 None 时取真实当前时间。
 
     done     → 步骤完成，按预估时长计入进度。
     partial  → 只记录投入时间，步骤仍是 todo（不伪造 scheduled 状态）。
@@ -229,7 +239,7 @@ def complete_step(
     if verdict == "done":
         logged = minutes if minutes is not None else step.est_min
         step.status = "done"
-        step.completed_at = now_utc()
+        step.completed_at = now or now_utc()
         step.minutes_spent = logged
     else:
         logged = minutes if minutes is not None else 0
@@ -250,10 +260,11 @@ def complete_step(
         goal.status = "done"
 
 
-def snapshot(goal: Goal) -> dict:
+def snapshot(goal: Goal, now: datetime | None = None) -> dict:
     steps = sorted(goal.steps, key=lambda x: x.seq)
     done = [s for s in steps if s.status == "done"]
     nxt = next_step(goal)
+    today = now.date() if now is not None else date.today()
     return {
         "id": goal.id,
         "title": goal.title,
@@ -265,6 +276,6 @@ def snapshot(goal: Goal) -> dict:
         or milestones(goal.template_key),
         "next_step": nxt,
         "steps": steps,
-        "days_left": (goal.deadline - date.today()).days if goal.deadline else None,
+        "days_left": (goal.deadline - today).days if goal.deadline else None,
         "template_key": goal.template_key or pick_template(goal.title),
     }
