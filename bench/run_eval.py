@@ -54,6 +54,9 @@ def check(case: dict, action) -> tuple[bool, list[str]]:
     if "state" in exp and action.state != exp["state"]:
         problems.append(f"state {action.state} != {exp['state']}")
 
+    if "checkin_outcome" in exp and action.checkin_outcome != exp["checkin_outcome"]:
+        problems.append(f"checkin_outcome {action.checkin_outcome} != {exp['checkin_outcome']}")
+
     title_needle = exp.get("title_contains")
     if title_needle and title_needle.lower() not in (action.title or "").lower():
         problems.append(f"title '{action.title}' missing '{title_needle}'")
@@ -65,10 +68,11 @@ def run(parser_name: str, cases: list[dict]) -> list[dict]:
     rows = []
     for case in cases:
         now = datetime.fromisoformat(case["now"])
-        if parser_name == "rules":
+        context = case.get("context")
+        if parser_name == "rules" and context is None:
             action = parse_with_rules(case["text"], now).normalized(now)
         else:
-            action, _ = parse(case["text"], now, use_llm=True)
+            action, _ = parse(case["text"], now, use_llm=parser_name == "llm", context=context)
         ok, problems = check(case, action)
         rows.append(
             {

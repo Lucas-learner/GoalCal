@@ -48,7 +48,7 @@ LEVEL_ADVANCED = re.compile(
 )
 DURATION = re.compile(
     r"([半零一二两三四五六七八九十百\d]+(?:\.[\d]+)?)\s*"
-    r"(天|日|周|星期|礼拜|个?月|年|days?|weeks?|months?|years?)",
+    r"(天|日|周|星期|礼拜|个?月(?!\s*[零一二两三四五六七八九十\d]{1,2}\s*[日号])|年|days?|weeks?|months?|years?)",
     re.I,
 )
 CANCEL = re.compile(
@@ -79,9 +79,13 @@ def assess(
     title = normalize_title(title)
     today = today or date.today()
     if deadline is None:
-        days = parse_duration_days(raw)
-        if days is not None:
-            deadline = today + timedelta(days=days)
+        explicit = parse_explicit_date(raw, today)
+        if explicit is not None:
+            deadline = explicit
+        else:
+            days = parse_duration_days(raw)
+            if days is not None:
+                deadline = today + timedelta(days=days)
     return GoalBrief(
         title=title,
         raw=raw,
@@ -198,13 +202,13 @@ def apply_answer(brief: GoalBrief, answer: str, today: date | None = None) -> Go
     if target:
         updated.target = target
 
-    days = parse_duration_days(answer)
-    if days is not None:
-        updated.deadline = today + timedelta(days=days)
+    explicit = parse_explicit_date(answer, today)
+    if explicit is not None:
+        updated.deadline = explicit
     else:
-        explicit = parse_explicit_date(answer)
-        if explicit is not None:
-            updated.deadline = explicit
+        days = parse_duration_days(answer)
+        if days is not None:
+            updated.deadline = today + timedelta(days=days)
     updated.complexity = classify(updated.title, updated.deadline, updated.raw, today=today)
     return updated
 
@@ -262,6 +266,9 @@ def infer_target(text: str) -> str:
 
 
 def parse_duration_days(text: str) -> int | None:
+    if re.search(r"\d{1,2}\s*月\s*\d{1,2}\s*[日号]", text or ""):
+        # “10 月 29 日”是具体日期不是时长，交给 parse_explicit_date
+        return None
     match = DURATION.search(text or "")
     if not match:
         return None
@@ -289,14 +296,24 @@ def parse_duration_days(text: str) -> int | None:
     return int(days)
 
 
-def parse_explicit_date(text: str) -> date | None:
+def parse_explicit_date(text: str, today: date | None = None) -> date | None:
     match = re.search(r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})", text or "")
-    if not match:
-        return None
-    try:
-        return date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
-    except ValueError:
-        return None
+    if match:
+        try:
+            return date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
+        except ValueError:
+            return None
+    # 中文月日："10 月 29 日"；已过的日期滚到明年
+    match = re.search(r"(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]", text or "")
+    if match:
+        today = today or date.today()
+        month, day = int(match.group(1)), int(match.group(2))
+        year = today.year + (1 if (month, day) < (today.month, today.day) else 0)
+        try:
+            return date(year, month, day)
+        except ValueError:
+            return None
+    return None
 
 
 def chinese_number(value: str) -> float | None:

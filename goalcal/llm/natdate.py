@@ -66,12 +66,13 @@ def extract_time(text: str) -> tuple[int, int] | None:
     if m:
         return int(m.group(1)), 0
 
-    m = re.search(r"(上午|下午|晚上|早上)?\s*(\d{1,2})\s*点", text)
+    m = re.search(r"(上午|下午|晚上|早上|中午|今晚|明晚)?\s*(\d{1,2})\s*点\s*(半|(\d{1,2})\s*分?)?", text)
     if m:
         hour = int(m.group(2))
-        if m.group(1) in {"下午", "晚上"} and hour < 12:
+        if m.group(1) in {"下午", "晚上", "今晚", "明晚"} and hour < 12:
             hour += 12
-        return hour, 0
+        minute = 30 if m.group(3) == "半" else int(m.group(4) or 0)
+        return hour, minute
 
     m = re.search(r"\b(noon|midday|morning|afternoon|evening|night|tonight)\b|上午|下午|晚上|中午|早上",
                   text, re.I)
@@ -98,11 +99,12 @@ def find_dates(text: str, now: datetime) -> list[tuple[str, datetime]]:
         found.append((m.start(), m.end(), d))
 
     # 1) day after tomorrow / 后天（必须早于 tomorrow 判断）
-    for m in re.finditer(r"day\s+after\s+tomorrow|\b后天\b|\b大后天\b", text, re.I):
+    #    中文词不能用 \b：汉字和数字都算 \w，"明天10点" 两边没有词边界
+    for m in re.finditer(r"\bday\s+after\s+tomorrow\b|大后天|后天", text, re.I):
         add(m, (now + timedelta(days=3 if "大" in m.group(0) else 2)).date())
 
     # 2) today / tomorrow / tonight / 今天 / 明天
-    for m in re.finditer(r"\btomorrow\b|\b今日\b|\b今天\b|\b明天\b|\btoday\b|\btonight\b|\b今晚\b", text, re.I):
+    for m in re.finditer(r"\btomorrow\b|今日|今天|明天|明晚|\btoday\b|\btonight\b|今晚", text, re.I):
         token = m.group(0).lower()
         if token in {"today", "今天", "今日"}:
             add(m, now.date())
@@ -116,8 +118,8 @@ def find_dates(text: str, now: datetime) -> list[tuple[str, datetime]]:
         n = int(m.group(1) or m.group(2))
         add(m, (now + timedelta(days=n)).date())
 
-    # 4) next week / 下周
-    for m in re.finditer(r"\bnext\s+week\b|下周", text, re.I):
+    # 4) next week / 下周（"下周一" 交给下面的中文星期规则，别在这里吃掉）
+    for m in re.finditer(r"\bnext\s+week\b|下周(?![一二三四五六日天])", text, re.I):
         add(m, (now + timedelta(days=7)).date())
 
     # 5) weekday（支持 next / this / coming）
@@ -135,7 +137,16 @@ def find_dates(text: str, now: datetime) -> list[tuple[str, datetime]]:
         force_next = bool(m.group(1) and "下" in m.group(1))
         add(m, _next_weekday(now, target, force_next))
 
-    # 7) Oct 28 / October 28th
+    # 7) 中文月日：10月29日 / 10月29号
+    for m in re.finditer(r"(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]", text):
+        month, day = int(m.group(1)), int(m.group(2))
+        year = now.year + (1 if (month, day) < (now.month, now.day) else 0)
+        try:
+            add(m, date(year, month, day))
+        except ValueError:
+            pass
+
+    # 8) Oct 28 / October 28th
     for m in re.finditer(
         r"\b(" + "|".join(MONTHS) + r")\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b", text, re.I
     ):
@@ -147,7 +158,7 @@ def find_dates(text: str, now: datetime) -> list[tuple[str, datetime]]:
         except ValueError:
             pass
 
-    # 8) 10/28 或 10-28
+    # 9) 10/28 或 10-28
     for m in re.finditer(r"\b(\d{1,2})[/-](\d{1,2})\b", text):
         month, day = int(m.group(1)), int(m.group(2))
         if not (1 <= month <= 12 and 1 <= day <= 31):

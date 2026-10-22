@@ -57,6 +57,28 @@ def test_duration_parser_handles_chinese_and_english():
     assert planner.parse_duration_days("90 days") == 90
 
 
+def test_month_day_is_not_a_duration():
+    # 回归（P0-5）："10 月 29 日"曾被当成 "10 个月" → 截止日跑了 300 天
+    assert planner.parse_duration_days("10 月 29 日") is None
+    assert planner.parse_duration_days("10月29号") is None
+    today = date(2026, 10, 21)
+    assert planner.parse_explicit_date("10 月 29 日", today) == date(2026, 10, 29)
+    assert planner.parse_explicit_date("3 月 5 日", today) == date(2027, 3, 5)
+
+
+def test_apply_answer_prefers_explicit_month_day_over_duration():
+    brief = planner.GoalBrief(title="复习IBA6104", raw="复习IBA6104")
+    updated = planner.apply_answer(brief, "10 月 29 日", today=date(2026, 10, 21))
+    assert updated.deadline == date(2026, 10, 29)
+
+
+def test_assess_reads_chinese_month_day_deadline_from_raw():
+    brief = planner.assess(
+        "复习IBA6104", None, "10月29日前复习完IBA6104", today=date(2026, 10, 21)
+    )
+    assert brief.deadline == date(2026, 10, 29)
+
+
 def test_piano_template_beats_generic_learn_keyword():
     assert pick_template("学会弹钢琴") == "piano"
 

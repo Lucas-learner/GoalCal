@@ -33,10 +33,39 @@ def _first(text):
         ("周五", datetime(2026, 10, 23, 9, 0, tzinfo=TZ)),
         ("October 28th", datetime(2026, 10, 28, 9, 0, tzinfo=TZ)),
         ("10/28", datetime(2026, 10, 28, 9, 0, tzinfo=TZ)),
+        ("10月29日", datetime(2026, 10, 29, 9, 0, tzinfo=TZ)),
+        ("12月3号", datetime(2026, 12, 3, 9, 0, tzinfo=TZ)),
     ],
 )
 def test_relative_dates(text, expected):
     assert _first(text) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("明天10点开会", datetime(2026, 10, 22, 10, 0, tzinfo=TZ)),
+        ("明天上午开会", datetime(2026, 10, 22, 9, 0, tzinfo=TZ)),
+        ("后天下午3点", datetime(2026, 10, 23, 15, 0, tzinfo=TZ)),
+        ("大后天晚上8点", datetime(2026, 10, 24, 20, 0, tzinfo=TZ)),
+        ("今晚9点", datetime(2026, 10, 21, 21, 0, tzinfo=TZ)),
+    ],
+)
+def test_chinese_date_glued_to_time(text, expected):
+    # 回归（P0-1）：汉字和数字都算 \w，\b明天\b 在 "明天10点" 里匹配不上
+    assert _first(text) == expected
+
+
+def test_chinese_month_day_beats_next_year():
+    # 已过的月日滚到明年
+    found = find_dates("3月5日", NOW)
+    assert found[0][1].date().isoformat() == "2027-03-05"
+
+
+def test_next_week_does_not_eat_next_monday():
+    # "下周一" 要按星期一算（10-26），不能被 "下周"（10-28）抢掉
+    found = find_dates("把周五的会挪到下周一", NOW)
+    assert [d.date().isoformat() for _, d in found] == ["2026-10-23", "2026-10-26"]
 
 
 def test_explicit_time_applies_to_last_date():
@@ -54,6 +83,8 @@ def test_explicit_time_applies_to_last_date():
         ("10:30", (10, 30)),
         ("3pm", (15, 0)),
         ("下午3点", (15, 0)),
+        ("下午3点半", (15, 30)),
+        ("10点45分", (10, 45)),
         ("晚上8点", (20, 0)),
         ("noon", (12, 0)),
         ("morning", (9, 0)),

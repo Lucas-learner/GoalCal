@@ -1,14 +1,14 @@
-PROMPT_VERSION = "parse-v1"
+PROMPT_VERSION = "parse-v2"
 
 SYSTEM = """You convert a user's calendar utterance into ONE JSON object.
 Today is {now} ({tz}). Weekday: {weekday}.
 
 Allowed intents:
-- add_event: create a calendar event. Needs title + start (+ end or duration).
-- move_event: move an existing event. Needs target (original title) + start.
+- add_event: create a calendar event. Needs title + when_text.
+- move_event: move an existing event. Needs target (original title) + when_text.
 - delete_event: remove an existing event. Needs target.
 - query_events: ask what is on the calendar / when free.
-- create_goal: user states a longer-term goal. Needs title + deadline (if any).
+- create_goal: user states a longer-term goal. Needs title (+ when_text for the deadline if any).
 - delete_goal: user wants to remove/archive a goal. Put the goal title in target.
 - schedule_step: user wants to find time for a goal step ("安排下一步", "find time to write the script").
 - log_progress: user reports work already done on a goal step.
@@ -17,33 +17,36 @@ Allowed intents:
 
 Rules:
 1. Output ONLY JSON with keys:
-   intent, title, start, end, duration_min, target, deadline, state, progress_target, confidence
-2. Datetimes MUST be ISO 8601 with the offset of {tz}, e.g. 2026-10-23T10:00:00+08:00.
-3. Resolve relative dates ("tomorrow", "next Wednesday", "after my class") against today above.
-   If no explicit time is given, use 09:00 and duration 60.
-4. Never invent a date that is in the past. If the user means a past date, still output it and set confidence < 0.5.
-5. For move_event, "target" is the phrase identifying the original event ("tomorrow's workout" -> "workout").
-6. confidence is 0..1 and should drop when the date or the target is ambiguous.
+   intent, title, when_text, start, end, duration_min, target, deadline, state, progress_target, confidence
+2. Do NOT compute dates. Copy the time phrase from the user's text into when_text verbatim
+   ("tomorrow 10am", "明天10点", "in 30 days"). A deterministic parser resolves it afterwards.
+3. Leave start, end and deadline null whenever when_text captures the phrase.
+   Only fill start/deadline yourself when the time cannot be quoted verbatim
+   (e.g. "after my class"), and in that case confidence MUST be below 0.7.
+4. If no explicit time of day is given, use duration_min 60.
+5. For move_event, "target" is the phrase identifying the original event ("tomorrow's workout" -> "workout"),
+   and when_text is only the NEW time phrase ("Friday"), not the old one.
+6. confidence is 0..1 and should drop when the intent or the target is ambiguous.
 7. Do not add explanations, markdown, or extra keys.
 
 Examples:
 User: Add a meeting Wednesday 10am
-{{"intent":"add_event","title":"meeting","start":"2026-10-28T10:00:00+08:00","end":"2026-10-28T11:00:00+08:00","duration_min":60,"target":null,"deadline":null,"state":null,"progress_target":null,"confidence":0.95}}
+{{"intent":"add_event","title":"meeting","when_text":"Wednesday 10am","start":null,"end":null,"duration_min":60,"target":null,"deadline":null,"state":null,"progress_target":null,"confidence":0.95}}
 
 User: Move tomorrow's workout to Friday
-{{"intent":"move_event","title":null,"start":"2026-10-23T09:00:00+08:00","end":null,"duration_min":null,"target":"workout","deadline":null,"state":null,"progress_target":null,"confidence":0.9}}
+{{"intent":"move_event","title":null,"when_text":"Friday","start":null,"end":null,"duration_min":null,"target":"workout","deadline":null,"state":null,"progress_target":null,"confidence":0.9}}
 
 User: I want to publish my first short video in 30 days
-{{"intent":"create_goal","title":"Publish my first short video","start":null,"end":null,"duration_min":null,"target":null,"deadline":"2026-11-20","state":null,"progress_target":null,"confidence":0.92}}
+{{"intent":"create_goal","title":"Publish my first short video","when_text":"in 30 days","start":null,"end":null,"duration_min":null,"target":null,"deadline":null,"state":null,"progress_target":null,"confidence":0.92}}
 
 User: 我要学会弹钢琴
-{{"intent":"create_goal","title":"学会弹钢琴","start":null,"end":null,"duration_min":null,"target":null,"deadline":null,"state":null,"progress_target":null,"confidence":0.9}}
+{{"intent":"create_goal","title":"学会弹钢琴","when_text":null,"start":null,"end":null,"duration_min":null,"target":null,"deadline":null,"state":null,"progress_target":null,"confidence":0.9}}
 
 User: 帮我找个时间写脚本
-{{"intent":"schedule_step","title":null,"start":null,"end":null,"duration_min":null,"target":null,"deadline":null,"state":null,"progress_target":"写脚本","confidence":0.9}}
+{{"intent":"schedule_step","title":null,"when_text":null,"start":null,"end":null,"duration_min":null,"target":null,"deadline":null,"state":null,"progress_target":"写脚本","confidence":0.9}}
 
 User: delete "track my goal"
-{{"intent":"delete_goal","title":null,"start":null,"end":null,"duration_min":null,"target":"track my goal","deadline":null,"state":null,"progress_target":null,"confidence":0.95}}
+{{"intent":"delete_goal","title":null,"when_text":null,"start":null,"end":null,"duration_min":null,"target":"track my goal","deadline":null,"state":null,"progress_target":null,"confidence":0.95}}
 """
 
 

@@ -24,6 +24,7 @@ class Action(BaseModel):
 
     intent: Intent = "chat"
     title: str | None = None
+    when_text: str | None = Field(default=None, description="原文里的时间片段，由 natdate 解析成 start")
     start: datetime | None = None
     end: datetime | None = None
     duration_min: int | None = None
@@ -31,6 +32,7 @@ class Action(BaseModel):
     deadline: date | None = None
     state: Literal["tired", "busy", "uninspired", "fresh"] | None = None
     progress_target: str | None = None
+    checkin_outcome: Literal["done", "partial", "none"] | None = None
     confidence: float = 0.0
     raw: str = ""
 

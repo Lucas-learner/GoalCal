@@ -105,18 +105,19 @@ GoalCal/
 ## 测试与评测
 
 ```bash
-pytest -q                                   # 132 passed
-python bench/run_eval.py --parser rules     # 基线：41/46 = 89.1%
+pytest -q                                   # 170 passed
+python bench/run_eval.py --parser rules     # 基线：78/81 = 96.3%
 python bench/run_eval.py --parser both --out bench/results.csv
 ```
 
 测试使用独立的临时 SQLite（`tests/conftest.py`），不会写进开发用的 `goalcal.db`。
 
-当前基线故意跑不满分：`hard-01`～`hard-04`、`hard-07` 是已知失败，
+bench 仍保留 3 条已知失败（`hard-03`、`hard-04`、`hard-07`：口语改期/查询、"next Friday" 的歧义），
 正是中期报告第 3 节要的“预期失败案例”。
 
 ## 三条铁律
 
 1. **LLM 不直接改数据。** 它只输出 `Action` 或 `Plan`（JSON schema），校验和执行由 `agent.py` 完成。
-2. **日期不用 LLM 算。** `natdate.py` 负责相对日期、星期、中文说法；LLM 只判 intent 和拆步骤。
+2. **日期不用 LLM 算。** `natdate.py` 负责相对日期、星期、中文说法；LLM 只判 intent、拆步骤，
+   并把原文里的时间片段抄进 `when_text`；`natdate` 解析失败才采用 LLM 给的时间，且置信度降一档。
 3. **日程是本地时间，库是 UTC。** 只在 `timeutil.py` 的三个边界转换。

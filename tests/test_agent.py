@@ -415,3 +415,81 @@ def test_delete_missing_goal_is_human_readable(session, user):
     reply = agent.handle(session, user.id, 'delete "track my goal"', NOW, TZ)
     assert "couldn't find a goal" in reply.text
 
+
+# ------------------------------------------------------------ P0-3 回归：进度汇报
+
+
+def _goal_with_named_steps(session, user, titles):
+    defs = [
+        {
+            "seq": i + 1,
+            "milestone": "M",
+            "title": t,
+            "outcome": "",
+            "est_min": 30,
+            "energy": 1,
+            "kind": "deep",
+        }
+        for i, t in enumerate(titles)
+    ]
+    return goal_svc.create_goal(
+        session,
+        user.id,
+        "My project",
+        deadline=NOW.date() + timedelta(days=30),
+        step_defs=defs,
+        template_key="llm",
+    )
+
+
+def test_progress_marks_the_named_step_not_the_first(session, user):
+    goal = _goal_with_named_steps(session, user, ["Write the script", "Make the storyboard"])
+    reply = agent.handle(session, user.id, "I finished the storyboard", NOW, TZ)
+
+    steps = {s.title: s for s in goal.steps}
+    assert steps["Make the storyboard"].status == "done"
+    assert steps["Write the script"].status == "todo"
+    assert "storyboard" in reply.text
+
+
+def test_negated_progress_marks_nothing_done(session, user):
+    goal = _goal_with_named_steps(session, user, ["Write the script"])
+    agent.handle(session, user.id, "I did not finish the script", NOW, TZ)
+
+    assert goal.steps[0].status == "todo"
+    assert goal.steps[0].completed_at is None
+
+
+# ------------------------------------------------------------ 置信度阈值：先追问再执行
+
+
+def test_low_confidence_move_asks_for_confirmation(session, user):
+    ev = _event(session, user, "Team meeting", NOW + timedelta(days=1))
+    reply = agent.handle(session, user.id, "Move the team meeting", NOW, TZ)
+
+    assert reply.action.intent == "move_event"
+    assert "确认" in reply.text
+    assert session.get(Event, ev.id).start_utc == ev.start_utc
+
+
+def test_low_confidence_delete_asks_for_confirmation(session, user, monkeypatch):
+    from goalcal.llm.action import Action
+
+    ev = _event(session, user, "Dentist", NOW + timedelta(days=2))
+    low = Action(intent="delete_event", target="Dentist", confidence=0.4, raw="maybe delete dentist")
+    monkeypatch.setattr(agent, "parse", lambda *args, **kwargs: (low, "test"))
+
+    reply = agent.handle(session, user.id, "maybe delete dentist", NOW, TZ)
+
+    assert "确认" in reply.text
+    assert session.get(Event, ev.id) is not None
+
+
+def test_confident_delete_still_executes(session, user):
+    _event(session, user, "Dentist appointment", NOW + timedelta(days=2))
+    reply = agent.handle(session, user.id, "Cancel the dentist appointment", NOW, TZ)
+
+    assert reply.action.confidence >= agent.CONFIRM_THRESHOLD
+    assert "Deleted" in reply.text
+    assert session.scalar(select(Event)) is None
+

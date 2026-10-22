@@ -102,3 +102,96 @@ def test_schedule_step_with_target():
 
 def test_unknown_falls_back_to_chat():
     assert parse_with_rules("hello there", NOW).intent == "chat"
+
+
+# ------------------------------------------------------------ P0-2 回归：中文关键词误判
+
+
+def test_bangmang_is_not_busy():
+    a = parse_with_rules("帮忙加个会议明天10点", NOW)
+    assert a.intent == "add_event"
+    assert a.start.hour == 10
+    assert "会议" in (a.title or "")
+
+
+def test_jilei_is_not_tired():
+    a = parse_with_rules("积累素材明天下午", NOW)
+    assert a.intent == "add_event"
+    assert a.start.hour == 14
+
+
+def test_bangwo_anpai_is_add_not_query():
+    a = parse_with_rules("帮我安排明天10点开会", NOW)
+    assert a.intent == "add_event"
+    assert a.start.hour == 10
+    assert "开会" in (a.title or "")
+
+
+def test_help_me_add_is_add_not_goal():
+    a = parse_with_rules("help me add a meeting tomorrow 10am", NOW)
+    assert a.intent == "add_event"
+    assert a.start.hour == 10
+
+
+def test_help_me_learn_is_still_a_goal():
+    a = parse_with_rules("Help me learn guitar in 60 days", NOW)
+    assert a.intent == "create_goal"
+    assert a.deadline is not None
+
+
+def test_bare_chinese_datetime_means_add():
+    a = parse_with_rules("明天10点开会", NOW)
+    assert a.intent == "add_event"
+    assert (a.start.month, a.start.day, a.start.hour) == (10, 22, 10)
+    assert a.title == "开会"
+
+
+def test_chinese_state_phrases_still_work():
+    assert parse_with_rules("我最近太忙了", NOW).state == "busy"
+    assert parse_with_rules("没做，太忙了", NOW).state == "busy"
+    assert parse_with_rules("完全没灵感", NOW).state == "uninspired"
+    assert parse_with_rules("今天状态很好", NOW).state == "fresh"
+
+
+def test_chinese_query_still_works():
+    assert parse_with_rules("我明天有什么安排", NOW).intent == "query_events"
+    assert parse_with_rules("我周五下午有空吗", NOW).intent == "query_events"
+
+
+# ------------------------------------------------------------ 否定句不算完成
+
+
+def test_negated_progress_is_not_logged():
+    assert parse_with_rules("I did not finish the script", NOW).intent != "log_progress"
+    assert parse_with_rules("I haven't done the reading yet", NOW).intent != "log_progress"
+    assert parse_with_rules("脚本还没写完", NOW).intent != "log_progress"
+
+
+def test_progress_target_is_cleaned_to_step_title():
+    a = parse_with_rules("I finished the storyboard", NOW)
+    assert a.intent == "log_progress"
+    assert a.progress_target == "storyboard"
+
+
+# ------------------------------------------------------------ 签到语境的短回答
+
+
+def test_checkin_answer_outcomes():
+    from goalcal.llm.rules import parse_checkin_answer
+
+    a = parse_checkin_answer("写了一半", NOW)
+    assert a.intent == "log_progress" and a.checkin_outcome == "partial"
+    a = parse_checkin_answer("done", NOW)
+    assert a.intent == "log_progress" and a.checkin_outcome == "done"
+    a = parse_checkin_answer("没做，太忙了", NOW)
+    assert a.intent == "set_state" and a.state == "busy" and a.checkin_outcome == "none"
+    a = parse_checkin_answer("太累了", NOW)
+    assert a.intent == "set_state" and a.state == "tired"
+
+
+def test_checkin_new_command_returns_none():
+    from goalcal.llm.rules import parse_checkin_answer
+
+    assert parse_checkin_answer("帮我安排明天10点开会", NOW) is None
+    assert parse_checkin_answer("明天10点帮我加个会", NOW) is None
+    assert parse_checkin_answer("中午吃了吗", NOW) is None

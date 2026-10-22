@@ -19,7 +19,7 @@ from .domain.scheduler import Candidate, Preferences, Requirement, propose
 from .llm.action import Action
 from .llm.parser import parse
 from .llm.plan import generate_plan
-from .llm.rules import parse_with_rules
+from .llm.rules import NEW_COMMAND_INTENTS, parse_with_rules
 from .models import Goal, StateLog, Step
 from .timeutil import as_utc_naive
 
@@ -48,6 +48,19 @@ CLARIFY = (
     "• “I'm tired”\n"
     "Or pick a goal step on the right and press **Find time**."
 )
+
+# 删除/改期这类不好撤销的操作，置信度不够就先追问，不直接执行
+RISKY_INTENTS = {"delete_event", "delete_goal", "move_event"}
+CONFIRM_THRESHOLD = 0.5
+
+
+def _confirm_text(action: Action) -> str:
+    target = action.target or action.title or "那个"
+    if action.intent == "delete_goal":
+        return f"你是想删除目标「{target}」吗？我没太听清，确认之后再动手。"
+    if action.intent == "delete_event":
+        return f"你是想删除日程「{target}」吗？我没太听清，确认之后再动手。"
+    return f"你是想改期「{target}」吗？我没太听清新时间，确认之后再动手。"
 
 
 @dataclass
@@ -84,6 +97,8 @@ def handle(
     if handler is None:
         text = HELP if HELP_MARKERS.search(action.raw or "") else CLARIFY
         return Reply(text, action, parser)
+    if action.intent in RISKY_INTENTS and action.confidence < CONFIRM_THRESHOLD:
+        return Reply(_confirm_text(action), action, parser)
     return handler(session, user_id, action, now, tz, parser)
 
 
@@ -173,18 +188,12 @@ def _pick_step(goal, prefer_low_energy: bool = False, target: str | None = None)
 
 
 def looks_like_new_command(text: str, now: datetime) -> bool:
-    """澄清目标时，别把“删除/加会议”等新指令误当成对目标的回答。"""
+    """等待回答（目标澄清/签到）时，判断这句是不是明确的新指令。
+
+    状态/进度类短回答（"太累了"、"done"）不算新指令，应按当前上下文解释。
+    """
     action = parse_with_rules(text, now)
-    return action.intent in {
-        "add_event",
-        "move_event",
-        "delete_event",
-        "delete_goal",
-        "query_events",
-        "schedule_step",
-        "log_progress",
-        "set_state",
-    }
+    return action.intent in NEW_COMMAND_INTENTS
 
 
 def _create_goal(session, user_id, action, now, tz, parser) -> Reply:
@@ -415,11 +424,11 @@ def _log_progress(session, user_id, action, now, tz, parser) -> Reply:
     if not goals:
         return Reply("You don't have an active goal yet. Tell me one and I'll break it down.", action, parser)
     goal = goals[0]
-    step = _pick_step(goal)
+    step = _pick_step(goal, target=action.progress_target or action.title)
     if step is None:
         return Reply(f"“{goal.title}” is already complete. 🎉", action, parser)
 
-    partial = bool(PARTIAL.search(action.raw or ""))
+    partial = action.checkin_outcome == "partial" or bool(PARTIAL.search(action.raw or ""))
     goal_svc.complete_step(
         session, step, verdict="partial" if partial else "done", raw_text=action.raw,
         now=as_utc_naive(now, tz),
