@@ -13,7 +13,21 @@ def test_goal_creation_with_relative_deadline():
     a = parse_with_rules("I want to publish my first short video in 30 days", NOW)
     assert a.intent == "create_goal"
     assert a.deadline.isoformat() == "2026-11-20"
-    assert "short video" in (a.title or "")
+    assert a.title == "publish my first short video"
+
+
+def test_goal_title_strips_chinese_duration():
+    a = parse_with_rules("我想在30天内学会弹钢琴", NOW)
+    assert a.intent == "create_goal"
+    assert a.title == "学会弹钢琴"
+    assert a.deadline is not None
+
+
+def test_goal_title_strips_chinese_date_adverbial():
+    a = parse_with_rules("我要在10月29日前完成课程设计报告", NOW)
+    assert a.intent == "create_goal"
+    assert a.title == "完成课程设计报告"
+    assert a.deadline.isoformat() == "2026-10-29"
 
 
 def test_chinese_want_to_learn_goal():

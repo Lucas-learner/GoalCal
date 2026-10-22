@@ -22,16 +22,6 @@ init_db()
 TZ = settings.tz
 ZONE = ZoneInfo(TZ)
 
-QUICK_ACTIONS = [
-    ("➕ Meeting", "Add a meeting tomorrow 10am"),
-    ("🎯 New goal", "I want to publish my first short video in 30 days"),
-    ("✅ Finished", "I finished the script today"),
-    ("😴 Tired", "I'm tired"),
-    ("📅 This week", "What do I have this week?"),
-    ("🆓 Free time", "When am I free this week?"),
-]
-
-
 def _reset_demo() -> None:
     Base.metadata.drop_all(get_engine())
     Base.metadata.create_all(get_engine())
@@ -516,15 +506,6 @@ if flash := st.session_state.pop("flash", None):
 chat_col, cal_col = st.columns([1.05, 1], gap="large")
 
 with chat_col:
-    st.caption("Quick actions")
-    for row in (QUICK_ACTIONS[:3], QUICK_ACTIONS[3:]):
-        cols = st.columns(len(row))
-        for col, (label, text) in zip(cols, row):
-            if col.button(label, key=f"quick_{label}", use_container_width=True):
-                st.session_state["goal_brief"] = None
-                _run_turn(text)
-                st.rerun()
-
     chat_ui.render_messages(st.session_state["messages"])
 
     brief = st.session_state.get("goal_brief")

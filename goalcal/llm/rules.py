@@ -328,6 +328,18 @@ def parse_with_rules(text: str, now: datetime) -> Action:
             raw,
             flags=re.I,
         )
+        # 时间状语不属于标题：连"在…前/内"一起剥。日期片段来自 spans，
+        # 时长单独匹配；顺序无关，因为两条正则都带包装词。
+        for s in spans:
+            if s:
+                title = re.sub(
+                    r"在?\s*" + re.escape(s) + r"\s*(?:前|之前|之?内|里)?", " ", title
+                )
+        title = re.sub(
+            r"\b(?:in|within|by)\s+\d+\s+(?:days?|weeks?|months?|years?)\b", " ", title, flags=re.I
+        )
+        title = re.sub(r"在?\s*(?<!年)\d+\s*(?:天|周|个?月|年)\s*(?:之?内|里)?", " ", title)
+        title = re.sub(r"\s+", " ", title).strip(" ,.'\"，。")
         return Action(
             intent="create_goal",
             title=title[:120],

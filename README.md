@@ -67,7 +67,6 @@ delete "track my goal"
 - **Archive goal** 归档整个目标（会撤掉它的未来日历块）
 - 日历上点事件 → 查看详情 → 二次确认删除
 - 日历上点空白 → 新建事件；拖拽 → 改期
-- 左侧 Quick actions 覆盖 demo 常用句子
 
 ## 目录结构
 
