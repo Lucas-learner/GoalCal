@@ -98,7 +98,7 @@ NEW_COMMAND_INTENTS = {
 CHECKIN_OUTCOMES: tuple[tuple[re.Pattern, str], ...] = (
     (re.compile(r"\b(done|finished|completed)\b|完成了?|做完了?|搞定了|做好了", re.I), "done"),
     (re.compile(r"\b(half|partly|partially|some|started|almost)\b|一半|一部分|部分|做了一点|写了一点", re.I), "partial"),
-    (re.compile(r"\b(no|nope|nothing|not yet)\b|没做|没有做|还没|一点(也|都)?没", re.I), "none"),
+    (re.compile(r"\b(no|nope|nothing|not yet|didn'?t|did not)\b|没做|没有做|还没|一点(也|都)?没", re.I), "none"),
 )
 
 DURATION_MIN = re.compile(r"(\d+)\s*(minutes?|mins?|m)\b|(\d+)\s*分钟", re.I)

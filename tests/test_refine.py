@@ -148,7 +148,7 @@ def test_auto_refine_appends_next_batch_after_logging_progress(session, user):
     session.refresh(goal)
     assert len(goal.steps) == 5  # 首批 2 步 + 模板续批 3 步（脚本与分镜）
     assert "脚本与分镜" in {s.milestone for s in goal.steps}
-    assert "补了" in reply.text
+    assert "added" in reply.text
     rows = _refined_rows(session)
     assert len(rows) == 1
     assert json.loads(rows[0].payload)["auto"] is True
@@ -182,7 +182,7 @@ def test_schedule_step_refines_when_no_pending_steps(session, user):
     # 没有待办步骤时自动补下一批（模板续批 3 步），并给出候选时段
     assert reply.step_id is not None
     assert 1 <= len(reply.candidates) <= 3
-    assert "补了" in reply.text
+    assert "added" in reply.text
     session.refresh(goal)
     assert len(goal.steps) == 5
     rows = _refined_rows(session)
@@ -204,7 +204,7 @@ def test_refine_command_splits_the_next_step(session, user):
     starter = sorted(goal.steps, key=lambda s: s.seq)[0]
     assert starter.id != step.id and starter.est_min == 5
     assert session.get(Step, step.id).status == "todo"  # 原步骤保留
-    assert "拆成了" in reply.text
+    assert "split" in reply.text
     rows = _refined_rows(session)
     assert len(rows) == 1
     assert rows[0].step_id == step.id

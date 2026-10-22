@@ -58,8 +58,8 @@ def test_begin_checkin_asks_about_the_earliest_block(session, user):
 
     assert ctx is not None and ctx.stage == "outcome"
     assert ctx.event_ids == [ev.id]
-    assert "昨天 17:00" in question
-    assert "写脚本" in question and "怎么样了" in question
+    assert "yesterday 17:00" in question
+    assert "写脚本" in question and "How did" in question
 
 
 def test_begin_checkin_is_quiet_without_overdue_blocks(session, user):
@@ -75,10 +75,10 @@ def test_quick_reply_done_resolves_and_celebrates(session, user):
     goal, step, ev = _one_overdue_block(session, user)
     ctx, _ = agent.begin_checkin(session, user.id, NOW, TZ)
 
-    reply = agent.continue_checkin(session, user.id, ctx, "做完了", NOW, TZ)
+    reply = agent.continue_checkin(session, user.id, ctx, "Done", NOW, TZ)
 
     assert reply is not None and reply.checkin_context is None
-    assert "完成" in reply.text
+    assert "marked done" in reply.text
     assert session.get(Event, ev.id).status == "done"
     assert session.get(Step, step.id).status == "done"
     checkin = session.scalar(select(Checkin).where(Checkin.event_id == ev.id))
@@ -92,15 +92,15 @@ def test_partial_quick_reply_asks_reason_then_offers_recovery(session, user):
     _, step, ev = _one_overdue_block(session, user)
     ctx, _ = agent.begin_checkin(session, user.id, NOW, TZ)
 
-    reply = agent.continue_checkin(session, user.id, ctx, "做了一部分", NOW, TZ)
+    reply = agent.continue_checkin(session, user.id, ctx, "Partly", NOW, TZ)
     assert reply.checkin_context is not None
     assert reply.checkin_context.stage == "reason"
-    assert "原因" in reply.text
+    assert "What got in the way" in reply.text
     assert session.get(Event, ev.id).status == "partial"
     assert session.get(Step, step.id).status == "todo"
 
     reply = agent.continue_checkin(
-        session, user.id, reply.checkin_context, "太累了", NOW, TZ
+        session, user.id, reply.checkin_context, "Too tired", NOW, TZ
     )
     assert reply.checkin_context is not None
     assert reply.checkin_context.stage == "recovery"
@@ -155,7 +155,7 @@ def test_unrecognised_answer_reasks_the_question(session, user):
 
     assert reply.checkin_context is not None
     assert reply.checkin_context.stage == "outcome"
-    assert "怎么样了" in reply.text
+    assert "didn't quite catch" in reply.text
     assert session.get(Event, ev.id).status == "planned"
 
 
@@ -184,9 +184,9 @@ def test_accept_recovery_books_new_block_and_logs(session, user):
 def test_decline_recovery_keeps_step_todo(session, user):
     _, step, ev = _one_overdue_block(session, user)
     ctx, _ = agent.begin_checkin(session, user.id, NOW, TZ)
-    reply = agent.continue_checkin(session, user.id, ctx, "没做", NOW, TZ)
+    reply = agent.continue_checkin(session, user.id, ctx, "Didn't do it", NOW, TZ)
     reply = agent.continue_checkin(
-        session, user.id, reply.checkin_context, "没时间", NOW, TZ
+        session, user.id, reply.checkin_context, "No time", NOW, TZ
     )
     ctx = reply.checkin_context
     assert ctx.stage == "recovery"
@@ -230,15 +230,15 @@ def test_many_overdue_blocks_merge_into_one_question(session, user):
     ctx, question = agent.begin_checkin(session, user.id, NOW, TZ)
 
     assert ctx is not None and ctx.stage == "batch" and ctx.merged
-    assert "4 个块" in question
-    assert agent.checkin_quick_options(ctx) == ["一起重新安排", "先不安排了"]
+    assert "You missed 4 blocks" in question
+    assert agent.checkin_quick_options(ctx) == ["Reschedule all", "Skip them"]
 
 
 def test_batch_reschedule_marks_all_missed_then_recovers_one_by_one(session, user):
     _, events = _many_overdue_blocks(session, user, 4)
     ctx, _ = agent.begin_checkin(session, user.id, NOW, TZ)
 
-    reply = agent.continue_checkin(session, user.id, ctx, "一起重新安排", NOW, TZ)
+    reply = agent.continue_checkin(session, user.id, ctx, "Reschedule all", NOW, TZ)
 
     for ev in events:
         assert session.get(Event, ev.id).status == "missed"
@@ -260,7 +260,7 @@ def test_batch_decline_marks_all_missed_without_rescheduling(session, user):
     _, events = _many_overdue_blocks(session, user, 4)
     ctx, _ = agent.begin_checkin(session, user.id, NOW, TZ)
 
-    reply = agent.continue_checkin(session, user.id, ctx, "先不安排了", NOW, TZ)
+    reply = agent.continue_checkin(session, user.id, ctx, "Skip them", NOW, TZ)
 
     assert reply.checkin_context is None
     for ev in events:
@@ -275,10 +275,10 @@ def test_two_blocks_are_asked_one_at_a_time(session, user):
 
     assert ctx is not None and ctx.stage == "outcome" and not ctx.merged
     assert ctx.event_ids == [earliest.id, later.id]
-    reply = agent.continue_checkin(session, user.id, ctx, "做完了", NOW, TZ)
+    reply = agent.continue_checkin(session, user.id, ctx, "Done", NOW, TZ)
 
     # 第一个块做完后，接着问第二个块
     assert reply.checkin_context is not None
     assert reply.checkin_context.stage == "outcome"
     assert reply.checkin_context.event_ids == [later.id]
-    assert "怎么样了" in reply.text
+    assert "How did" in reply.text

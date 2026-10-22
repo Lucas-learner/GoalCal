@@ -34,7 +34,7 @@ HELP = (
     "• delete a goal — “delete “track my goal””\n"
     "• report progress — “I finished the script today”\n"
     "• tell me your state — “I'm tired” / “busy” / “uninspired”\n"
-    "• find time for a goal step — “帮我安排下一步”\n"
+    "• find time for a goal step — “Find time for my next step”\n"
     "• see your week — “When am I free this week?”"
 )
 
@@ -58,12 +58,12 @@ CONFIRM_THRESHOLD = 0.5
 
 
 def _confirm_text(action: Action) -> str:
-    target = action.target or action.title or "那个"
+    target = action.target or action.title or "that"
     if action.intent == "delete_goal":
-        return f"你是想删除目标「{target}」吗？我没太听清，确认之后再动手。"
+        return f'Did you mean to delete the goal "{target}"? I wasn\'t sure — please confirm before I touch anything.'
     if action.intent == "delete_event":
-        return f"你是想删除日程「{target}」吗？我没太听清，确认之后再动手。"
-    return f"你是想改期「{target}」吗？我没太听清新时间，确认之后再动手。"
+        return f'Did you mean to delete "{target}" from your calendar? I wasn\'t sure — please confirm first.'
+    return f'Did you mean to move "{target}"? I didn\'t catch the new time — please confirm it.'
 
 
 @dataclass
@@ -224,8 +224,8 @@ def auto_refine_if_low(
         goal_id=goal.id,
         payload={"created": len(created), "auto": True},
     )
-    titles = "、".join(f"「{s.title}」" for s in created)
-    return f"剩下的步骤不多了，我按阶段大纲补了 {len(created)} 步：{titles}。"
+    titles = ", ".join(f'"{s.title}"' for s in created)
+    return f"You're almost out of steps, so I added {len(created)} more from the phase outline: {titles}."
 
 
 def _create_goal(session, user_id, action, now, tz, parser) -> Reply:
@@ -345,11 +345,11 @@ def _create_goal_now(session, user_id, brief, action, now, tz, parser) -> Reply:
         )
     if brief.level or brief.target:
         body += (
-            f"Plan assumptions: level **{brief.level or '未指定'}**, "
-            f"target **{brief.target or '完成目标'}**.\n"
+            f"Plan assumptions: level **{brief.level or 'unspecified'}**, "
+            f"target **{brief.target or 'finish the goal'}**.\n"
         )
     if brief.assumptions:
-        body += "Assumptions: " + "；".join(brief.assumptions) + ".\n"
+        body += "Assumptions: " + "; ".join(brief.assumptions) + ".\n"
     if candidates:
         body += "\nHere are 3 slots for the first step. Pick one and I'll put it on your calendar."
     return Reply(
@@ -421,7 +421,7 @@ def _delete_goal(session, user_id, action, now, tz, parser) -> Reply:
     goal = goal_svc.find_goal(session, user_id, target)
     if goal is None:
         if not target:
-            names = "、".join(f"“{g.title}”" for g in goals[:3])
+            names = ", ".join(f"“{g.title}”" for g in goals[:3])
             return Reply(f"Which goal should I delete? You have {names}.", action, parser)
         return Reply(
             f"I couldn't find a goal named “{target}”. Nothing was deleted.",
@@ -477,7 +477,7 @@ def _refine_steps(session, user_id, action, now, tz, parser) -> Reply:
     goal = goals[0]
     step = _pick_step(goal, target=action.progress_target or action.title)
     if step is None:
-        return Reply(f"「{goal.title}」没有可以拆的步骤了。", action, parser)
+        return Reply(f'"{goal.title}" has no steps left to break down.', action, parser)
 
     created = refine.refine_next_steps(session, goal, step)
     metrics.record(
@@ -485,14 +485,15 @@ def _refine_steps(session, user_id, action, now, tz, parser) -> Reply:
         goal_id=goal.id, step_id=step.id,
         payload={"created": len(created), "auto": False},
     )
-    lines = "\n".join(f"• {s.title}（{s.est_min} 分钟）" for s in created)
+    lines = "\n".join(f"• {s.title} ({s.est_min} min)" for s in created)
     text = (
-        f"好，把「{step.title}」拆成了 {len(created)} 个小动作，"
-        f"原步骤保留在后面：\n{lines}\n先从第一个 5 分钟的启动动作开始。"
+        f'Done — I split "{step.title}" into {len(created)} smaller actions, '
+        f"keeping the original step right after them:\n{lines}\n"
+        "Start with the first 5-minute starter action."
     )
     candidates = _propose(session, user_id, created[0], now, tz, goal.deadline)
     if candidates:
-        text += "\n给启动动作留了几个时间，挑一个？"
+        text += "\nI held a few slots for the starter action — pick one?"
     return Reply(
         text, action, parser, candidates=candidates,
         goal_id=goal.id, step_id=created[0].id,
@@ -661,15 +662,23 @@ class CheckinContext:
 
 
 _REASON_FROM_STATE = {"tired": "tired", "busy": "no_time", "uninspired": "stuck"}
-_UNWILLING = re.compile(r"不想做|不想继续|没动力|坚持不下去")
-_DECLINE = re.compile(r"算了|不用|先不|不要|不需要|no thanks|never ?mind", re.I)
-_BATCH_NO = re.compile(r"不|算了|^no\b", re.I)
-_BATCH_YES = re.compile(r"重新安排|重排|^好|好的|嗯|可以|来吧|要", re.I)
+_UNWILLING = re.compile(
+    r"不想做|不想继续|没动力|坚持不下去|"
+    r"not feeling it|don'?t want to|do not want to|no motivation|not motivated|give up",
+    re.I,
+)
+_DECLINE = re.compile(r"算了|不用|先不|不要|不需要|no thanks|never ?mind|\bskip\b", re.I)
+_BATCH_NO = re.compile(r"不|算了|^no\b|^nope\b|\bskip\b|\bleave (them|it)\b", re.I)
+_BATCH_YES = re.compile(
+    r"重新安排|重排|^好|好的|嗯|可以|来吧|要|"
+    r"\breschedule\b|\brearrange\b|\byes\b|\byeah\b|\byep\b|\bsure\b|\bok\b|\bokay\b|\bgo ahead\b",
+    re.I,
+)
 
 
 def _friendly_when(start_local: datetime, now: datetime) -> str:
     days = (now.date() - start_local.date()).days
-    day = {0: "今天", 1: "昨天", 2: "前天"}.get(days) or f"{start_local.month}月{start_local.day}日"
+    day = {0: "today", 1: "yesterday", 2: "the day before"}.get(days) or f"{start_local:%b %d}"
     return f"{day} {start_local:%H:%M}"
 
 
@@ -683,7 +692,10 @@ def _block_title(session: Session, event: Event) -> str:
 
 def _checkin_question(session: Session, event: Event, now: datetime, tz: str) -> str:
     start = as_local(event.start_utc, tz)
-    return f"{_friendly_when(start, now)} 的「{_block_title(session, event)}」怎么样了？"
+    return (
+        f'How did "{_block_title(session, event)}" go? '
+        f"It was scheduled for {_friendly_when(start, now)}."
+    )
 
 
 def _reason_from(action: Action, text: str) -> str | None:
@@ -704,20 +716,20 @@ def begin_checkin(
     ids = [b.id for b in blocks]
     if len(blocks) > recovery.MERGE_THRESHOLD:
         ctx = CheckinContext(stage="batch", event_ids=ids, merged=True)
-        return ctx, f"你有 {len(blocks)} 个块错过了，要我一起重新安排吗？"
+        return ctx, f"You missed {len(blocks)} blocks — want me to reschedule them all together?"
     ctx = CheckinContext(stage="outcome", event_ids=ids)
     return ctx, _checkin_question(session, blocks[0], now, tz)
 
 
 def checkin_quick_options(ctx: CheckinContext) -> list[str]:
     if ctx.stage == "batch":
-        return ["一起重新安排", "先不安排了"]
+        return ["Reschedule all", "Skip them"]
     if ctx.stage == "outcome":
-        return ["做完了", "做了一部分", "没做"]
+        return ["Done", "Partly", "Didn't do it"]
     if ctx.stage == "reason":
-        return ["太累了", "没时间", "卡住了", "不想做了"]
+        return ["Too tired", "No time", "Stuck", "Not feeling it"]
     if ctx.stage == "goal_options":
-        return ["延后 7 天", "延后 14 天", "暂停这个目标", "归档这个目标"]
+        return ["Push 7 days", "Push 14 days", "Pause this goal", "Archive this goal"]
     return []
 
 
@@ -725,13 +737,13 @@ def checkin_prompt(session: Session, ctx: CheckinContext, now: datetime, tz: str
     """当前阶段该问的话，用于新指令打断后把签到问题重新提回来。"""
     ev = session.get(Event, ctx.event_ids[0]) if ctx.event_ids else None
     if ctx.stage == "batch":
-        return f"你有 {len(ctx.event_ids)} 个块错过了，要我一起重新安排吗？"
+        return f"You missed {len(ctx.event_ids)} blocks — want me to reschedule them all together?"
     if ctx.stage == "reason":
-        return "接着刚才的：那个块是什么原因呢？"
+        return "Back to that block — what got in the way?"
     if ctx.stage == "recovery":
-        return "刚才那几个时间有合适的吗？不想安排说「算了」就行。"
+        return 'Did any of those times work? Say "skip it" if you\'d rather not reschedule.'
     if ctx.stage == "goal_options":
-        return "刚才说的几个选择：延后 7 天 / 延后 14 天 / 暂停 / 归档，你想怎么处理？"
+        return "Back to the options: push 7 days / push 14 days / pause / archive — what would you like to do?"
     if ev is not None:
         return _checkin_question(session, ev, now, tz)
     return ""
@@ -799,14 +811,14 @@ def _recovery_why(reason: str | None, step: Step, ev: Event, candidates: list[Ca
     """一句话说明“为什么给你这个方案”，语气不责备。"""
     if reason == "tired":
         if step.id != ev.step_id:
-            return f"太累就别硬扛，给你换个轻量步骤「{step.title}」。"
+            return f"Don't push through exhaustion — I swapped in a lighter step, \"{step.title}\". "
         if candidates and candidates[0].minutes < step.est_min:
-            return f"太累就别硬扛，「{step.title}」先排一半时间，做一段是一段。"
-        return "太累就别硬扛，这步本身不重，找个状态低谷也能做的时段。"
+            return f"Don't push through exhaustion — I cut \"{step.title}\" to half length; some progress beats none. "
+        return "Don't push through exhaustion — this step is already light, so I picked a slot that works on low energy. "
     if reason == "no_time":
-        return "没时间就先开个 15 分钟的头，启动比完成重要。"
+        return "No time is fine — let's just start with a 15-minute block; starting matters more than finishing. "
     if reason == "stuck":
-        return "卡住往往说明这一步还太大，我把它拆小了，先从 5 分钟的启动动作开始。"
+        return "Being stuck usually means the step is too big, so I broke it down — start with the 5-minute starter action. "
     return ""
 
 
@@ -836,7 +848,7 @@ def _prepare_current(
         ctx.goal_id = step.goal_id
         ctx.candidates = candidates
         return Reply(
-            f"再给「{step.title}」找个新时间：",
+            f"Let's find a new time for \"{step.title}\":",
             Action(intent="schedule_step", raw="", confidence=0.6), "checkin",
             candidates=candidates, goal_id=step.goal_id, step_id=step.id,
             checkin_context=ctx,
@@ -871,10 +883,11 @@ def _offer_recovery(
         ctx.goal_id = step.goal_id
         return Reply(
             intro
-            + f"不想做了也不勉强，硬撑着更容易整个放弃。你想怎么处理「{step.goal.title}」？\n"
-            "• 延后 7 天 / 延后 14 天：截止日往后挪，节奏松一点\n"
-            "• 暂停这个目标：先收起来，想继续的时候再恢复\n"
-            "• 归档这个目标：真的不合适就放下，不算失败",
+            + f"No pressure to keep going — forcing it makes quitting entirely more likely. "
+            f"What should we do with \"{step.goal.title}\"?\n"
+            "• Push 7 days / push 14 days: move the deadline out and loosen the pace\n"
+            "• Pause this goal: tuck it away and resume whenever you like\n"
+            "• Archive this goal: let it go for good — that's not failure",
             Action(intent="chat", raw="", confidence=0.5), parser,
             checkin_context=ctx,
         )
@@ -887,12 +900,16 @@ def _offer_recovery(
         ctx.candidates = candidates
         why = _recovery_why(ctx.reason, step, ev, candidates)
         return Reply(
-            intro + why + "给你留了几个时间，挑一个重新开始？",
+            intro + why + "I held a few slots — pick one to restart?",
             Action(intent="schedule_step", raw="", confidence=0.6), parser,
             candidates=candidates, goal_id=step.goal_id, step_id=step.id,
             checkin_context=ctx,
         )
-    text = intro + "未来几天实在没有空档，步骤先留在清单里；想安排的时候跟我说「安排下一步」。"
+    text = (
+        intro
+        + "There's really no free slot in the next few days — the step stays on your list; "
+        "tell me to \"find time for the next step\" whenever you want."
+    )
     nxt = _advance(session, user_id, ctx, now, tz)
     if nxt is None:
         return Reply(text, Action(intent="chat", raw="", confidence=0.5), parser,
@@ -912,6 +929,8 @@ def continue_checkin(
     """处理签到流程里的下一句；返回 None 表示这是明确的新指令，交给 handle 并保留 ctx。"""
     if looks_like_new_command(text, now) and not (
         ctx.stage == "goal_options" and _match_goal_option(text.strip()) is not None
+    ) and not (
+        ctx.stage == "batch" and (_BATCH_YES.search(text) or _BATCH_NO.search(text))
     ):
         return None
     action, parser = parse(text, now, context={"expecting": "checkin"})
@@ -941,21 +960,21 @@ def _checkin_batch(session, user_id, ctx, action, text, now, tz, parser) -> Repl
     if _BATCH_NO.search(text):
         resolve_all("missed", None)
         return Reply(
-            "好，都先记为错过了。想重新安排的时候随时跟我说。",
+            "OK — I've marked them all as missed. Tell me whenever you want to reschedule.",
             action, parser, checkin_context=None,
         )
     outcome = action.checkin_outcome
     if outcome is not None or _BATCH_YES.search(text):
         outcome = "missed" if outcome in (None, "none") else outcome
         resolve_all(outcome, _reason_from(action, text))
-        label = {"done": "完成", "partial": "部分完成", "missed": "错过"}[outcome]
+        label = {"done": "done", "partial": "partially done", "missed": "missed"}[outcome]
         nxt = _prepare_current(session, user_id, ctx, now, tz)
         if nxt is None:
-            return Reply(f"都记为{label}了。", action, parser, checkin_context=None)
-        nxt.text = f"好，都记为{label}了。我们一块一块来：\n" + nxt.text
+            return Reply(f"All marked as {label}.", action, parser, checkin_context=None)
+        nxt.text = f"OK, all marked as {label}. Let's go block by block:\n" + nxt.text
         return nxt
     return Reply(
-        "要我一起重新安排吗？说「重新安排」或者「先不了」就行。",
+        'Want me to reschedule them all? Say "reschedule all" or "skip them".',
         action, parser, checkin_context=ctx,
     )
 
@@ -964,17 +983,17 @@ def _checkin_outcome(session, user_id, ctx, action, text, now, tz, parser) -> Re
     ev = session.get(Event, ctx.event_ids[0]) if ctx.event_ids else None
     if ev is None:
         nxt = _advance(session, user_id, ctx, now, tz)
-        return nxt or Reply("好，都处理完了。", action, parser, checkin_context=None)
+        return nxt or Reply("All set — everything's handled.", action, parser, checkin_context=None)
 
     outcome = action.checkin_outcome
     reason = _reason_from(action, text)
     if outcome is None:
         if action.intent == "set_state":
-            # "太累了" 这种回答：按没做 + 原因理解
+            # "Too tired" 这种回答：按没做 + 原因理解
             outcome = "missed"
         else:
             return Reply(
-                f"没太听懂——{_checkin_question(session, ev, now, tz)}",
+                f"I didn't quite catch that — {_checkin_question(session, ev, now, tz)}",
                 action, parser, checkin_context=ctx,
             )
     if outcome == "none":
@@ -994,10 +1013,10 @@ def _checkin_outcome(session, user_id, ctx, action, text, now, tz, parser) -> Re
         if goal is not None and goal.status == "active":
             refine_note = auto_refine_if_low(session, user_id, goal, now)
         pct = int(goal_svc.progress(goal) * 100) if goal is not None else 0
-        text_out = f"太好了，「{_block_title(session, ev)}」记为完成！目标进度 {pct}%。"
+        text_out = f"Nice — \"{_block_title(session, ev)}\" marked done! Goal progress is at {pct}%."
         if goal is not None and sum(1 for s in goal.steps if s.status == "done") == 1:
             # 第一次签到顺带校正水平：澄清时不追问，在这里补一句
-            text_out += "\n顺带问一下：这一步感觉偏难还是偏简单？后面我会按你的反馈调整。"
+            text_out += "\nQuick check: did that step feel too hard or too easy? I'll adjust the plan based on your feedback."
         if refine_note:
             text_out += "\n" + refine_note
         cands: list[Candidate] = []
@@ -1005,7 +1024,7 @@ def _checkin_outcome(session, user_id, ctx, action, text, now, tz, parser) -> Re
         if nxt_step is not None:
             cands = _propose(session, user_id, nxt_step, now, tz, goal.deadline)
             if cands:
-                text_out += f"\n下一步是「{nxt_step.title}」（{nxt_step.est_min} 分钟），这几个时间合适吗？"
+                text_out += f"\nNext up: \"{nxt_step.title}\" ({nxt_step.est_min} min) — do any of these times work?"
         nxt = _advance(session, user_id, ctx, now, tz)
         if nxt is None:
             return Reply(
@@ -1026,27 +1045,35 @@ def _checkin_outcome(session, user_id, ctx, action, text, now, tz, parser) -> Re
         recovery.attach_reason(session, ev.id, reason)
         return _offer_recovery(session, user_id, ctx, ev, now, tz, parser)
     ctx.stage = "reason"
-    gentle = "做了一部分也是进展。" if outcome == "partial" else "没关系，这很正常。"
-    return Reply(f"{gentle}是什么原因呢？", action, parser, checkin_context=ctx)
+    gentle = "Partial progress still counts." if outcome == "partial" else "No worries, it happens."
+    return Reply(f"{gentle} What got in the way?", action, parser, checkin_context=ctx)
 
 
 def _checkin_reason(session, user_id, ctx, action, text, now, tz, parser) -> Reply:
     ev = session.get(Event, ctx.event_ids[0]) if ctx.event_ids else None
     if ev is None:
         nxt = _advance(session, user_id, ctx, now, tz)
-        return nxt or Reply("好，都处理完了。", action, parser, checkin_context=None)
+        return nxt or Reply("All set — everything's handled.", action, parser, checkin_context=None)
     reason = _reason_from(action, text)
     if reason is None:
         # 不想说或没听懂：不追问到底，按通用恢复处理
         return _offer_recovery(session, user_id, ctx, ev, now, tz, parser,
-                               intro="好，那就不纠结原因了。")
+                               intro="OK, let's not dwell on the reason. ")
     ctx.reason = reason
     recovery.attach_reason(session, ev.id, reason)
     return _offer_recovery(session, user_id, ctx, ev, now, tz, parser)
 
 
-_ORDINAL = re.compile(r"^\s*(?:选|挑|就)?\s*第?\s*([一1二2三3])\s*(?:个|张|条|项)?\s*[。\.!！]?\s*$")
-_ORDINAL_INDEX = {"一": 0, "1": 0, "二": 1, "2": 1, "三": 2, "3": 2}
+_ORDINAL = re.compile(
+    r"^\s*(?:选|挑|就|the|number|no\.?|#)?\s*第?\s*"
+    r"([一1二2三3]|one|two|three|first|second|third)\s*(?:个|张|条|项|one)?\s*[。\.!！]?\s*$",
+    re.I,
+)
+_ORDINAL_INDEX = {
+    "一": 0, "1": 0, "one": 0, "first": 0,
+    "二": 1, "2": 1, "two": 1, "second": 1,
+    "三": 2, "3": 2, "three": 2, "third": 2,
+}
 
 
 def _checkin_recovery(session, user_id, ctx, action, text, now, tz, parser) -> Reply:
@@ -1054,24 +1081,25 @@ def _checkin_recovery(session, user_id, ctx, action, text, now, tz, parser) -> R
         return decline_recovery(session, user_id, ctx, now, tz)
     m = _ORDINAL.match(text)
     if m:
-        idx = _ORDINAL_INDEX[m.group(1)]
+        idx = _ORDINAL_INDEX[m.group(1).lower()]
         if idx < len(ctx.candidates):
             return accept_recovery(session, user_id, ctx, ctx.candidates[idx], now, tz)
         return Reply(
-            f"只有 {len(ctx.candidates)} 个候选，说「第一个」到「第{len(ctx.candidates)}个」就行。",
+            f"There are only {len(ctx.candidates)} candidates — pick number 1 to {len(ctx.candidates)}.",
             action, parser, checkin_context=ctx,
         )
     return Reply(
-        "在上面几个时间里挑一个就行（说「第一个」也可以）；不想安排的话，说「算了」也可以。",
+        'Just pick one of the times above (you can say "the first one"); '
+        'if you\'d rather not reschedule, say "skip it".',
         action, parser, checkin_context=ctx,
     )
 
 
 _GOAL_OPTIONS: tuple[tuple[str, re.Pattern], ...] = (
-    ("archive", re.compile(r"归档|放弃")),
-    ("pause", re.compile(r"暂停")),
-    ("extend_14", re.compile(r"14|十四")),
-    ("extend_7", re.compile(r"延后|推迟|延期|7|七")),
+    ("archive", re.compile(r"归档|放弃|\barchive\b|\bgive up\b|\blet it go\b", re.I)),
+    ("pause", re.compile(r"暂停|\bpause\b|\bon hold\b", re.I)),
+    ("extend_14", re.compile(r"14|十四|two weeks", re.I)),
+    ("extend_7", re.compile(r"延后|推迟|延期|7|七|\bpush\b|\bextend\b|\bpostpone\b|\bdelay\b|\ba week\b", re.I)),
 )
 
 
@@ -1088,22 +1116,22 @@ def _checkin_goal_options(session, user_id, ctx, action, text, now, tz, parser) 
     goal = session.get(Goal, ctx.goal_id) if ctx.goal_id is not None else None
     choice = _match_goal_option(text)
     if goal is None or choice == "decline":
-        text_out = "好，目标先原样留着，想调整的时候随时说。"
+        text_out = "OK — the goal stays as is. Tell me whenever you want to adjust it."
     elif choice == "archive":
         goal_svc.archive_goal(session, goal)
-        text_out = f"已归档「{goal.title}」。放下不合适的目标也是进展。"
+        text_out = f"Archived \"{goal.title}\". Letting go of a goal that doesn't fit is progress too."
     elif choice == "pause":
         goal_svc.pause_goal(session, goal, now=as_utc_naive(now, tz))
-        text_out = f"「{goal.title}」先暂停了，日历上未来的块也收起来了。想恢复的时候跟我说。"
+        text_out = f"\"{goal.title}\" is paused, and its future blocks are off the calendar. Tell me when you want to resume."
     elif choice == "extend_14":
         deadline = goal_svc.extend_deadline(session, goal, 14, today=now.date())
-        text_out = f"截止日延后到 {deadline.month}月{deadline.day}日，多了两周缓冲，不用有压力。"
+        text_out = f"Deadline pushed to {deadline:%b %d} — two extra weeks of buffer, no pressure."
     elif choice == "extend_7":
         deadline = goal_svc.extend_deadline(session, goal, 7, today=now.date())
-        text_out = f"截止日延后到 {deadline.month}月{deadline.day}日，松一口气，慢慢来。"
+        text_out = f"Deadline pushed to {deadline:%b %d} — breathe and take it slow."
     else:
         return Reply(
-            "没太听懂——可以说「延后 7 天」「延后 14 天」「暂停」或「归档」。",
+            'I didn\'t quite catch that — you can say "push 7 days", "push 14 days", "pause", or "archive".',
             action, parser, checkin_context=ctx,
         )
     metrics.record(
@@ -1131,7 +1159,7 @@ def accept_recovery(
     ev = session.get(Event, ctx.event_ids[0]) if ctx.event_ids else None
     step = session.get(Step, ctx.step_id) if ctx.step_id is not None else None
     if ev is None or step is None:
-        return Reply("那个块已经不在了。", Action(intent="chat", raw="", confidence=0.5),
+        return Reply("That block is already gone.", Action(intent="chat", raw="", confidence=0.5),
                      "checkin", checkin_context=None)
     new_ev = cal.create_event(
         session, user_id, f"{step.goal.title}: {step.title}",
@@ -1154,10 +1182,10 @@ def accept_recovery(
         payload={"recovery": True},
     )
     session.flush()
-    text = f"好，「{step.title}」改到 {candidate.start:%a %b %d %H:%M}。"
+    text = f"OK — \"{step.title}\" moved to {candidate.start:%a %b %d %H:%M}."
     nxt = _advance(session, user_id, ctx, now, tz)
     if nxt is None:
-        return Reply(text + " 慢慢来，一次一个块就好。",
+        return Reply(text + " Take it one block at a time.",
                      Action(intent="chat", raw="", confidence=0.5), "checkin",
                      checkin_context=None)
     nxt.text = text + "\n" + nxt.text
@@ -1173,7 +1201,7 @@ def decline_recovery(
 ) -> Reply:
     """用户拒绝恢复候选：步骤保持 todo，进入下一个块。"""
     nxt = _advance(session, user_id, ctx, now, tz)
-    text = "好，这个块先不安排了，步骤还留在清单里。"
+    text = "OK — I'll leave that block unscheduled; the step stays on your list."
     if nxt is None:
         return Reply(text, Action(intent="chat", raw="", confidence=0.5), "checkin",
                      checkin_context=None)

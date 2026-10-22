@@ -145,20 +145,21 @@ def clarification_text(brief: GoalBrief) -> str:
 
     if is_exam(brief.title):
         return (
-            f"“{brief.title}”先确认考试时间。\n"
-            "可以回：**7 天后** / **14 天后** / **10 月 29 日**。其他按默认来，做起来再调。"
+            f'Let\'s confirm the exam date for "{brief.title}".\n'
+            "Reply with **7 days** / **14 days** / or a date like **2026-10-29**. "
+            "Everything else uses defaults — adjust as you go."
         )
     return (
-        f"“{brief.title}”我判断是一个**{label}目标**，先确认一下时间：\n"
-        "想多久完成？可以回：**3 个月** / **6 个月** / **1 年**。"
-        "水平先按默认（零基础）来，第一次做完会再跟你校正。"
+        f'I\'d treat "{brief.title}" as a **{label}** goal — first, let\'s confirm the timeline:\n'
+        "How long do you want? Reply with **3 months** / **6 months** / **1 year**. "
+        "Level defaults to beginner for now; I'll calibrate with you after the first session."
     )
 
 
 def quick_options(brief: GoalBrief) -> list[str]:
     if is_exam(brief.title):
-        return ["7 天后", "14 天后", "1 个月后", "先不建了"]
-    return ["3 个月", "6 个月", "1 年", "先不建了"]
+        return ["7 days", "14 days", "1 month", "Never mind"]
+    return ["3 months", "6 months", "1 year", "Never mind"]
 
 
 def cancellation_requested(text: str) -> bool:
@@ -192,13 +193,13 @@ def fill_defaults(brief: GoalBrief, today: date | None = None) -> GoalBrief:
     updated = replace(brief, assumptions=list(brief.assumptions))
     if updated.deadline is None:
         updated.deadline = today + timedelta(days=90)
-        updated.assumptions.append("按 90 天的入门周期来拆")
+        updated.assumptions.append("Split over a 90-day starter horizon")
     if is_skill(updated.title) and not updated.level:
-        updated.level = "零基础"
-        updated.assumptions.append("按零基础开始")
+        updated.level = "beginner"
+        updated.assumptions.append("Assuming beginner level")
     if not updated.target:
         updated.target = default_target(updated.title)
-        updated.assumptions.append(f"目标按“{updated.target}”理解")
+        updated.assumptions.append(f'Target read as "{updated.target}"')
     updated.complexity = classify(updated.title, updated.deadline, updated.raw, today=today)
     return updated
 
@@ -206,25 +207,25 @@ def fill_defaults(brief: GoalBrief, today: date | None = None) -> GoalBrief:
 def default_target(title: str) -> str:
     text = title.lower()
     if any(k in text for k in ("复习", "考试", "exam", "final", "midterm", "quiz")):
-        return "考试时能独立完成核心题型"
+        return "solve the core problem types independently in the exam"
     if "钢琴" in text or "piano" in text:
-        return "能完整弹一首简单曲子"
+        return "play one simple piece start to finish"
     if "视频" in text or "video" in text:
-        return "发布第一条视频"
+        return "publish the first video"
     if any(k in text for k in ("跑", "run", "健身", "fitness")):
-        return "连续完成一个阶段的训练"
+        return "complete one full training phase back to back"
     if any(k in text for k in ("学", "learn", "语言", "programming", "编程")):
-        return "能独立展示学到的技能"
-    return "完成一次可展示的成果"
+        return "demo the skill independently"
+    return "complete one presentable deliverable"
 
 
 def infer_level(text: str) -> str:
     if LEVEL_ADVANCED.search(text or ""):
-        return "熟练"
+        return "advanced"
     if LEVEL_SOME.search(text or ""):
-        return "有基础"
+        return "some experience"
     if LEVEL_ZERO.search(text or ""):
-        return "零基础"
+        return "beginner"
     return ""
 
 
@@ -319,6 +320,6 @@ def chinese_number(value: str) -> float | None:
 
 
 def complexity_label(complexity: str) -> str:
-    return {"simple": "简单", "standard": "中等", "complex": "复杂"}.get(
-        complexity, "中等"
+    return {"simple": "simple", "standard": "standard", "complex": "complex"}.get(
+        complexity, "standard"
     )

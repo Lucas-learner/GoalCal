@@ -50,7 +50,7 @@ def _overdue_block(session, user, step, start=None):
 def _reach_recovery(session, user, step, reason_text, ev=None):
     ev = ev or _overdue_block(session, user, step)
     ctx, _ = agent.begin_checkin(session, user.id, NOW, TZ)
-    reply = agent.continue_checkin(session, user.id, ctx, "没做", NOW, TZ)
+    reply = agent.continue_checkin(session, user.id, ctx, "Didn't do it", NOW, TZ)
     reply = agent.continue_checkin(
         session, user.id, reply.checkin_context, reason_text, NOW, TZ
     )
@@ -64,25 +64,25 @@ def test_tired_swaps_to_a_low_energy_step(session, user):
     goal = _goal_with_steps(session, user, [("写脚本", 60, 2), ("整理素材", 20, 0)])
     heavy, light = sorted(goal.steps, key=lambda s: s.seq)
 
-    _, reply = _reach_recovery(session, user, heavy, "太累了")
+    _, reply = _reach_recovery(session, user, heavy, "Too tired")
 
     assert reply.checkin_context.stage == "recovery"
     assert reply.step_id == light.id
     assert reply.candidates
-    assert "轻量步骤" in reply.text and "整理素材" in reply.text
+    assert "lighter step" in reply.text and "整理素材" in reply.text
 
 
 def test_tired_without_low_energy_step_halves_the_block(session, user):
     goal = _goal_with_steps(session, user, [("写脚本", 60, 2), ("画分镜", 45, 2)])
     step = sorted(goal.steps, key=lambda s: s.seq)[0]
 
-    _, reply = _reach_recovery(session, user, step, "太累了")
+    _, reply = _reach_recovery(session, user, step, "Too tired")
 
     assert reply.checkin_context.stage == "recovery"
     assert reply.step_id == step.id  # 还是当前步骤
     assert reply.candidates
     assert all(c.minutes == 30 for c in reply.candidates)  # 60 减半
-    assert "一半" in reply.text
+    assert "half length" in reply.text
 
 
 # ------------------------------------------------------------ no_time
@@ -92,12 +92,12 @@ def test_no_time_offers_a_15_minute_starter_block(session, user):
     goal = _goal_with_steps(session, user, [("写脚本", 60, 1)])
     step = sorted(goal.steps, key=lambda s: s.seq)[0]
 
-    _, reply = _reach_recovery(session, user, step, "没时间")
+    _, reply = _reach_recovery(session, user, step, "No time")
 
     assert reply.step_id == step.id
     assert reply.candidates
     assert all(c.minutes == 15 for c in reply.candidates)
-    assert "15 分钟" in reply.text
+    assert "15-minute" in reply.text
 
 
 # ------------------------------------------------------------ stuck
@@ -108,7 +108,7 @@ def test_stuck_refines_step_and_offers_the_5_minute_starter(session, user):
     step = sorted(goal.steps, key=lambda s: s.seq)[0]
     before = [s.title for s in goal.steps]
 
-    _, reply = _reach_recovery(session, user, step, "卡住了")
+    _, reply = _reach_recovery(session, user, step, "Stuck")
 
     starter = session.get(Step, reply.step_id)
     assert starter is not None and starter.id != step.id
@@ -118,7 +118,7 @@ def test_stuck_refines_step_and_offers_the_5_minute_starter(session, user):
     assert len(steps) == len(before) + 2  # 规则降级：5 分钟启动 + 先完成一半
     assert session.get(Step, step.id).status == "todo"  # 原步骤保留
     assert reply.candidates and all(c.minutes == 5 for c in reply.candidates)
-    assert "拆小" in reply.text
+    assert "broke it down" in reply.text
 
 
 # ------------------------------------------------------------ unwilling
@@ -127,7 +127,7 @@ def test_stuck_refines_step_and_offers_the_5_minute_starter(session, user):
 def _reach_goal_options(session, user):
     goal = _goal_with_steps(session, user, [("写脚本", 60, 1)])
     step = sorted(goal.steps, key=lambda s: s.seq)[0]
-    ev, reply = _reach_recovery(session, user, step, "不想做了")
+    ev, reply = _reach_recovery(session, user, step, "Not feeling it")
     return goal, step, ev, reply
 
 
@@ -138,9 +138,9 @@ def test_unwilling_offers_goal_options_instead_of_slots(session, user):
     assert ctx is not None and ctx.stage == "goal_options"
     assert not reply.candidates  # 不出时段卡片
     assert agent.checkin_quick_options(ctx) == [
-        "延后 7 天", "延后 14 天", "暂停这个目标", "归档这个目标"
+        "Push 7 days", "Push 14 days", "Pause this goal", "Archive this goal"
     ]
-    assert "不勉强" in reply.text
+    assert "No pressure" in reply.text
 
 
 def test_extend_deadline_by_7_days(session, user):
@@ -148,13 +148,13 @@ def test_extend_deadline_by_7_days(session, user):
     old = goal.deadline
 
     done = agent.continue_checkin(
-        session, user.id, reply.checkin_context, "延后 7 天", NOW, TZ
+        session, user.id, reply.checkin_context, "Push 7 days", NOW, TZ
     )
 
     assert done.checkin_context is None
     assert goal.deadline == old + timedelta(days=7)
     assert goal.status == "active"
-    assert f"{goal.deadline.day}日" in done.text
+    assert f"{goal.deadline:%b %d}" in done.text
 
 
 def test_extend_deadline_by_14_days(session, user):
@@ -162,7 +162,7 @@ def test_extend_deadline_by_14_days(session, user):
     old = goal.deadline
 
     done = agent.continue_checkin(
-        session, user.id, reply.checkin_context, "延后 14 天", NOW, TZ
+        session, user.id, reply.checkin_context, "Push 14 days", NOW, TZ
     )
 
     assert done.checkin_context is None
@@ -179,7 +179,7 @@ def test_pause_goal_hides_it_from_scheduling_and_reminders(session, user):
     )
 
     done = agent.continue_checkin(
-        session, user.id, reply.checkin_context, "暂停这个目标", NOW, TZ
+        session, user.id, reply.checkin_context, "Pause this goal", NOW, TZ
     )
 
     assert done.checkin_context is None
@@ -195,7 +195,7 @@ def test_archive_goal_from_goal_options(session, user):
     goal, _, _, reply = _reach_goal_options(session, user)
 
     done = agent.continue_checkin(
-        session, user.id, reply.checkin_context, "归档这个目标", NOW, TZ
+        session, user.id, reply.checkin_context, "Archive this goal", NOW, TZ
     )
 
     assert done.checkin_context is None
@@ -221,11 +221,11 @@ def test_goal_options_keep_context_on_unrecognised_answer(session, user):
 def test_text_ordinal_accepts_the_matching_candidate(session, user):
     goal = _goal_with_steps(session, user, [("写脚本", 60, 1)])
     step = sorted(goal.steps, key=lambda s: s.seq)[0]
-    ev, reply = _reach_recovery(session, user, step, "没时间")
+    ev, reply = _reach_recovery(session, user, step, "No time")
     ctx = reply.checkin_context
     chosen = reply.candidates[0]
 
-    done = agent.continue_checkin(session, user.id, ctx, "第一个", NOW, TZ)
+    done = agent.continue_checkin(session, user.id, ctx, "the first one", NOW, TZ)
 
     assert done is not None and done.checkin_context is None
     new = session.scalar(select(Event).where(Event.id != ev.id))
@@ -239,7 +239,7 @@ def test_text_ordinal_accepts_the_matching_candidate(session, user):
 def test_text_digit_selects_the_second_candidate(session, user):
     goal = _goal_with_steps(session, user, [("写脚本", 60, 1)])
     step = sorted(goal.steps, key=lambda s: s.seq)[0]
-    ev, reply = _reach_recovery(session, user, step, "没时间")
+    ev, reply = _reach_recovery(session, user, step, "No time")
     assert len(reply.candidates) >= 2
     second = reply.candidates[1]
 
@@ -253,11 +253,11 @@ def test_text_digit_selects_the_second_candidate(session, user):
 def test_ordinal_out_of_range_reasks(session, user):
     goal = _goal_with_steps(session, user, [("写脚本", 60, 1)])
     step = sorted(goal.steps, key=lambda s: s.seq)[0]
-    _, reply = _reach_recovery(session, user, step, "没时间")
+    _, reply = _reach_recovery(session, user, step, "No time")
     ctx = reply.checkin_context
     ctx.candidates = ctx.candidates[:1]  # 只剩一个候选
 
-    again = agent.continue_checkin(session, user.id, ctx, "第三个", NOW, TZ)
+    again = agent.continue_checkin(session, user.id, ctx, "the third one", NOW, TZ)
 
     assert again.checkin_context is not None
     assert again.checkin_context.stage == "recovery"
@@ -277,7 +277,7 @@ def test_candidates_fall_back_to_day_4_to_7_when_72h_is_full(session, user):
             session, user.id, "busy", start, start + timedelta(hours=14), tz=TZ
         )
 
-    _, reply = _reach_recovery(session, user, step, "没时间")
+    _, reply = _reach_recovery(session, user, step, "No time")
 
     assert reply.candidates
     assert all(

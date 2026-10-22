@@ -122,7 +122,7 @@ def render_goal(
                 (i + 1 for i, p in enumerate(phases) if p["state"] == "current"),
                 len(phases),
             )
-            meta.append(f"阶段 {idx}/{len(phases)}·{goal.get('current_phase') or '—'}")
+            meta.append(f"Phase {idx}/{len(phases)} · {goal.get('current_phase') or '—'}")
         meta.append(f"{goal['done']}/{goal['total']} steps")
         if goal.get("template_key") == "llm":
             meta.append("AI plan")
@@ -158,14 +158,14 @@ def render_goal(
                 ]
                 stray = [s for s in goal["steps"] if s.milestone not in {p["name"] for p in phases}]
                 if stray:
-                    phase_groups.append(("其他", stray, "current"))
+                    phase_groups.append(("Other", stray, "current"))
             else:
                 phase_groups = [("", goal["steps"], "current")]
 
             for phase_name, phase_steps, phase_state in phase_groups:
                 if phase_name:
                     icon = {"done": "✅", "current": "▶️", "todo": "○"}[phase_state]
-                    suffix = "" if phase_steps else " · 做到这里再细化"
+                    suffix = "" if phase_steps else " · Refine when you get there"
                     st.caption(f"{icon} {phase_name}{suffix}")
                 for s in phase_steps:
                     block = blocks_by_step.get(s.id)
@@ -214,7 +214,7 @@ def render_goal(
                 with st.form(f"replan_form_{goal['id']}"):
                     instruction = st.text_area(
                         "What should change?",
-                        placeholder="e.g. 更细一点，重点放在做题；每步不超过 30 分钟",
+                        placeholder="e.g. Finer-grained steps focused on problem sets; cap each step at 30 min",
                         height=78,
                         key=f"replan_instruction_{goal['id']}",
                     )
@@ -269,6 +269,7 @@ def render_goal(
                     "Apply revised plan",
                     key=f"apply_replan_{goal['id']}",
                     use_container_width=True,
+                    type="primary",
                     disabled=not confirm,
                 ):
                     on_apply_replan(goal["id"])

@@ -11,7 +11,7 @@ def test_chinese_goal_is_assessed_as_complex_skill():
     assert brief.deadline is None
     assert brief.level == ""
     assert not planner.ready(brief)
-    assert "确认" in planner.clarification_text(brief)
+    assert "confirm" in planner.clarification_text(brief)
 
 
 def test_goal_with_deadline_and_specific_outcome_is_ready():
@@ -30,7 +30,7 @@ def test_answers_fill_level_deadline_and_target():
         brief, "零基础，3 个月，能弹一首简单曲子", today=date(2026, 10, 22)
     )
 
-    assert brief.level == "零基础"
+    assert brief.level == "beginner"
     assert brief.deadline == date(2027, 1, 20)
     assert brief.target == "弹一首简单曲子"
     assert planner.ready(brief)
@@ -44,7 +44,7 @@ def test_fill_defaults_after_vague_answer():
     )
 
     assert brief.deadline == date(2027, 1, 20)
-    assert brief.level == "零基础"
+    assert brief.level == "beginner"
     assert brief.target
     assert brief.assumptions
 
@@ -100,8 +100,8 @@ def test_exam_goal_asks_for_exam_date_and_accepts_short_deadline():
     )
 
     assert not planner.ready(brief)
-    assert "考试时间" in planner.clarification_text(brief)
-    assert planner.quick_options(brief)[0] == "7 天后"
+    assert "exam date" in planner.clarification_text(brief)
+    assert planner.quick_options(brief)[0] == "7 days"
 
     brief = planner.apply_answer(brief, "7 天后", today=date(2026, 10, 22))
     assert brief.deadline == date(2026, 10, 29)

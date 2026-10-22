@@ -447,21 +447,101 @@ def _create_quick_event(title: str, start: datetime, minutes: int) -> None:
     st.rerun()
 
 
+# ---------------------------------------------------------------- calendar dialogs
+
+
+@st.dialog("Event details")
+def _event_detail_dialog(event_id: int) -> None:
+    with session_scope() as s:
+        row = s.get(Event, event_id)
+        detail = None
+        if row is not None:
+            step_title = None
+            if row.step_id is not None:
+                step = s.get(Step, row.step_id)
+                if step is not None:
+                    step_title = f"{step.goal.title} · {step.title}"
+            detail = {
+                "id": row.id,
+                "title": row.title,
+                "start": as_local(row.start_utc, TZ),
+                "end": as_local(row.end_utc, TZ),
+                "kind": row.kind,
+                "source": row.source,
+                "step": step_title,
+            }
+    if detail is None:
+        st.info("That event is already gone.")
+        if st.button("Close", key=f"close_gone_{event_id}", use_container_width=True):
+            st.session_state["selected_event_id"] = None
+            st.rerun()
+        return
+    st.markdown(f"**{detail['title']}**")
+    st.caption(
+        f"{detail['start']:%a %b %d, %H:%M}–{detail['end']:%H:%M} · "
+        f"{detail['kind']} · {detail['source']}"
+    )
+    if detail["step"]:
+        st.caption(f"Goal step: {detail['step']}")
+    if st.session_state.get("confirm_delete_id") == event_id:
+        st.warning("Delete this event? This cannot be undone.")
+        yes, no = st.columns(2)
+        if yes.button("Yes, delete", key=f"confirm_{event_id}", use_container_width=True):
+            _delete_calendar_event(event_id)
+        if no.button("Keep it", key=f"keep_{event_id}", use_container_width=True):
+            st.session_state["confirm_delete_id"] = None
+            st.rerun()
+    else:
+        delete, close = st.columns(2)
+        if delete.button("Delete event", key=f"delete_{event_id}", use_container_width=True):
+            st.session_state["confirm_delete_id"] = event_id
+            st.rerun()
+        if close.button("Close", key=f"close_{event_id}", use_container_width=True):
+            st.session_state["selected_event_id"] = None
+            st.rerun()
+
+
+@st.dialog("New event")
+def _new_event_dialog(start: datetime) -> None:
+    with st.form("new_event_form", clear_on_submit=True):
+        title = st.text_input("Title", placeholder="e.g. Coffee with Amy")
+        picked_time = st.time_input("Start", value=start.time())
+        minutes = st.selectbox("Duration", [30, 45, 60, 90, 120], index=2)
+        submitted = st.form_submit_button(
+            "Add event", use_container_width=True, type="primary"
+        )
+    if st.button("Cancel", key="cancel_new_event", use_container_width=True):
+        st.session_state["new_event_start"] = None
+        st.rerun()
+    if submitted:
+        if not title.strip():
+            st.warning("Give the event a title first.")
+        else:
+            picked = datetime.combine(start.date(), picked_time, tzinfo=ZONE)
+            _create_quick_event(title.strip(), picked, int(minutes))
+
+
 _ensure_state()
 _start_checkin_if_needed()
 
 # ---------------------------------------------------------------- sidebar
 
 with st.sidebar:
-    st.header("Demo controls")
+    st.subheader("Time machine")
     st.slider(
-        "Time machine (days ahead)", 0, 14, 0,
-        help="F4 的提醒/重排是时间触发的，演示时用它快进。",
+        "Days ahead", 0, 14, 0,
+        help="Reminders and rescheduling are time-triggered — use this to fast-forward during the demo.",
         key="day_offset",
     )
     st.caption(f"Now: {_now():%a %b %d, %H:%M}")
+    if settings.db_url.startswith("sqlite") and st.button(
+        "Reset demo data", use_container_width=True
+    ):
+        _reset_demo()
+        st.rerun()
 
-    st.markdown("**How do you feel right now?**")
+    st.divider()
+    st.subheader("How do you feel")
     c1, c2, c3 = st.columns(3)
     for col, label, text in [
         (c1, "😴 Tired", "I'm tired"),
@@ -474,26 +554,20 @@ with st.sidebar:
             st.rerun()
 
     st.divider()
-    backend = "LLM + rules fallback" if settings.llm_ready else "rules only (no API key)"
-    st.caption(f"Parser: {backend}")
-    st.caption(f"Last turn: {st.session_state.get('last_parser', '—')}")
-
-    st.markdown("**指标（近 7 天，模拟时间口径）**")
+    st.subheader("Metrics (last 7 days, simulated)")
     with session_scope() as s:
         uid = st.session_state["user_id"]
         acc = metrics.acceptance_rate(s, uid, _now())
         rec = metrics.recovery_rate_72h(s, uid, _now())
         prog = metrics.progress_rate(s, uid, _now())
     m1, m2, m3 = st.columns(3)
-    m1.metric("建议接受率", _pct(acc))
-    m2.metric("72h 恢复率", _pct(rec))
-    m3.metric("推进率", _pct(prog))
+    m1.metric("Acceptance", _pct(acc))
+    m2.metric("Recovery 72h", _pct(rec))
+    m3.metric("Progress", _pct(prog))
 
-    if settings.db_url.startswith("sqlite") and st.button(
-        "Reset demo data", use_container_width=True
-    ):
-        _reset_demo()
-        st.rerun()
+    st.divider()
+    backend = "LLM + rules fallback" if settings.llm_ready else "rules only (no API key)"
+    st.caption(f"Parser: {backend} · Last turn: {st.session_state.get('last_parser', '—')}")
 
 # ---------------------------------------------------------------- header
 
@@ -503,7 +577,7 @@ st.caption("A calendar that advances your goals, not just your meetings.")
 if flash := st.session_state.pop("flash", None):
     st.toast(flash)
 
-chat_col, cal_col = st.columns([1.05, 1], gap="large")
+chat_col, cal_col, goals_col = st.columns([1, 1.3, 1], gap="large")
 
 with chat_col:
     chat_ui.render_messages(st.session_state["messages"])
@@ -526,7 +600,7 @@ with chat_col:
     if brief is None and checkin_ctx is not None:
         options = agent.checkin_quick_options(checkin_ctx)
         if options:
-            st.caption("快捷回复")
+            st.caption("Quick replies")
             cols = st.columns(len(options))
             for col_idx, (col, option) in enumerate(zip(cols, options)):
                 key = f"checkin_option_{checkin_ctx.stage}_{col_idx}"
@@ -557,7 +631,7 @@ with cal_col:
         events = cal.events_between(s, st.session_state["user_id"], start_utc, end_utc)
         fc_events = cal.to_fullcalendar(events, TZ)
 
-    state = calendar_view.render(fc_events)
+    state = calendar_view.render(fc_events, height=640)
     if state:
         signature = repr(state)
         if signature != st.session_state.get("_cal_sig"):
@@ -597,71 +671,13 @@ with cal_col:
 
     selected_id = st.session_state.get("selected_event_id")
     if selected_id:
-        with session_scope() as s:
-            row = s.get(Event, selected_id)
-            detail = None
-            if row is not None:
-                step_title = None
-                if row.step_id is not None:
-                    step = s.get(Step, row.step_id)
-                    if step is not None:
-                        step_title = f"{step.goal.title} · {step.title}"
-                detail = {
-                    "id": row.id,
-                    "title": row.title,
-                    "start": as_local(row.start_utc, TZ),
-                    "end": as_local(row.end_utc, TZ),
-                    "kind": row.kind,
-                    "source": row.source,
-                    "step": step_title,
-                }
-        if detail is None:
-            st.session_state["selected_event_id"] = None
-        else:
-            with st.container(border=True):
-                st.markdown(f"**{detail['title']}**")
-                st.caption(
-                    f"{detail['start']:%a %b %d, %H:%M}–{detail['end']:%H:%M} · "
-                    f"{detail['kind']} · {detail['source']}"
-                )
-                if detail["step"]:
-                    st.caption(f"Goal step: {detail['step']}")
-                if st.session_state.get("confirm_delete_id") == selected_id:
-                    st.warning("Delete this event? This cannot be undone.")
-                    yes, no = st.columns(2)
-                    if yes.button("Yes, delete", key=f"confirm_{selected_id}", use_container_width=True):
-                        _delete_calendar_event(selected_id)
-                    if no.button("Keep it", key=f"keep_{selected_id}", use_container_width=True):
-                        st.session_state["confirm_delete_id"] = None
-                        st.rerun()
-                else:
-                    delete, close = st.columns(2)
-                    if delete.button("Delete event", key=f"delete_{selected_id}", use_container_width=True):
-                        st.session_state["confirm_delete_id"] = selected_id
-                        st.rerun()
-                    if close.button("Close", key=f"close_{selected_id}", use_container_width=True):
-                        st.session_state["selected_event_id"] = None
-                        st.rerun()
+        _event_detail_dialog(selected_id)
 
     new_start = st.session_state.get("new_event_start")
     if new_start:
-        with st.container(border=True):
-            st.markdown("**New event**")
-            with st.form("new_event_form", clear_on_submit=True):
-                title = st.text_input("Title", placeholder="e.g. Coffee with Amy")
-                picked_time = st.time_input("Start", value=new_start.time())
-                minutes = st.selectbox("Duration", [30, 45, 60, 90, 120], index=2)
-                submitted = st.form_submit_button("Add event", use_container_width=True)
-            if st.button("Cancel", key="cancel_new_event", use_container_width=True):
-                st.session_state["new_event_start"] = None
-                st.rerun()
-            if submitted:
-                if not title.strip():
-                    st.warning("Give the event a title first.")
-                else:
-                    start = datetime.combine(new_start.date(), picked_time, tzinfo=ZONE)
-                    _create_quick_event(title.strip(), start, int(minutes))
+        _new_event_dialog(new_start)
 
+with goals_col:
     st.subheader("Goals")
     with session_scope() as s:
         goals = goal_svc.active_goals(s, st.session_state["user_id"])

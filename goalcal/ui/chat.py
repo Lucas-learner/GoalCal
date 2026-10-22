@@ -24,7 +24,7 @@ def render_proposals(
         with st.container(border=True):
             st.markdown(f"**{label}**")
             st.caption(" · ".join(c.reasons))
-            if st.button("Book this", key=f"book_{step_id}_{i}_{c.start.isoformat()}", use_container_width=True):
+            if st.button("Book this", key=f"book_{step_id}_{i}_{c.start.isoformat()}", use_container_width=True, type="primary"):
                 on_accept(step_id, c)
 
 

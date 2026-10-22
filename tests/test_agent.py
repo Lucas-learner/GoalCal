@@ -96,7 +96,7 @@ def test_piano_goal_asks_before_creating(session, user):
 
     assert reply.action.intent == "create_goal"
     assert reply.goal_brief is not None
-    assert "确认" in reply.text
+    assert "confirm" in reply.text
     assert goal_svc.active_goals(session, user.id) == []
 
 
@@ -472,7 +472,7 @@ def test_low_confidence_move_asks_for_confirmation(session, user):
     reply = agent.handle(session, user.id, "Move the team meeting", NOW, TZ)
 
     assert reply.action.intent == "move_event"
-    assert "确认" in reply.text
+    assert "confirm" in reply.text
     assert session.get(Event, ev.id).start_utc == ev.start_utc
 
 
@@ -485,7 +485,7 @@ def test_low_confidence_delete_asks_for_confirmation(session, user, monkeypatch)
 
     reply = agent.handle(session, user.id, "maybe delete dentist", NOW, TZ)
 
-    assert "确认" in reply.text
+    assert "confirm" in reply.text
     assert session.get(Event, ev.id) is not None
 
 

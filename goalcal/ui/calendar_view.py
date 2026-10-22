@@ -7,7 +7,7 @@ def render(events: list[dict], height: int = 560) -> dict | None:
     try:
         from streamlit_calendar import calendar
     except Exception:  # pragma: no cover - 组件缺失时降级，保证 app 不崩
-        st.warning("streamlit-calendar 未安装，显示列表视图。")
+        st.warning("streamlit-calendar is not installed — showing a list view instead.")
         for ev in events:
             st.write(f"{ev['start'][:16]} — {ev['title']}")
         return None

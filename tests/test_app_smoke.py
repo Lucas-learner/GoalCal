@@ -98,11 +98,11 @@ def test_piano_goal_clarifies_then_builds_complex_plan():
     at = _app()
     at.chat_input[0].set_value("我要学会弹钢琴").run()
     assert not at.exception, at.exception
-    assert any("复杂目标" in m.value and "确认" in m.value for m in at.markdown)
+    assert any("complex" in m.value and "confirm" in m.value for m in at.markdown)
     with session_scope() as s:
         assert s.scalar(select(Goal).where(Goal.title == "学会弹钢琴")) is None
 
-    next(b for b in at.button if b.label == "3 个月").click().run()
+    next(b for b in at.button if b.label == "3 months").click().run()
     assert not at.exception, at.exception
     assert any("Goal set" in m.value for m in at.markdown)
     assert at.session_state["goal_brief"] is None
