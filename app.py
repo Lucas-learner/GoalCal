@@ -580,7 +580,8 @@ if flash := st.session_state.pop("flash", None):
 chat_col, cal_col, goals_col = st.columns([1, 1.3, 1], gap="large")
 
 with chat_col:
-    chat_ui.render_messages(st.session_state["messages"])
+    with st.container(height=560, border=False):
+        chat_ui.render_messages(st.session_state["messages"])
 
     brief = st.session_state.get("goal_brief")
     if brief is not None:
@@ -631,7 +632,7 @@ with cal_col:
         events = cal.events_between(s, st.session_state["user_id"], start_utc, end_utc)
         fc_events = cal.to_fullcalendar(events, TZ)
 
-    state = calendar_view.render(fc_events, height=640)
+    state = calendar_view.render(fc_events, height=640, initial_date=now_local.date().isoformat())
     if state:
         signature = repr(state)
         if signature != st.session_state.get("_cal_sig"):
@@ -686,34 +687,35 @@ with goals_col:
         snaps = [goal_svc.snapshot(g, now=now_local) for g in goals]
     if not snaps:
         st.info("No active goal yet — tell me one in the chat.")
-    for snap in snaps:
-        draft = st.session_state.get("replan_draft")
-        if draft and draft.get("goal_id") != snap["id"]:
-            draft = None
-        progress.render_goal(
-            snap,
-            blocks,
-            on_schedule=_schedule_step,
-            on_complete=_complete_step,
-            on_unschedule=_unschedule_step,
-            on_add_step=_add_step,
-            on_delete_step=_delete_step,
-            on_edit_step=_edit_step,
-            on_archive_goal=_archive_goal,
-            on_preview_replan=_preview_replan,
-            on_apply_replan=_apply_replan,
-            on_discard_replan=_discard_replan,
-            replan_draft=draft,
-        )
-        pending = st.session_state.get("pending")
-        if (
-            pending
-            and pending.get("origin") == "goal"
-            and pending["step_id"] in {step.id for step in snap["steps"]}
-        ):
-            chat_ui.render_proposals(
-                pending["candidates"], pending["step_id"], _accept, _dismiss_pending
+    with st.container(height=640, border=False):
+        for snap in snaps:
+            draft = st.session_state.get("replan_draft")
+            if draft and draft.get("goal_id") != snap["id"]:
+                draft = None
+            progress.render_goal(
+                snap,
+                blocks,
+                on_schedule=_schedule_step,
+                on_complete=_complete_step,
+                on_unschedule=_unschedule_step,
+                on_add_step=_add_step,
+                on_delete_step=_delete_step,
+                on_edit_step=_edit_step,
+                on_archive_goal=_archive_goal,
+                on_preview_replan=_preview_replan,
+                on_apply_replan=_apply_replan,
+                on_discard_replan=_discard_replan,
+                replan_draft=draft,
             )
+            pending = st.session_state.get("pending")
+            if (
+                pending
+                and pending.get("origin") == "goal"
+                and pending["step_id"] in {step.id for step in snap["steps"]}
+            ):
+                chat_ui.render_proposals(
+                    pending["candidates"], pending["step_id"], _accept, _dismiss_pending
+                )
 
     with st.expander("➕ New goal", expanded=False):
         with st.form("new_goal_form"):

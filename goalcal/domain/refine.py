@@ -65,12 +65,12 @@ def _llm_defs(goal: Goal, step: Step) -> list[dict[str, Any]] | None:
 
 def _rule_defs(step: Step) -> list[dict[str, Any]]:
     defs: list[dict[str, Any]] = [
-        {"title": f"5 分钟启动：{step.title}的第一步", "est_min": 5, "energy": 0}
+        {"title": f"5-minute starter: the first step of “{step.title}”", "est_min": 5, "energy": 0}
     ]
     if step.est_min > 30:
         defs.append(
             {
-                "title": f"{step.title}（先完成一半）",
+                "title": f"{step.title} (first half)",
                 "est_min": step.est_min // 2,
                 "energy": step.energy,
             }

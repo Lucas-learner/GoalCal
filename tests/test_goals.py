@@ -17,9 +17,9 @@ def _user(session):
 def test_goal_stores_outline_and_first_batch_only(session):
     u = _user(session)
     g = svc.create_goal(session, u.id, "Publish my first short video", deadline=date(2026, 11, 20))
-    assert svc.outline_phases(g) == ["定位与选题", "脚本与分镜", "拍摄", "剪辑与发布"]
+    assert svc.outline_phases(g) == ["Positioning & topics", "Script & storyboard", "Shooting", "Editing & publishing"]
     assert len(g.steps) == 2  # 滚动拆解：只落第一阶段的步骤
-    assert all(s.milestone == "定位与选题" for s in g.steps)
+    assert all(s.milestone == "Positioning & topics" for s in g.steps)
     assert all(s.est_min <= 90 for s in g.steps)
 
 

@@ -32,8 +32,8 @@ def test_exam_template_is_used_as_fallback():
     assert key == "exam"
     assert len(steps) == 6
     titles = " ".join(step["title"] for step in steps)
-    assert "错题" in titles or "往年题" in titles
-    assert "最粗糙的第一版" not in titles
+    assert "error" in titles or "past/sample papers" in titles
+    assert "roughest possible first version" not in titles
 
 
 def test_llm_plan_is_used_when_available(monkeypatch):

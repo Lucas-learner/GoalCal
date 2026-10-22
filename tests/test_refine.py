@@ -127,9 +127,9 @@ def test_create_goal_template_fallback_also_rolls(session, user):
 
     assert source == "template"
     assert goal.template_key == "exam"
-    assert goal_svc.outline_phases(goal) == ["范围与诊断", "第一轮复习", "练习与错题", "模拟与查漏"]
+    assert goal_svc.outline_phases(goal) == ["Scope & diagnosis", "First-pass review", "Practice & error log", "Mock & gap check"]
     assert len(goal.steps) == 2
-    assert {s.milestone for s in goal.steps} == {"范围与诊断"}
+    assert {s.milestone for s in goal.steps} == {"Scope & diagnosis"}
 
 
 # ------------------------------------------------------------ 自动细化：剩余步骤不足
@@ -146,8 +146,8 @@ def test_auto_refine_appends_next_batch_after_logging_progress(session, user):
 
     assert reply.action.intent == "log_progress"
     session.refresh(goal)
-    assert len(goal.steps) == 5  # 首批 2 步 + 模板续批 3 步（脚本与分镜）
-    assert "脚本与分镜" in {s.milestone for s in goal.steps}
+    assert len(goal.steps) == 5  # 首批 2 步 + 模板续批 3 步（Script & storyboard）
+    assert "Script & storyboard" in {s.milestone for s in goal.steps}
     assert "added" in reply.text
     rows = _refined_rows(session)
     assert len(rows) == 1
@@ -284,8 +284,8 @@ def test_refine_upcoming_template_continuation(session, user):
 
     created = refine.refine_upcoming(session, goal)
 
-    assert len(created) == 3  # 脚本与分镜的 3 步
-    assert {s.milestone for s in created} == {"脚本与分镜"}
+    assert len(created) == 3  # Script & storyboard 的 3 步
+    assert {s.milestone for s in created} == {"Script & storyboard"}
     assert min(s.seq for s in created) == 3
 
 

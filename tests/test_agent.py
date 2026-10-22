@@ -112,7 +112,7 @@ def test_piano_goal_is_created_after_clarification(session, user):
     goal = goal_svc.active_goals(session, user.id)[0]
     assert goal.template_key == "piano"
     assert len(goal.steps) == 2
-    assert goal_svc.outline_phases(goal) == ["准备与基线", "手型与音阶", "读谱与节奏", "第一首曲子", "巩固与下一步"]
+    assert goal_svc.outline_phases(goal) == ["Setup & baseline", "Posture & scales", "Reading & rhythm", "First piece", "Consolidation"]
     assert goal.deadline == NOW.date() + timedelta(days=90)
     assert 1 <= len(reply.candidates) <= 3
 

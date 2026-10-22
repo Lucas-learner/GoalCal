@@ -18,28 +18,31 @@ def _step_actions(
     on_delete_step,
     on_edit_step=None,
 ) -> None:
-    """一行步骤的操作按钮；prefix 保证同一页面里 key 唯一。"""
-    cols = st.columns([1, 1, 1, 0.55, 0.55])
+    """一行步骤的操作按钮；图标 + 悬浮提示，大小一致；prefix 保证同一页面里 key 唯一。"""
+    cols = st.columns(5)
     if on_schedule is not None and cols[0].button(
-        "📅 Find time" if block is None else "🔄 Reschedule",
+        "📅" if block is None else "🔄",
         key=f"{prefix}_find_{step.id}",
+        help="Find time" if block is None else "Reschedule",
         use_container_width=True,
     ):
         on_schedule(step.id)
     if on_complete is not None and cols[1].button(
-        "✅ Done",
+        "✅",
         key=f"{prefix}_done_{step.id}",
+        help="Mark done",
         use_container_width=True,
     ):
         on_complete(step.id)
     if block is not None and on_unschedule is not None and cols[2].button(
-        "✕ Cancel block",
+        "✕",
         key=f"{prefix}_cancel_{step.id}",
+        help="Cancel block",
         use_container_width=True,
     ):
         on_unschedule(step.id, block["id"])
     if on_edit_step is not None:
-        with cols[3].popover("✏️", help="Edit this step"):
+        with cols[3].popover("✏️", help="Edit step"):
             with st.form(f"{prefix}_edit_{step.id}"):
                 title = st.text_input(
                     "Title", value=step.title, key=f"{prefix}_edit_title_{step.id}"
@@ -89,7 +92,7 @@ def _step_actions(
                     else:
                         st.warning("Give the step a title first.")
     if on_delete_step is not None:
-        with cols[4].popover("🗑", help="Delete this step"):
+        with cols[4].popover("🗑", help="Delete step"):
             st.caption("This also removes its check-ins and future blocks.")
             if st.button("Confirm delete", key=f"{prefix}_del_{step.id}", use_container_width=True):
                 on_delete_step(step.id)

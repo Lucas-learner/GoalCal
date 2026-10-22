@@ -31,13 +31,13 @@ def test_chat_turn_creates_a_goal():
 def test_goal_card_exposes_actions():
     at = _app()
     labels = {button.label for button in at.button}
-    assert "📅 Find time" in labels
-    assert "✅ Done" in labels
+    assert "📅" in labels
+    assert "✅" in labels
 
 
 def test_find_time_shows_candidate_slots():
     at = _app()
-    next(b for b in at.button if b.label == "📅 Find time").click().run()
+    next(b for b in at.button if b.label == "📅").click().run()
     assert not at.exception, at.exception
     assert any("Suggested slots" in m.value for m in at.markdown)
 

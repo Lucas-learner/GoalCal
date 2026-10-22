@@ -112,7 +112,7 @@ def test_stuck_refines_step_and_offers_the_5_minute_starter(session, user):
 
     starter = session.get(Step, reply.step_id)
     assert starter is not None and starter.id != step.id
-    assert "5 分钟" in starter.title and starter.est_min == 5
+    assert "5-minute" in starter.title and starter.est_min == 5
     assert starter.seq < session.get(Step, step.id).seq  # 插在原步骤前面
     steps = session.scalars(select(Step).where(Step.goal_id == goal.id)).all()
     assert len(steps) == len(before) + 2  # 规则降级：5 分钟启动 + 先完成一半
