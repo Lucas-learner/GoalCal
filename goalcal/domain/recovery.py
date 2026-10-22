@@ -10,6 +10,7 @@ from datetime import datetime
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+from .. import metrics
 from ..models import Checkin, Event, Goal, Step
 from . import goals as goal_svc
 
@@ -58,6 +59,12 @@ def resolve_block(
     event.resolved_at = now
 
     step = session.get(Step, event.step_id) if event.step_id is not None else None
+    metrics.record(
+        session, event.user_id, metrics.BLOCK_OUTCOME, now,
+        goal_id=step.goal_id if step is not None else None,
+        step_id=event.step_id, event_id=event.id,
+        payload={"outcome": outcome},
+    )
     if step is None:
         session.flush()
         return None
@@ -80,4 +87,5 @@ def attach_reason(session: Session, event_id: int, reason: str) -> Checkin | Non
     if checkin is not None:
         checkin.reason = reason
         session.flush()
+    metrics.update_payload(session, metrics.BLOCK_OUTCOME, event_id, reason=reason)
     return checkin

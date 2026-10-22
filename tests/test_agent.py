@@ -259,7 +259,7 @@ def test_accept_books_block_and_step_reads_as_scheduled(session, user):
         session, user.id, "I want to publish my first short video in 30 days", NOW, TZ
     )
     chosen = reply.candidates[0]
-    message = agent.accept(session, user.id, reply.step_id, chosen, TZ)
+    message = agent.accept(session, user.id, reply.step_id, chosen, NOW, TZ)
 
     step = session.get(Step, reply.step_id)
     # scheduled 不落库：步骤仍是 todo，由未来目标块推导出 scheduled
@@ -298,7 +298,7 @@ def _book_first_step(session, user, now=NOW):
     reply = agent.handle(
         session, user.id, "I want to publish my first short video in 30 days", now, TZ
     )
-    agent.accept(session, user.id, reply.step_id, reply.candidates[0], TZ)
+    agent.accept(session, user.id, reply.step_id, reply.candidates[0], NOW, TZ)
     return reply.step_id
 
 
@@ -306,8 +306,8 @@ def test_accept_twice_replaces_block_instead_of_stacking(session, user):
     reply = agent.handle(
         session, user.id, "I want to publish my first short video in 30 days", NOW, TZ
     )
-    agent.accept(session, user.id, reply.step_id, reply.candidates[0], TZ)
-    agent.accept(session, user.id, reply.step_id, reply.candidates[1], TZ)
+    agent.accept(session, user.id, reply.step_id, reply.candidates[0], NOW, TZ)
+    agent.accept(session, user.id, reply.step_id, reply.candidates[1], NOW, TZ)
 
     blocks = list(session.scalars(select(Event).where(Event.step_id == reply.step_id)))
     assert len(blocks) == 1

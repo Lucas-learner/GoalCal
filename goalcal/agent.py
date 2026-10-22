@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
 
+from . import metrics
 from .domain import calendar_service as cal
 from .domain import goals as goal_svc
 from .domain import planner
@@ -85,6 +86,10 @@ def handle(
     tz: str = "Asia/Shanghai",
 ) -> Reply:
     action, parser = parse(text, now)
+    metrics.record(
+        session, user_id, metrics.PARSE, now,
+        payload={"parser": parser, "intent": action.intent},
+    )
     handler = {
         "add_event": _add_event,
         "move_event": _move_event,
@@ -491,7 +496,7 @@ def _set_state(session, user_id, action, now, tz, parser) -> Reply:
 
 def _propose(
     session, user_id, step: Step | None, now, tz, deadline=None, days: int = 5,
-    est_min: int | None = None,
+    est_min: int | None = None, is_recovery: bool = False,
 ):
     if step is None:
         return []
@@ -499,7 +504,7 @@ def _propose(
     start_utc = as_utc_naive(now, tz) - timedelta(hours=1)
     end_utc = as_utc_naive(now, tz) + timedelta(days=days + 1)
     busy = cal.busy_blocks(session, user_id, start_utc, end_utc, tz)
-    return propose(
+    candidates = propose(
         Requirement(
             est_min=minutes, energy=step.energy, kind=step.kind,
             min_chunk=min(20, minutes),
@@ -511,6 +516,13 @@ def _propose(
         top_n=3,
         deadline=deadline,
     )
+    if candidates:
+        metrics.record(
+            session, user_id, metrics.PROPOSAL_SHOWN, now,
+            goal_id=step.goal_id, step_id=step.id,
+            payload={"count": len(candidates), "recovery": is_recovery},
+        )
+    return candidates
 
 
 def propose_for_step(
@@ -524,7 +536,8 @@ def propose_for_step(
 
 
 def accept(
-    session: Session, user_id: int, step_id: int, candidate: Candidate, tz: str
+    session: Session, user_id: int, step_id: int, candidate: Candidate,
+    now: datetime, tz: str,
 ) -> str:
     step = session.get(Step, step_id)
     if step is None:
@@ -543,6 +556,11 @@ def accept(
         source="proposal",
         step_id=step.id,
         tz=tz,
+    )
+    metrics.record(
+        session, user_id, metrics.PROPOSAL_ACCEPTED, now,
+        goal_id=step.goal_id, step_id=step.id, event_id=ev.id,
+        payload={"recovery": False},
     )
     session.flush()
     return f"Booked “{step.title}” on {candidate.start:%a %b %d, %H:%M}–{candidate.end:%H:%M}."
@@ -667,24 +685,40 @@ def suggest_recovery(
         return [], step
 
     est_min: int | None = None
+    scheme = "reschedule"
     if reason == "tired":
         lighter = _pick_step(step.goal, prefer_low_energy=True)
         if lighter is not None and lighter.energy <= 1:
             step = lighter
+            scheme = "swap_light"
         else:
             est_min = max(15, step.est_min // 2)
+            scheme = "halve"
     elif reason == "no_time":
         est_min = 15
+        scheme = "starter_15"
     elif reason == "stuck":
         refined = refine.refine_next_steps(session, step.goal, step)
         if refined:
+            metrics.record(
+                session, user_id, metrics.PLAN_REFINED, now,
+                goal_id=step.goal_id, step_id=step.id,
+                payload={"created": len(refined)},
+            )
             step = refined[0]
+            scheme = "refine"
 
     candidates = _propose(session, user_id, step, now, tz, step.goal.deadline,
-                          days=days, est_min=est_min)
+                          days=days, est_min=est_min, is_recovery=True)
     if not candidates and days < 7:
         candidates = _propose(session, user_id, step, now, tz, step.goal.deadline,
-                              days=7, est_min=est_min)
+                              days=7, est_min=est_min, is_recovery=True)
+    if candidates:
+        metrics.record(
+            session, user_id, metrics.RECOVERY_ACTION, now,
+            goal_id=step.goal_id, step_id=step.id, event_id=event.id,
+            payload={"reason": reason, "scheme": scheme},
+        )
     return candidates, step
 
 
@@ -991,6 +1025,12 @@ def _checkin_goal_options(session, user_id, ctx, action, text, now, tz, parser) 
             "没太听懂——可以说「延后 7 天」「延后 14 天」「暂停」或「归档」。",
             action, parser, checkin_context=ctx,
         )
+    metrics.record(
+        session, user_id, metrics.RECOVERY_ACTION, now,
+        goal_id=ctx.goal_id, step_id=ctx.step_id,
+        event_id=ctx.event_ids[0] if ctx.event_ids else None,
+        payload={"reason": "unwilling", "choice": choice},
+    )
     nxt = _advance(session, user_id, ctx, now, tz)
     if nxt is None:
         return Reply(text_out, action, parser, checkin_context=None)
@@ -1026,6 +1066,11 @@ def accept_recovery(
             moved_to_utc=new_ev.start_utc,
             auto=False,
         )
+    )
+    metrics.record(
+        session, user_id, metrics.PROPOSAL_ACCEPTED, now,
+        goal_id=step.goal_id, step_id=step.id, event_id=ev.id,
+        payload={"recovery": True},
     )
     session.flush()
     text = f"好，「{step.title}」改到 {candidate.start:%a %b %d %H:%M}。"

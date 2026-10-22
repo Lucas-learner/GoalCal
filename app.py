@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 import streamlit as st
 from sqlalchemy import select
 
-from goalcal import agent
+from goalcal import agent, metrics
 from goalcal.config import settings
 from goalcal.db import get_engine, init_db, session_scope
 from goalcal.domain import calendar_service as cal
@@ -70,6 +70,10 @@ def _now() -> datetime:
 
 def _flash(message: str) -> None:
     st.session_state["flash"] = message
+
+
+def _pct(value: float | None) -> str:
+    return f"{value:.0%}" if value is not None else "—"
 
 
 def _start_checkin_if_needed() -> None:
@@ -146,7 +150,7 @@ def _run_turn(text: str) -> None:
 
 def _accept(step_id: int, candidate) -> None:
     with session_scope() as s:
-        msg = agent.accept(s, st.session_state["user_id"], step_id, candidate, TZ)
+        msg = agent.accept(s, st.session_state["user_id"], step_id, candidate, _now(), TZ)
     st.session_state["messages"].append({"role": "assistant", "content": msg})
     st.session_state["pending"] = None
     _flash(msg)
@@ -482,6 +486,18 @@ with st.sidebar:
     backend = "LLM + rules fallback" if settings.llm_ready else "rules only (no API key)"
     st.caption(f"Parser: {backend}")
     st.caption(f"Last turn: {st.session_state.get('last_parser', '—')}")
+
+    st.markdown("**指标（近 7 天，模拟时间口径）**")
+    with session_scope() as s:
+        uid = st.session_state["user_id"]
+        acc = metrics.acceptance_rate(s, uid, _now())
+        rec = metrics.recovery_rate_72h(s, uid, _now())
+        prog = metrics.progress_rate(s, uid, _now())
+    m1, m2, m3 = st.columns(3)
+    m1.metric("建议接受率", _pct(acc))
+    m2.metric("72h 恢复率", _pct(rec))
+    m3.metric("推进率", _pct(prog))
+
     if settings.db_url.startswith("sqlite") and st.button(
         "Reset demo data", use_container_width=True
     ):
