@@ -15,13 +15,14 @@ from sqlalchemy.orm import Session
 from .domain import calendar_service as cal
 from .domain import goals as goal_svc
 from .domain import planner
+from .domain import recovery
 from .domain.scheduler import Candidate, Preferences, Requirement, propose
 from .llm.action import Action
 from .llm.parser import parse
 from .llm.plan import generate_plan
 from .llm.rules import NEW_COMMAND_INTENTS, parse_with_rules
-from .models import Goal, StateLog, Step
-from .timeutil import as_utc_naive
+from .models import Event, Goal, RescheduleLog, StateLog, Step
+from .timeutil import as_local, as_utc_naive
 
 HELP = (
     "I can:\n"
@@ -72,6 +73,7 @@ class Reply:
     goal_id: int | None = None
     step_id: int | None = None
     goal_brief: planner.GoalBrief | None = None
+    checkin_context: "CheckinContext | None" = None
 
 
 def handle(
@@ -534,3 +536,385 @@ def accept(
     )
     session.flush()
     return f"Booked “{step.title}” on {candidate.start:%a %b %d, %H:%M}–{candidate.end:%H:%M}."
+
+
+# ------------------------------------------------------------------ check-in
+
+
+@dataclass
+class CheckinContext:
+    """签到流程的对话状态：event_ids 是待处理队列，第一个是当前在问的块。
+
+    stage: batch（合并提问）→ outcome（问结果）→ reason（问原因）→ recovery（给候选时段）
+    """
+
+    stage: str
+    event_ids: list[int] = field(default_factory=list)
+    merged: bool = False
+    outcome: str | None = None
+    reason: str | None = None
+    step_id: int | None = None
+    goal_id: int | None = None
+
+
+_REASON_FROM_STATE = {"tired": "tired", "busy": "no_time", "uninspired": "stuck"}
+_UNWILLING = re.compile(r"不想做|不想继续|没动力|坚持不下去")
+_DECLINE = re.compile(r"算了|不用|先不|不要|不需要|no thanks|never ?mind", re.I)
+_BATCH_NO = re.compile(r"不|算了|^no\b", re.I)
+_BATCH_YES = re.compile(r"重新安排|重排|^好|好的|嗯|可以|来吧|要", re.I)
+
+
+def _friendly_when(start_local: datetime, now: datetime) -> str:
+    days = (now.date() - start_local.date()).days
+    day = {0: "今天", 1: "昨天", 2: "前天"}.get(days) or f"{start_local.month}月{start_local.day}日"
+    return f"{day} {start_local:%H:%M}"
+
+
+def _block_title(session: Session, event: Event) -> str:
+    if event.step_id is not None:
+        step = session.get(Step, event.step_id)
+        if step is not None:
+            return step.title
+    return event.title
+
+
+def _checkin_question(session: Session, event: Event, now: datetime, tz: str) -> str:
+    start = as_local(event.start_utc, tz)
+    return f"{_friendly_when(start, now)} 的「{_block_title(session, event)}」怎么样了？"
+
+
+def _reason_from(action: Action, text: str) -> str | None:
+    if _UNWILLING.search(text):
+        return "unwilling"
+    if action.state in _REASON_FROM_STATE:
+        return _REASON_FROM_STATE[action.state]
+    return None
+
+
+def begin_checkin(
+    session: Session, user_id: int, now: datetime, tz: str = "Asia/Shanghai"
+) -> tuple[CheckinContext | None, str]:
+    """有过期块就开启签到流程，返回 (上下文, 主动提问)；没有则 (None, "")。"""
+    blocks = recovery.unresolved_blocks(session, user_id, as_utc_naive(now, tz))
+    if not blocks:
+        return None, ""
+    ids = [b.id for b in blocks]
+    if len(blocks) > recovery.MERGE_THRESHOLD:
+        ctx = CheckinContext(stage="batch", event_ids=ids, merged=True)
+        return ctx, f"你有 {len(blocks)} 个块错过了，要我一起重新安排吗？"
+    ctx = CheckinContext(stage="outcome", event_ids=ids)
+    return ctx, _checkin_question(session, blocks[0], now, tz)
+
+
+def checkin_quick_options(ctx: CheckinContext) -> list[str]:
+    if ctx.stage == "batch":
+        return ["一起重新安排", "先不安排了"]
+    if ctx.stage == "outcome":
+        return ["做完了", "做了一部分", "没做"]
+    if ctx.stage == "reason":
+        return ["太累了", "没时间", "卡住了", "不想做了"]
+    return []
+
+
+def checkin_prompt(session: Session, ctx: CheckinContext, now: datetime, tz: str) -> str:
+    """当前阶段该问的话，用于新指令打断后把签到问题重新提回来。"""
+    ev = session.get(Event, ctx.event_ids[0]) if ctx.event_ids else None
+    if ctx.stage == "batch":
+        return f"你有 {len(ctx.event_ids)} 个块错过了，要我一起重新安排吗？"
+    if ctx.stage == "reason":
+        return "接着刚才的：那个块是什么原因呢？"
+    if ctx.stage == "recovery":
+        return "刚才那几个时间有合适的吗？不想安排说「算了」就行。"
+    if ev is not None:
+        return _checkin_question(session, ev, now, tz)
+    return ""
+
+
+def suggest_recovery(
+    session: Session,
+    user_id: int,
+    event: Event,
+    reason: str | None,
+    now: datetime,
+    tz: str = "Asia/Shanghai",
+    days: int = 3,
+) -> tuple[list[Candidate], Step | None]:
+    """按原因生成恢复方案：阶段 1 是通用实现（72 小时内找候选时段）。
+
+    阶段 2 在这里按 tired / no_time / stuck / unwilling 分四种动作。
+    """
+    step = session.get(Step, event.step_id) if event.step_id is not None else None
+    if step is None or step.status != "todo":
+        return [], step
+    return _propose(session, user_id, step, now, tz, step.goal.deadline, days=days), step
+
+
+def _prepare_current(
+    session: Session, user_id: int, ctx: CheckinContext, now: datetime, tz: str
+) -> Reply | None:
+    """为队列第一个块准备该问的话/该给的候选；队列空返回 None。"""
+    chat_action = Action(intent="chat", raw="", confidence=0.5)
+    while ctx.event_ids:
+        ev = session.get(Event, ctx.event_ids[0])
+        if ev is None:
+            ctx.event_ids.pop(0)
+            continue
+        if not ctx.merged:
+            ctx.stage, ctx.outcome, ctx.reason = "outcome", None, None
+            ctx.step_id = ev.step_id
+            return Reply(
+                _checkin_question(session, ev, now, tz), chat_action, "checkin",
+                checkin_context=ctx,
+            )
+        candidates, step = suggest_recovery(session, user_id, ev, ctx.reason, now, tz)
+        if not candidates:
+            ctx.event_ids.pop(0)
+            continue
+        ctx.stage = "recovery"
+        ctx.step_id = step.id
+        ctx.goal_id = step.goal_id
+        return Reply(
+            f"再给「{step.title}」找个新时间：",
+            Action(intent="schedule_step", raw="", confidence=0.6), "checkin",
+            candidates=candidates, goal_id=step.goal_id, step_id=step.id,
+            checkin_context=ctx,
+        )
+    return None
+
+
+def _advance(
+    session: Session, user_id: int, ctx: CheckinContext, now: datetime, tz: str
+) -> Reply | None:
+    """当前块处理完，进入队列里的下一个块。"""
+    if ctx.event_ids:
+        ctx.event_ids.pop(0)
+    return _prepare_current(session, user_id, ctx, now, tz)
+
+
+def _offer_recovery(
+    session: Session,
+    user_id: int,
+    ctx: CheckinContext,
+    ev: Event,
+    now: datetime,
+    tz: str,
+    parser: str,
+    intro: str = "",
+) -> Reply:
+    candidates, step = suggest_recovery(session, user_id, ev, ctx.reason, now, tz)
+    if candidates:
+        ctx.stage = "recovery"
+        ctx.step_id = step.id
+        ctx.goal_id = step.goal_id
+        return Reply(
+            intro + "我在未来 3 天给你留了几个时间，挑一个重新开始？",
+            Action(intent="schedule_step", raw="", confidence=0.6), parser,
+            candidates=candidates, goal_id=step.goal_id, step_id=step.id,
+            checkin_context=ctx,
+        )
+    text = intro + "未来 3 天实在没有空档，步骤先留在清单里；想安排的时候跟我说「安排下一步」。"
+    nxt = _advance(session, user_id, ctx, now, tz)
+    if nxt is None:
+        return Reply(text, Action(intent="chat", raw="", confidence=0.5), parser,
+                     checkin_context=None)
+    nxt.text = text + "\n" + nxt.text
+    return nxt
+
+
+def continue_checkin(
+    session: Session,
+    user_id: int,
+    ctx: CheckinContext,
+    text: str,
+    now: datetime,
+    tz: str = "Asia/Shanghai",
+) -> Reply | None:
+    """处理签到流程里的下一句；返回 None 表示这是明确的新指令，交给 handle 并保留 ctx。"""
+    if looks_like_new_command(text, now):
+        return None
+    action, parser = parse(text, now, context={"expecting": "checkin"})
+    handler = {
+        "batch": _checkin_batch,
+        "outcome": _checkin_outcome,
+        "reason": _checkin_reason,
+        "recovery": _checkin_recovery,
+    }[ctx.stage]
+    return handler(session, user_id, ctx, action, text.strip(), now, tz, parser)
+
+
+def _checkin_batch(session, user_id, ctx, action, text, now, tz, parser) -> Reply:
+    now_utc = as_utc_naive(now, tz)
+
+    def resolve_all(outcome: str, reason: str | None) -> None:
+        for event_id in ctx.event_ids:
+            ev = session.get(Event, event_id)
+            if ev is None or ev.status != "planned":
+                continue
+            recovery.resolve_block(session, ev, outcome, now_utc)
+            if reason is not None:
+                recovery.attach_reason(session, ev.id, reason)
+        ctx.reason = reason
+
+    if _BATCH_NO.search(text):
+        resolve_all("missed", None)
+        return Reply(
+            "好，都先记为错过了。想重新安排的时候随时跟我说。",
+            action, parser, checkin_context=None,
+        )
+    outcome = action.checkin_outcome
+    if outcome is not None or _BATCH_YES.search(text):
+        outcome = "missed" if outcome in (None, "none") else outcome
+        resolve_all(outcome, _reason_from(action, text))
+        label = {"done": "完成", "partial": "部分完成", "missed": "错过"}[outcome]
+        nxt = _prepare_current(session, user_id, ctx, now, tz)
+        if nxt is None:
+            return Reply(f"都记为{label}了。", action, parser, checkin_context=None)
+        nxt.text = f"好，都记为{label}了。我们一块一块来：\n" + nxt.text
+        return nxt
+    return Reply(
+        "要我一起重新安排吗？说「重新安排」或者「先不了」就行。",
+        action, parser, checkin_context=ctx,
+    )
+
+
+def _checkin_outcome(session, user_id, ctx, action, text, now, tz, parser) -> Reply:
+    ev = session.get(Event, ctx.event_ids[0]) if ctx.event_ids else None
+    if ev is None:
+        nxt = _advance(session, user_id, ctx, now, tz)
+        return nxt or Reply("好，都处理完了。", action, parser, checkin_context=None)
+
+    outcome = action.checkin_outcome
+    reason = _reason_from(action, text)
+    if outcome is None:
+        if action.intent == "set_state":
+            # "太累了" 这种回答：按没做 + 原因理解
+            outcome = "missed"
+        else:
+            return Reply(
+                f"没太听懂——{_checkin_question(session, ev, now, tz)}",
+                action, parser, checkin_context=ctx,
+            )
+    if outcome == "none":
+        outcome = "missed"
+
+    now_utc = as_utc_naive(now, tz)
+    recovery.resolve_block(session, ev, outcome, now_utc)
+    ctx.outcome = outcome
+    ctx.step_id = ev.step_id
+
+    if outcome == "done":
+        step = session.get(Step, ev.step_id) if ev.step_id is not None else None
+        if ev.step_id is not None:
+            cal.cancel_future_blocks(session, ev.step_id, now_utc)
+        goal = step.goal if step is not None else None
+        pct = int(goal_svc.progress(goal) * 100) if goal is not None else 0
+        text_out = f"太好了，「{_block_title(session, ev)}」记为完成！目标进度 {pct}%。"
+        cands: list[Candidate] = []
+        nxt_step = goal_svc.next_step(goal) if goal is not None and goal.status == "active" else None
+        if nxt_step is not None:
+            cands = _propose(session, user_id, nxt_step, now, tz, goal.deadline)
+            if cands:
+                text_out += f"\n下一步是「{nxt_step.title}」（{nxt_step.est_min} 分钟），这几个时间合适吗？"
+        nxt = _advance(session, user_id, ctx, now, tz)
+        if nxt is None:
+            return Reply(
+                text_out, action, parser, candidates=cands,
+                goal_id=goal.id if goal is not None else None,
+                step_id=nxt_step.id if nxt_step is not None else None,
+                checkin_context=None,
+            )
+        nxt.text = text_out + "\n\n" + nxt.text
+        if cands and not nxt.candidates:
+            nxt.candidates = cands
+            nxt.goal_id = goal.id
+            nxt.step_id = nxt_step.id
+        return nxt
+
+    if reason is not None:
+        ctx.reason = reason
+        recovery.attach_reason(session, ev.id, reason)
+        return _offer_recovery(session, user_id, ctx, ev, now, tz, parser)
+    ctx.stage = "reason"
+    gentle = "做了一部分也是进展。" if outcome == "partial" else "没关系，这很正常。"
+    return Reply(f"{gentle}是什么原因呢？", action, parser, checkin_context=ctx)
+
+
+def _checkin_reason(session, user_id, ctx, action, text, now, tz, parser) -> Reply:
+    ev = session.get(Event, ctx.event_ids[0]) if ctx.event_ids else None
+    if ev is None:
+        nxt = _advance(session, user_id, ctx, now, tz)
+        return nxt or Reply("好，都处理完了。", action, parser, checkin_context=None)
+    reason = _reason_from(action, text)
+    if reason is None:
+        # 不想说或没听懂：不追问到底，按通用恢复处理
+        return _offer_recovery(session, user_id, ctx, ev, now, tz, parser,
+                               intro="好，那就不纠结原因了。")
+    ctx.reason = reason
+    recovery.attach_reason(session, ev.id, reason)
+    return _offer_recovery(session, user_id, ctx, ev, now, tz, parser)
+
+
+def _checkin_recovery(session, user_id, ctx, action, text, now, tz, parser) -> Reply:
+    if _DECLINE.search(text):
+        return decline_recovery(session, user_id, ctx, now, tz)
+    return Reply(
+        "在上面几个时间里挑一个就行；不想安排的话，说「算了」也可以。",
+        action, parser, checkin_context=ctx,
+    )
+
+
+def accept_recovery(
+    session: Session,
+    user_id: int,
+    ctx: CheckinContext,
+    candidate: Candidate,
+    now: datetime,
+    tz: str = "Asia/Shanghai",
+) -> Reply:
+    """用户选定恢复候选：创建新块并写 RescheduleLog（旧块保留，供恢复率统计）。"""
+    ev = session.get(Event, ctx.event_ids[0]) if ctx.event_ids else None
+    step = session.get(Step, ctx.step_id) if ctx.step_id is not None else None
+    if ev is None or step is None:
+        return Reply("那个块已经不在了。", Action(intent="chat", raw="", confidence=0.5),
+                     "checkin", checkin_context=None)
+    new_ev = cal.create_event(
+        session, user_id, f"{step.goal.title}: {step.title}",
+        candidate.start, candidate.end,
+        kind="block", source="proposal", step_id=step.id, tz=tz,
+    )
+    session.add(
+        RescheduleLog(
+            event_id=ev.id,
+            new_event_id=new_ev.id,
+            ts=as_utc_naive(now, tz),
+            reason=ctx.reason or "unknown",
+            moved_to_utc=new_ev.start_utc,
+            auto=False,
+        )
+    )
+    session.flush()
+    text = f"好，「{step.title}」改到 {candidate.start:%a %b %d %H:%M}。"
+    nxt = _advance(session, user_id, ctx, now, tz)
+    if nxt is None:
+        return Reply(text + " 慢慢来，一次一个块就好。",
+                     Action(intent="chat", raw="", confidence=0.5), "checkin",
+                     checkin_context=None)
+    nxt.text = text + "\n" + nxt.text
+    return nxt
+
+
+def decline_recovery(
+    session: Session,
+    user_id: int,
+    ctx: CheckinContext,
+    now: datetime,
+    tz: str = "Asia/Shanghai",
+) -> Reply:
+    """用户拒绝恢复候选：步骤保持 todo，进入下一个块。"""
+    nxt = _advance(session, user_id, ctx, now, tz)
+    text = "好，这个块先不安排了，步骤还留在清单里。"
+    if nxt is None:
+        return Reply(text, Action(intent="chat", raw="", confidence=0.5), "checkin",
+                     checkin_context=None)
+    nxt.text = text + "\n" + nxt.text
+    return nxt

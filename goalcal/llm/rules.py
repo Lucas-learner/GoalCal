@@ -357,9 +357,15 @@ def parse_checkin_answer(text: str, now: datetime) -> Action | None:
             action.checkin_outcome = "none"
             action.confidence = max(action.confidence, 0.6)
             return action
+        # "写了一半，太累了"：outcome 之外顺带带上原因，签到流程一次解析完
+        state = next(
+            (label for label, pattern in STATE_MARKERS.items() if pattern.search(raw)),
+            None,
+        )
         return Action(
             intent="log_progress",
             checkin_outcome=outcome,
+            state=state,
             confidence=0.8,
             raw=raw,
         )

@@ -229,8 +229,8 @@ def complete_step(
     verdict: str = "done",
     raw_text: str = "",
     now: datetime | None = None,
-) -> None:
-    """记录一次打卡。now 为 UTC naive，为 None 时取真实当前时间。
+) -> Checkin:
+    """记录一次打卡，返回写入的 Checkin。now 为 UTC naive，为 None 时取真实当前时间。
 
     done     → 步骤完成，按预估时长计入进度。
     partial  → 只记录投入时间，步骤仍是 todo（不伪造 scheduled 状态）。
@@ -247,17 +247,18 @@ def complete_step(
         if verdict == "partial":
             step.completed_at = None
 
-    session.add(
-        Checkin(
-            step_id=step.id,
-            raw_text=raw_text,
-            verdict=verdict,
-            minutes=logged,
-        )
+    checkin = Checkin(
+        step_id=step.id,
+        raw_text=raw_text,
+        verdict=verdict,
+        minutes=logged,
     )
+    session.add(checkin)
+    session.flush()
     goal = step.goal
     if all(s.status == "done" for s in goal.steps):
         goal.status = "done"
+    return checkin
 
 
 def snapshot(goal: Goal, now: datetime | None = None) -> dict:

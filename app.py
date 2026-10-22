@@ -40,7 +40,7 @@ def _reset_demo() -> None:
     for key in (
         "messages", "pending", "user_id", "selected_event_id",
         "confirm_delete_id", "new_event_start", "_cal_sig", "flash", "goal_brief",
-        "replan_draft",
+        "checkin_context", "replan_draft",
     ):
         st.session_state.pop(key, None)
 
@@ -61,6 +61,7 @@ def _ensure_state() -> None:
         ]
     st.session_state.setdefault("pending", None)
     st.session_state.setdefault("goal_brief", None)
+    st.session_state.setdefault("checkin_context", None)
 
 
 def _now() -> datetime:
@@ -71,32 +72,76 @@ def _flash(message: str) -> None:
     st.session_state["flash"] = message
 
 
+def _start_checkin_if_needed() -> None:
+    """打开页面 / 时间机器快进了新的一天：有过期块就主动发起签到。"""
+    if (
+        st.session_state.get("checkin_context") is not None
+        or st.session_state.get("goal_brief") is not None
+    ):
+        return
+    with session_scope() as s:
+        ctx, question = agent.begin_checkin(s, st.session_state["user_id"], _now(), TZ)
+    if ctx is not None:
+        st.session_state["checkin_context"] = ctx
+        st.session_state["messages"].append({"role": "assistant", "content": question})
+
+
+def _record_reply(reply) -> None:
+    st.session_state["messages"].append({"role": "assistant", "content": reply.text})
+    st.session_state["goal_brief"] = reply.goal_brief
+    ctx = reply.checkin_context
+    origin = "recovery" if ctx is not None and ctx.stage == "recovery" else "chat"
+    st.session_state["pending"] = (
+        {
+            "candidates": reply.candidates,
+            "step_id": reply.step_id,
+            "origin": origin,
+        }
+        if reply.candidates
+        else None
+    )
+    st.session_state["last_parser"] = reply.parser
+
+
 def _run_turn(text: str) -> None:
     st.session_state["messages"].append({"role": "user", "content": text})
     brief = st.session_state.get("goal_brief")
     if brief is not None and agent.looks_like_new_command(text, _now()):
         brief = None
         st.session_state["goal_brief"] = None
+    ctx = st.session_state.get("checkin_context")
+    follow_up = None
     with session_scope() as s:
         with st.spinner("Thinking…"):
             if brief is not None:
                 reply = agent.continue_goal(
                     s, st.session_state["user_id"], brief, text, _now(), TZ
                 )
+            elif ctx is not None:
+                reply = agent.continue_checkin(
+                    s, st.session_state["user_id"], ctx, text, _now(), TZ
+                )
+                if reply is None:
+                    # 新指令打断：签到暂存，先处理指令，再把问题提回来
+                    reply = agent.handle(s, st.session_state["user_id"], text, _now(), TZ)
+                    follow_up = agent.checkin_prompt(s, ctx, _now(), TZ) or None
+                else:
+                    st.session_state["checkin_context"] = reply.checkin_context
             else:
                 reply = agent.handle(s, st.session_state["user_id"], text, _now(), TZ)
-    st.session_state["messages"].append({"role": "assistant", "content": reply.text})
-    st.session_state["goal_brief"] = reply.goal_brief
-    st.session_state["pending"] = (
-        {
-            "candidates": reply.candidates,
-            "step_id": reply.step_id,
-            "origin": "chat",
-        }
-        if reply.candidates
-        else None
-    )
-    st.session_state["last_parser"] = reply.parser
+            if (
+                st.session_state.get("checkin_context") is None
+                and reply.goal_brief is None
+            ):
+                new_ctx, question = agent.begin_checkin(
+                    s, st.session_state["user_id"], _now(), TZ
+                )
+                if new_ctx is not None:
+                    st.session_state["checkin_context"] = new_ctx
+                    follow_up = follow_up or question
+    _record_reply(reply)
+    if follow_up:
+        st.session_state["messages"].append({"role": "assistant", "content": follow_up})
 
 
 def _accept(step_id: int, candidate) -> None:
@@ -110,6 +155,37 @@ def _accept(step_id: int, candidate) -> None:
 
 def _dismiss_pending() -> None:
     st.session_state["pending"] = None
+    st.rerun()
+
+
+def _accept_recovery(step_id: int, candidate) -> None:
+    ctx = st.session_state.get("checkin_context")
+    with session_scope() as s:
+        reply = agent.accept_recovery(
+            s, st.session_state["user_id"], ctx, candidate, _now(), TZ
+        )
+    st.session_state["checkin_context"] = reply.checkin_context
+    st.session_state["messages"].append({"role": "assistant", "content": reply.text})
+    st.session_state["pending"] = (
+        {"candidates": reply.candidates, "step_id": reply.step_id, "origin": "recovery"}
+        if reply.candidates
+        else None
+    )
+    _flash(reply.text)
+    st.rerun()
+
+
+def _dismiss_recovery() -> None:
+    ctx = st.session_state.get("checkin_context")
+    with session_scope() as s:
+        reply = agent.decline_recovery(s, st.session_state["user_id"], ctx, _now(), TZ)
+    st.session_state["checkin_context"] = reply.checkin_context
+    st.session_state["messages"].append({"role": "assistant", "content": reply.text})
+    st.session_state["pending"] = (
+        {"candidates": reply.candidates, "step_id": reply.step_id, "origin": "recovery"}
+        if reply.candidates
+        else None
+    )
     st.rerun()
 
 
@@ -377,6 +453,7 @@ def _create_quick_event(title: str, start: datetime, minutes: int) -> None:
 
 
 _ensure_state()
+_start_checkin_if_needed()
 
 # ---------------------------------------------------------------- sidebar
 
@@ -447,8 +524,24 @@ with chat_col:
                     _run_turn(option)
                     st.rerun()
 
+    checkin_ctx = st.session_state.get("checkin_context")
+    if brief is None and checkin_ctx is not None:
+        options = agent.checkin_quick_options(checkin_ctx)
+        if options:
+            st.caption("快捷回复")
+            cols = st.columns(len(options))
+            for col_idx, (col, option) in enumerate(zip(cols, options)):
+                key = f"checkin_option_{checkin_ctx.stage}_{col_idx}"
+                if col.button(option, key=key, use_container_width=True):
+                    _run_turn(option)
+                    st.rerun()
+
     pending = st.session_state.get("pending")
-    if pending and pending.get("origin") != "goal":
+    if pending and pending.get("origin") == "recovery":
+        chat_ui.render_proposals(
+            pending["candidates"], pending["step_id"], _accept_recovery, _dismiss_recovery
+        )
+    elif pending and pending.get("origin") != "goal":
         chat_ui.render_proposals(
             pending["candidates"], pending["step_id"], _accept, _dismiss_pending
         )
