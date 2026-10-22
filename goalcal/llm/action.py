@@ -11,6 +11,8 @@ Intent = Literal[
     "delete_event",
     "query_events",
     "create_goal",
+    "delete_goal",
+    "schedule_step",
     "log_progress",
     "set_state",
     "chat",

@@ -24,6 +24,12 @@ def parse(text: str, now: datetime, use_llm: bool | None = None) -> tuple[Action
         try:
             action = _parse_with_llm(text, now)
             if action is not None:
+                # 明显是“删目标”的句子不允许被 LLM 读成“新建目标”。
+                if action.intent == "create_goal":
+                    guard = parse_with_rules(text, now)
+                    if guard.intent == "delete_goal":
+                        log.info("LLM 把删目标读成建目标，改用规则结果: %s", text)
+                        return guard.normalized(now), "rules:guard"
                 return action.normalized(now), f"llm:{PROMPT_VERSION}"
             log.warning("LLM 输出为空，回落规则解析: %s", text)
         except Exception as exc:  # noqa: BLE001 - 兜底优先，不能让对话崩

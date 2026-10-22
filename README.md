@@ -13,13 +13,17 @@
 | 能力 | 状态 | 说明 |
 |---|---|---|
 | 对话增 / 改 / 删 / 查日程 | ✅ | 规则解析器，无需 API key |
-| 目标 → 10 个叶子任务 | ✅ | 模板库 + 里程碑，可替换为 LLM + RAG |
+| 目标 → 叶子任务 | ✅ | LLM 按具体目标拆 4–12 步；失败才回退模板；步骤可增删 |
+| 目标澄清 | ✅ | 技能/复杂目标先确认水平与周期，再生成计划 |
 | 进度追踪（按预估时长加权） | ✅ | 自然语言回报完成 |
 | 状态感知排期（tired / busy / uninspired） | ✅ | 确定性打分引擎，可解释 |
 | 候选时段 → 一键写入日历 | ✅ | 3 个候选卡片 + 匹配理由 |
-| 日历可视化 / 拖拽改期 | ✅ | streamlit-calendar（FullCalendar） |
+| 目标卡直接操作 | ✅ | 找时间 / 完成 / 取消安排 / 增删步骤 / 归档目标 |
+| 日历可视化 / 拖拽改期 | ✅ | 点击事件可删除（二次确认）、点空白新建 |
 | 时间机器（demo 快进） | ✅ | 侧边栏 0–14 天 |
-| LLM 意图解析 | ⏳ | 代码已接好，填 `.env` 即启用 |
+| LLM 意图解析 | ✅ | LLM 优先，失败自动回落规则；`.env` 可关 |
+| LLM 目标拆解 | ✅ | 按具体目标生成 4–12 步；结构校验失败才回退模板 |
+| 计划可管理 | ✅ | 步骤可直接编辑；AI 修改先预览，确认后才替换，不是反复抽卡 |
 | 主动推送 / 自动重排 | ⏳ | 下一步（F4） |
 | 多用户 / 登录 / ICS 导入 | ⏳ | 11 月 |
 
@@ -43,12 +47,27 @@ streamlit run app.py
 
 ```
 I want to publish my first short video in 30 days
+我要学会弹钢琴
 Add a meeting tomorrow 10am
 Move tomorrow's workout to Friday
 I'm tired
 I finished the script today
 What do I have this week?
+帮我安排下一步
+delete "track my goal"
 ```
+
+也可以不用打字：
+
+- 说“我要学会弹钢琴”这类复杂目标，会先问水平和周期，再生成专属计划
+- 已有目标如果拆得不合适，点 **Adjust plan with AI**，说明要改什么 → 预览 → 确认应用；也可以直接点步骤旁的 **✏️** 手动改标题/时长/阶段
+- 右侧 **Goals** 卡片上直接点 **Find time / Done / Cancel block**
+- 展开 **All steps** 可添加自定义步骤，或删除某一步
+- 新建目标时可选择“AI 自动拆解”或“空白目标”，不强制 10 步；计划不是一次性结果，之后可逐条编辑
+- **Archive goal** 归档整个目标（会撤掉它的未来日历块）
+- 日历上点事件 → 查看详情 → 二次确认删除
+- 日历上点空白 → 新建事件；拖拽 → 改期
+- 左侧 Quick actions 覆盖 demo 常用句子
 
 ## 目录结构
 
@@ -67,15 +86,17 @@ GoalCal/
 │   │   ├── natdate.py      # 确定性日期解析（关键）
 │   │   ├── rules.py        # 规则解析器（baseline + 兜底）
 │   │   ├── parser.py       # LLM 优先 → 规则兜底
+│   │   ├── plan.py         # LLM 目标拆解 + 结构校验
 │   │   └── prompts.py      # prompt 版本化
 │   ├── domain/
 │   │   ├── scheduler.py    # 排期打分引擎（纯函数，可单测）
+│   │   ├── planner.py      # 目标复杂度判断 / 澄清 / 默认假设
 │   │   ├── goals.py        # 拆解 / 进度 / 下一步
 │   │   └── calendar_service.py
 │   ├── data/goal_templates.py
 │   └── ui/                 # 只负责渲染
 ├── bench/                  # 解析评测：46 条用例 + runner
-├── tests/                  # 19 个单测
+├── tests/                  # 132 个单测（规则/排期/执行层/时区/DB/UI smoke）
 └── docs/
     ├── 技术落地方案.md
     └── 接口契约.md
@@ -84,16 +105,18 @@ GoalCal/
 ## 测试与评测
 
 ```bash
-pytest -q                                   # 19 passed
+pytest -q                                   # 132 passed
 python bench/run_eval.py --parser rules     # 基线：41/46 = 89.1%
 python bench/run_eval.py --parser both --out bench/results.csv
 ```
+
+测试使用独立的临时 SQLite（`tests/conftest.py`），不会写进开发用的 `goalcal.db`。
 
 当前基线故意跑不满分：`hard-01`～`hard-04`、`hard-07` 是已知失败，
 正是中期报告第 3 节要的“预期失败案例”。
 
 ## 三条铁律
 
-1. **LLM 不直接改数据。** 它只输出 `Action`（JSON schema），执行由 `agent.py` 完成。
-2. **日期不用 LLM 算。** `natdate.py` 负责相对日期、星期、中文说法；LLM 只判 intent。
+1. **LLM 不直接改数据。** 它只输出 `Action` 或 `Plan`（JSON schema），校验和执行由 `agent.py` 完成。
+2. **日期不用 LLM 算。** `natdate.py` 负责相对日期、星期、中文说法；LLM 只判 intent 和拆步骤。
 3. **日程是本地时间，库是 UTC。** 只在 `timeutil.py` 的三个边界转换。

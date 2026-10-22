@@ -62,6 +62,10 @@ def extract_time(text: str) -> tuple[int, int] | None:
     if m:
         return int(m.group(1)), int(m.group(2))
 
+    m = re.search(r"\b(?:at\s+)([01]?\d|2[0-3])\b", text, re.I)
+    if m:
+        return int(m.group(1)), 0
+
     m = re.search(r"(上午|下午|晚上|早上)?\s*(\d{1,2})\s*点", text)
     if m:
         hour = int(m.group(2))

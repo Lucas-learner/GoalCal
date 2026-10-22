@@ -161,10 +161,13 @@ def free_intervals(
 
 
 def _aligned_starts(interval: Interval, est_min: int, gran: int, limit: int = 200) -> list[datetime]:
-    """在空档里按刻钟生成起点。不能只取前几个，否则会漏掉下午/晚上。"""
+    """在空档里按刻钟生成起点。不能只取前几个，否则会漏掉下午/晚上。
+
+    空档起点可能是 11:10（忙碌块结束 + buffer），也要向上对齐到 11:15。
+    """
     starts: list[datetime] = []
     step = timedelta(minutes=gran)
-    cur = interval.start
+    cur = _ceil_to(interval.start, gran)
     while cur + timedelta(minutes=est_min) <= interval.end and len(starts) < limit:
         starts.append(cur)
         cur += step

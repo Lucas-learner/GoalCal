@@ -72,6 +72,40 @@ TEMPLATES: dict[str, dict] = {
             ("加量", "加一个小目标（次数 / 重量 / 距离）", "一个新的量化目标", 20, 0, "admin"),
         ],
     },
+    "piano": {
+        "keywords": ["钢琴", "piano", "键盘乐器", "弹琴"],
+        "milestones": ["准备与基线", "手型与音阶", "读谱与节奏", "第一首曲子", "巩固与下一步"],
+        "steps": [
+            ("准备与基线", "确认练琴方式（琴行 / 电钢 / 真钢）和每周可练时间", "一个可执行的练琴安排", 25, 1, "admin"),
+            ("准备与基线", "认识键盘、坐姿和基本手型，拍一张手型照片", "一张手型检查照", 20, 0, "physical"),
+            ("手型与音阶", "C 大调音阶：右手一个八度，慢速", "右手能连贯弹一个八度", 15, 1, "physical"),
+            ("手型与音阶", "C 大调音阶：左手一个八度，慢速", "左手能连贯弹一个八度", 15, 1, "physical"),
+            ("手型与音阶", "双手合 C 大调音阶，节拍器 60", "双手慢速合奏一遍", 20, 2, "physical"),
+            ("读谱与节奏", "认五线谱的高低音谱表，找出 5 个音", "能说出 5 个音符的位置", 20, 1, "deep"),
+            ("读谱与节奏", "练 3 个基础节奏型（四分 / 八分 / 附点）", "跟节拍器拍出 3 条节奏", 20, 1, "deep"),
+            ("第一首曲子", "选一首入门曲（小星星 / 欢乐颂），右手分手练", "右手能弹完 A 段", 30, 1, "physical"),
+            ("第一首曲子", "左手和弦 / 低音分手练", "左手能跟上 A 段", 30, 1, "physical"),
+            ("第一首曲子", "双手慢速合前 8 小节", "能慢速合奏前 8 小节", 30, 2, "physical"),
+            ("第一首曲子", "完整弹完并录一版", "一段完整录音", 30, 2, "physical"),
+            ("巩固与下一步", "回听录音，改 1 个最明显的问题，定下一首曲子", "一条改进记录 + 下一首曲子", 25, 1, "deep"),
+        ],
+    },
+    "exam": {
+        "keywords": ["复习", "考试", "exam", "final", "midterm", "quiz", "review", "期末", "期中", "备考", "刷题"],
+        "milestones": ["范围与诊断", "第一轮复习", "练习与错题", "模拟与查漏"],
+        "steps": [
+            ("范围与诊断", "收集课程大纲、考试范围、往年题/样题，列一张资料清单", "一张资料清单", 25, 0, "admin"),
+            ("范围与诊断", "按大纲列出所有主题，并标记“会 / 不熟 / 不会”", "一张主题诊断表", 30, 1, "deep"),
+            ("第一轮复习", "针对最不熟的 2 个主题，各复习一个核心概念", "2 个概念能用自己的话解释", 40, 2, "deep"),
+            ("第一轮复习", "第二轮主动回忆：合上书，按主题列要点", "每个主题一页回忆提纲", 40, 2, "deep"),
+            ("练习与错题", "做一套往年题/练习题，限时完成", "一套完成的练习题", 60, 2, "deep"),
+            ("练习与错题", "整理错题，写清错因和正确思路", "一页错题清单", 30, 1, "deep"),
+            ("练习与错题", "按错题回补最弱的 3 个知识点", "3 个知识点能独立做对", 40, 2, "deep"),
+            ("练习与错题", "再做一套题，只做上次错题和易混点", "正确率对比", 45, 2, "deep"),
+            ("模拟与查漏", "限时模拟一遍考试节奏", "一次完整模拟", 60, 2, "deep"),
+            ("模拟与查漏", "最终查漏：用 10 分钟复述高频考点", "一张最终检查清单", 20, 1, "deep"),
+        ],
+    },
     "generic": {
         "keywords": [],
         "milestones": ["定义", "探路", "做出第一版", "打磨", "收尾"],
@@ -93,18 +127,23 @@ TEMPLATES: dict[str, dict] = {
 
 def pick_template(text: str) -> str:
     lowered = text.lower()
+    best_key = "generic"
+    best_score = 0
     for key, tpl in TEMPLATES.items():
         if key == "generic":
             continue
-        if any(kw.lower() in lowered for kw in tpl["keywords"]):
-            return key
-    return "generic"
+        # 更具体的关键词优先：'钢琴' 应该赢过 '学'，'短视频' 应该赢过 '视频'
+        score = sum(len(kw) for kw in tpl["keywords"] if kw.lower() in lowered)
+        if score > best_score:
+            best_key = key
+            best_score = score
+    return best_key
 
 
-def build_steps(text: str) -> tuple[str, list[dict]]:
+def build_steps(text: str, complexity: str = "full") -> tuple[str, list[dict]]:
     key = pick_template(text)
     tpl = TEMPLATES[key]
-    steps = [
+    raw_steps = [
         {
             "seq": i,
             "milestone": milestone,
@@ -116,7 +155,25 @@ def build_steps(text: str) -> tuple[str, list[dict]]:
         }
         for i, (milestone, title, outcome, est, energy, kind) in enumerate(tpl["steps"], 1)
     ]
-    return key, steps
+    step_defs = _select_steps(raw_steps, complexity)
+    return key, step_defs
+
+
+def _select_steps(steps: list[dict], complexity: str) -> list[dict]:
+    """按复杂度调整步骤数量；保留首尾，均匀抽掉中间步骤。"""
+    target = {"simple": 6, "standard": 8, "complex": 12}.get(complexity)
+    if target is None or target >= len(steps):
+        return steps
+    if target <= 1:
+        return steps[:1]
+
+    indexes = [round(i * (len(steps) - 1) / (target - 1)) for i in range(target)]
+    indexes = sorted(set(indexes))
+    selected = [steps[i] for i in indexes]
+    for seq, step in enumerate(selected, 1):
+        step["seq"] = seq
+    return selected
+
 
 
 def milestones(template_key: str) -> list[str]:

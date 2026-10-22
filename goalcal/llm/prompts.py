@@ -9,6 +9,8 @@ Allowed intents:
 - delete_event: remove an existing event. Needs target.
 - query_events: ask what is on the calendar / when free.
 - create_goal: user states a longer-term goal. Needs title + deadline (if any).
+- delete_goal: user wants to remove/archive a goal. Put the goal title in target.
+- schedule_step: user wants to find time for a goal step ("安排下一步", "find time to write the script").
 - log_progress: user reports work already done on a goal step.
 - set_state: user reports energy/availability state (tired/busy/uninspired/fresh).
 - chat: none of the above.
@@ -33,6 +35,15 @@ User: Move tomorrow's workout to Friday
 
 User: I want to publish my first short video in 30 days
 {{"intent":"create_goal","title":"Publish my first short video","start":null,"end":null,"duration_min":null,"target":null,"deadline":"2026-11-20","state":null,"progress_target":null,"confidence":0.92}}
+
+User: 我要学会弹钢琴
+{{"intent":"create_goal","title":"学会弹钢琴","start":null,"end":null,"duration_min":null,"target":null,"deadline":null,"state":null,"progress_target":null,"confidence":0.9}}
+
+User: 帮我找个时间写脚本
+{{"intent":"schedule_step","title":null,"start":null,"end":null,"duration_min":null,"target":null,"deadline":null,"state":null,"progress_target":"写脚本","confidence":0.9}}
+
+User: delete "track my goal"
+{{"intent":"delete_goal","title":null,"start":null,"end":null,"duration_min":null,"target":"track my goal","deadline":null,"state":null,"progress_target":null,"confidence":0.95}}
 """
 
 

@@ -8,15 +8,20 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, time, timedelta
+from datetime import datetime, timedelta
 
-from dateparser.search import search_dates
+try:  # dateparser 是可选兜底：没装也能跑（规则层已覆盖大部分说法）
+    from dateparser.search import search_dates
+except ImportError:  # pragma: no cover - 依赖缺失时的降级路径
+    search_dates = None
 
 from .action import Action
-from .natdate import find_dates
+from .natdate import extract_time, find_dates
 
 GOAL_MARKERS = re.compile(
-    r"\b(i want to|i'd like to|my goal|help me (to )?|goal is)\b|我想|我的目标|目标是|希望",
+    r"\b(i want to|i'd like to|i plan to|i'm going to|my goal|help me (to )?|goal is)\b|"
+    r"我想|我想要|我的目标|目标是|希望|"
+    r"我要(?:去|开始|坚持|在)?(?:学|练|跑|写|做|读|弹|通过|考|减|完成|掌握|成为)",
     re.I,
 )
 ADD_MARKERS = re.compile(
@@ -25,8 +30,19 @@ ADD_MARKERS = re.compile(
 )
 MOVE_MARKERS = re.compile(r"\b(move|reschedule|shift|push|postpone)\b|改到|移到|挪到|推迟|提前", re.I)
 DELETE_MARKERS = re.compile(r"\b(delete|cancel|remove|drop)\b|删除|取消|去掉", re.I)
+DELETE_GOAL_MARKERS = re.compile(
+    r"\b(delete|remove|archive|cancel|drop)\b.*\bgoals?\b|"
+    r"\bgoals?\b.*\b(delete|remove|archive|cancel|drop)\b|"
+    r"(删除|删掉|取消).*目标|目标.*(删除|删掉|取消)",
+    re.I,
+)
 QUERY_MARKERS = re.compile(
     r"\b(what do i have|what'?s on|show|list|am i free|free time|my schedule|do i have)\b|我有什么|空闲|日程|安排",
+    re.I,
+)
+SCHEDULE_STEP_MARKERS = re.compile(
+    r"\b(find time|make time|schedule (the )?next|next step|work on (my )?goal)\b|"
+    r"找个?时间|安排(一下)?下一步|下一步|推进目标",
     re.I,
 )
 DONE_MARKERS = re.compile(
@@ -57,6 +73,21 @@ def _extract_dates(text: str, now: datetime) -> list[tuple[str, datetime]]:
     found = find_dates(text, now)
     if found:
         return found
+
+    # 只有时间、没有日期（"add standup at 10" / "every morning at 10"）
+    # 默认今天；如果已经过了，就放到明天。不要让 dateparser 猜出一整年后。
+    explicit = extract_time(text)
+    if explicit and re.search(
+        r"\b(?:at|on)\b|上午|下午|晚上|早上|中午|傍晚|点", text, re.I
+    ):
+        hour, minute = explicit
+        candidate = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if candidate <= now:
+            candidate += timedelta(days=1)
+        return [("", candidate)]
+
+    if search_dates is None:
+        return []
     # 规则没覆盖到的口语说法，最后再交给 dateparser
     try:
         parsed = search_dates(
@@ -85,11 +116,28 @@ def _attach(dt: datetime, now: datetime, default_hour: int = 9) -> datetime:
 def _clean_title(text: str, spans: list[str]) -> str:
     cleaned = text
     for s in spans:
+        if not s:  # 只有时间没有日期时 span 为空
+            continue
         cleaned = re.sub(re.escape(s) + r"(?:'s|’s)?", " ", cleaned, flags=re.I)
+    # 时间片段不属于标题：10am / 4 pm / 10:30 / 上午 10 点 / at 10 / noon
+    cleaned = re.sub(
+        r"\b(?:at\s+)?\d{1,2}(?::\d{2})?\s*(?:am|pm|o'clock)\b", " ", cleaned, flags=re.I
+    )
+    cleaned = re.sub(r"\b\d{1,2}:\d{2}\b", " ", cleaned)
+    cleaned = re.sub(r"\bat\s+\d{1,2}\b", " ", cleaned, flags=re.I)
+    cleaned = re.sub(r"(?:上午|下午|晚上|早上|中午|傍晚)?\s*\d{1,2}\s*点", " ", cleaned)
+    cleaned = re.sub(
+        r"\b(noon|midday|midnight|morning|afternoon|evening|night|tonight|every|each)\b|"
+        r"上午|下午|晚上|中午|早上|傍晚",
+        " ",
+        cleaned,
+        flags=re.I,
+    )
+    cleaned = re.sub(r"找个?时间|找时间|安排(一下)?", " ", cleaned)
     cleaned = re.sub(
         r"^\s*(add|schedule|create|put|book|block|set up|move|reschedule|shift|push|postpone|"
         r"delete|cancel|remove|drop|please|can you|could you|i want to|i'd like to|"
-        r"帮我|请|把|我要|我想)\s*",
+        r"帮我|请|安排|把|我要|我想)\s*",
         "",
         cleaned,
         flags=re.I,
@@ -106,6 +154,26 @@ def _clean_title(text: str, spans: list[str]) -> str:
     return cleaned[:80]
 
 
+def _goal_target(text: str) -> str:
+    """从 “delete "track my goal"” / “删除目标 track my goal” 里取目标名。"""
+    quoted = re.search(r"[\"'“”‘’]([^\"'“”‘’]+)[\"'“”‘’]", text)
+    if quoted:
+        return quoted.group(1).strip()[:120]
+
+    # 只去掉开头/结尾的指令词，不能把标题里的 "goal" 一起删掉
+    cleaned = re.sub(
+        r"^\s*(?:delete|remove|archive|cancel|drop)\b", " ", text, flags=re.I
+    )
+    cleaned = re.sub(r"^\s*(?:删除|删掉|取消)\s*|^\s*把\s*", " ", cleaned)
+    cleaned = re.sub(
+        r"^\s*(?:(?:the|my|this|that|a|an)\s+)?goals?\b", " ", cleaned, flags=re.I
+    )
+    cleaned = re.sub(r"^\s*(?:(?:我的?|这个|那个)\s*)?目标\s*", " ", cleaned)
+    cleaned = re.sub(r"^\s*(?:my|the|this|that|a|an)\s+", "", cleaned, flags=re.I)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,.'\"“”")
+    return cleaned[:120]
+
+
 def parse_with_rules(text: str, now: datetime) -> Action:
     raw = text.strip()
     low = raw.lower()
@@ -118,7 +186,36 @@ def parse_with_rules(text: str, now: datetime) -> Action:
         if pattern.search(raw) and len(raw) < 60:
             return Action(intent="set_state", state=label, confidence=0.7, raw=raw)
 
-    # 2) 建目标（"I want to ... in 30 days"）
+    # 2) 删目标（"delete my goal" / 删除目标 X）——必须早于 create_goal，
+    #    否则 "delete my goal" 会因为出现 "my goal" 被误判成新建目标。
+    if DELETE_GOAL_MARKERS.search(raw):
+        target = _goal_target(raw)
+        return Action(
+            intent="delete_goal",
+            target=target or None,
+            title=target or None,
+            confidence=0.75,
+            raw=raw,
+        )
+
+    # 3) 删日程
+    if DELETE_MARKERS.search(raw):
+        target = _clean_title(raw, spans)
+        return Action(intent="delete_event", target=target, title=target, confidence=0.65, raw=raw)
+
+    # 4) 给目标步骤找时间（"安排下一步" / "find time for the next step"）
+    if SCHEDULE_STEP_MARKERS.search(raw):
+        target = _clean_title(raw, spans)
+        if re.fullmatch(r"(下一步|next step)", target, re.I):
+            target = None
+        return Action(
+            intent="schedule_step",
+            progress_target=target or None,
+            confidence=0.7,
+            raw=raw,
+        )
+
+    # 5) 建目标（"I want to ... in 30 days"）
     if GOAL_MARKERS.search(raw):
         deadline = None
         if dates:
@@ -127,7 +224,13 @@ def parse_with_rules(text: str, now: datetime) -> Action:
         if m:
             days = int(m.group(1) or m.group(2))
             deadline = (now + timedelta(days=days)).date()
-        title = re.sub(r"^(i want to|i'd like to|help me (to )?|my goal is|我想|我的目标是)\s*", "", raw, flags=re.I)
+        title = re.sub(
+            r"^(i want to|i'd like to|i plan to|i'm going to|help me (to )?|my goal is|"
+            r"我想|我想要|我要|希望|我的目标是)\s*",
+            "",
+            raw,
+            flags=re.I,
+        )
         return Action(
             intent="create_goal",
             title=title[:120],
@@ -136,15 +239,12 @@ def parse_with_rules(text: str, now: datetime) -> Action:
             raw=raw,
         )
 
-    # 3) 报进度
+    # 6) 报进度
     if DONE_MARKERS.search(raw) and not ADD_MARKERS.search(raw):
         target = _clean_title(raw, spans)
         return Action(intent="log_progress", progress_target=target, confidence=0.6, raw=raw)
 
-    # 4) 删 / 改 / 查
-    if DELETE_MARKERS.search(raw):
-        target = _clean_title(raw, spans)
-        return Action(intent="delete_event", target=target, title=target, confidence=0.65, raw=raw)
+    # 7) 改 / 查
 
     if MOVE_MARKERS.search(raw):
         # "move tomorrow's workout to Friday"：日期里最后一个当作目标时间

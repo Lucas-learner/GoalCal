@@ -7,4 +7,5 @@ python-dateutil>=2.9
 dateparser>=1.2
 openai>=1.40
 icalendar>=6.0
+psycopg[binary]>=3.1
 pytest>=8.0

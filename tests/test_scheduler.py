@@ -73,3 +73,26 @@ def test_daily_cap_discourages_overload():
     got = propose(Requirement(est_min=45), now, busy, prefs=prefs, days=3, top_n=3)
     # 第一天已排 120 分钟目标块，超过上限 → 应该排到后面几天
     assert got[0].start.date() > date(2026, 10, 21)
+
+
+def test_candidates_are_aligned_to_quarter_hour():
+    now = datetime(2026, 10, 22, 9, 0, tzinfo=TZ)
+    busy = [BusyBlock(datetime(2026, 10, 22, 10, 0, tzinfo=TZ),
+                      datetime(2026, 10, 22, 11, 0, tzinfo=TZ))]
+    got = propose(Requirement(est_min=30), now, busy, days=1, top_n=5)
+    assert got
+    for c in got:
+        assert c.start.minute % 15 == 0
+        assert c.end.minute % 15 == 0
+
+
+def test_every_candidate_has_a_human_reason():
+    got = propose(Requirement(est_min=45), WED, [], days=2, top_n=3)
+    assert len(got) == 3
+    assert all(c.reasons and all(isinstance(r, str) and r for r in c.reasons) for c in got)
+
+
+def test_candidates_are_at_least_one_hour_apart():
+    got = propose(Requirement(est_min=30), WED, [], days=2, top_n=3)
+    for a, b in zip(got, got[1:]):
+        assert abs((a.start - b.start).total_seconds()) >= 3600
