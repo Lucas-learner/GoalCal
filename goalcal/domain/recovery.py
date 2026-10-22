@@ -7,10 +7,10 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from ..models import Checkin, Event, Step
+from ..models import Checkin, Event, Goal, Step
 from . import goals as goal_svc
 
 # 过期块超过这个数量就合并提问，避免一条一条追问堆积愧疚
@@ -21,15 +21,18 @@ _VERDICT = {"done": "done", "partial": "partial", "missed": "not_done"}
 
 
 def unresolved_blocks(session: Session, user_id: int, now: datetime) -> list[Event]:
-    """已经结束但还没签到的目标块，从最早的开始排。"""
+    """已经结束但还没签到的目标块，从最早的开始排。暂停/归档目标的块不再提醒。"""
     return list(
         session.scalars(
             select(Event)
+            .outerjoin(Step, Event.step_id == Step.id)
+            .outerjoin(Goal, Step.goal_id == Goal.id)
             .where(
                 Event.user_id == user_id,
                 Event.kind == "block",
                 Event.status == "planned",
                 Event.end_utc < now,
+                or_(Goal.id.is_(None), Goal.status == "active"),
             )
             .order_by(Event.start_utc)
         )

@@ -16,6 +16,7 @@ from .domain import calendar_service as cal
 from .domain import goals as goal_svc
 from .domain import planner
 from .domain import recovery
+from .domain import refine
 from .domain.scheduler import Candidate, Preferences, Requirement, propose
 from .llm.action import Action
 from .llm.parser import parse
@@ -174,6 +175,8 @@ def _query(session, user_id, action, now, tz, parser) -> Reply:
 
 
 def _pick_step(goal, prefer_low_energy: bool = False, target: str | None = None) -> Step | None:
+    if goal.status != "active":
+        return None
     steps = sorted(goal.steps, key=lambda s: s.seq)
     pending = [s for s in steps if s.status == "todo"]
     if target:
@@ -486,14 +489,21 @@ def _set_state(session, user_id, action, now, tz, parser) -> Reply:
 # ------------------------------------------------------------------ proposals
 
 
-def _propose(session, user_id, step: Step | None, now, tz, deadline=None, days: int = 5):
+def _propose(
+    session, user_id, step: Step | None, now, tz, deadline=None, days: int = 5,
+    est_min: int | None = None,
+):
     if step is None:
         return []
+    minutes = est_min or step.est_min
     start_utc = as_utc_naive(now, tz) - timedelta(hours=1)
     end_utc = as_utc_naive(now, tz) + timedelta(days=days + 1)
     busy = cal.busy_blocks(session, user_id, start_utc, end_utc, tz)
     return propose(
-        Requirement(est_min=step.est_min, energy=step.energy, kind=step.kind),
+        Requirement(
+            est_min=minutes, energy=step.energy, kind=step.kind,
+            min_chunk=min(20, minutes),
+        ),
         now=now,
         busy=busy,
         prefs=Preferences(),
@@ -545,7 +555,8 @@ def accept(
 class CheckinContext:
     """签到流程的对话状态：event_ids 是待处理队列，第一个是当前在问的块。
 
-    stage: batch（合并提问）→ outcome（问结果）→ reason（问原因）→ recovery（给候选时段）
+    stage: batch（合并提问）→ outcome（问结果）→ reason（问原因）
+           → recovery（给候选时段）/ goal_options（不想做了：延后/暂停/归档）
     """
 
     stage: str
@@ -555,6 +566,7 @@ class CheckinContext:
     reason: str | None = None
     step_id: int | None = None
     goal_id: int | None = None
+    candidates: list[Candidate] = field(default_factory=list)
 
 
 _REASON_FROM_STATE = {"tired": "tired", "busy": "no_time", "uninspired": "stuck"}
@@ -613,6 +625,8 @@ def checkin_quick_options(ctx: CheckinContext) -> list[str]:
         return ["做完了", "做了一部分", "没做"]
     if ctx.stage == "reason":
         return ["太累了", "没时间", "卡住了", "不想做了"]
+    if ctx.stage == "goal_options":
+        return ["延后 7 天", "延后 14 天", "暂停这个目标", "归档这个目标"]
     return []
 
 
@@ -625,6 +639,8 @@ def checkin_prompt(session: Session, ctx: CheckinContext, now: datetime, tz: str
         return "接着刚才的：那个块是什么原因呢？"
     if ctx.stage == "recovery":
         return "刚才那几个时间有合适的吗？不想安排说「算了」就行。"
+    if ctx.stage == "goal_options":
+        return "刚才说的几个选择：延后 7 天 / 延后 14 天 / 暂停 / 归档，你想怎么处理？"
     if ev is not None:
         return _checkin_question(session, ev, now, tz)
     return ""
@@ -639,14 +655,52 @@ def suggest_recovery(
     tz: str = "Asia/Shanghai",
     days: int = 3,
 ) -> tuple[list[Candidate], Step | None]:
-    """按原因生成恢复方案：阶段 1 是通用实现（72 小时内找候选时段）。
+    """按原因生成恢复方案；候选优先 72 小时内，找不到再放宽到 7 天。
 
-    阶段 2 在这里按 tired / no_time / stuck / unwilling 分四种动作。
+    tired    → 换一个 energy ≤ 1 的步骤；没有低精力步骤就把当前步骤时长减半；
+    no_time  → 同一步骤只排一个 15 分钟的“启动版”块；
+    stuck    → 先把当前步骤细化出更小的下一步，再排第一个（5 分钟启动动作）；
+    unwilling→ 不出时段候选，由对话层给延后/暂停/归档选项（见 _offer_recovery）。
     """
     step = session.get(Step, event.step_id) if event.step_id is not None else None
-    if step is None or step.status != "todo":
+    if step is None or step.status != "todo" or step.goal.status != "active":
         return [], step
-    return _propose(session, user_id, step, now, tz, step.goal.deadline, days=days), step
+
+    est_min: int | None = None
+    if reason == "tired":
+        lighter = _pick_step(step.goal, prefer_low_energy=True)
+        if lighter is not None and lighter.energy <= 1:
+            step = lighter
+        else:
+            est_min = max(15, step.est_min // 2)
+    elif reason == "no_time":
+        est_min = 15
+    elif reason == "stuck":
+        refined = refine.refine_next_steps(session, step.goal, step)
+        if refined:
+            step = refined[0]
+
+    candidates = _propose(session, user_id, step, now, tz, step.goal.deadline,
+                          days=days, est_min=est_min)
+    if not candidates and days < 7:
+        candidates = _propose(session, user_id, step, now, tz, step.goal.deadline,
+                              days=7, est_min=est_min)
+    return candidates, step
+
+
+def _recovery_why(reason: str | None, step: Step, ev: Event, candidates: list[Candidate]) -> str:
+    """一句话说明“为什么给你这个方案”，语气不责备。"""
+    if reason == "tired":
+        if step.id != ev.step_id:
+            return f"太累就别硬扛，给你换个轻量步骤「{step.title}」。"
+        if candidates and candidates[0].minutes < step.est_min:
+            return f"太累就别硬扛，「{step.title}」先排一半时间，做一段是一段。"
+        return "太累就别硬扛，这步本身不重，找个状态低谷也能做的时段。"
+    if reason == "no_time":
+        return "没时间就先开个 15 分钟的头，启动比完成重要。"
+    if reason == "stuck":
+        return "卡住往往说明这一步还太大，我把它拆小了，先从 5 分钟的启动动作开始。"
+    return ""
 
 
 def _prepare_current(
@@ -673,6 +727,7 @@ def _prepare_current(
         ctx.stage = "recovery"
         ctx.step_id = step.id
         ctx.goal_id = step.goal_id
+        ctx.candidates = candidates
         return Reply(
             f"再给「{step.title}」找个新时间：",
             Action(intent="schedule_step", raw="", confidence=0.6), "checkin",
@@ -688,6 +743,7 @@ def _advance(
     """当前块处理完，进入队列里的下一个块。"""
     if ctx.event_ids:
         ctx.event_ids.pop(0)
+    ctx.candidates = []
     return _prepare_current(session, user_id, ctx, now, tz)
 
 
@@ -701,18 +757,35 @@ def _offer_recovery(
     parser: str,
     intro: str = "",
 ) -> Reply:
+    step = session.get(Step, ev.step_id) if ev.step_id is not None else None
+    if ctx.reason == "unwilling" and step is not None:
+        ctx.stage = "goal_options"
+        ctx.step_id = step.id
+        ctx.goal_id = step.goal_id
+        return Reply(
+            intro
+            + f"不想做了也不勉强，硬撑着更容易整个放弃。你想怎么处理「{step.goal.title}」？\n"
+            "• 延后 7 天 / 延后 14 天：截止日往后挪，节奏松一点\n"
+            "• 暂停这个目标：先收起来，想继续的时候再恢复\n"
+            "• 归档这个目标：真的不合适就放下，不算失败",
+            Action(intent="chat", raw="", confidence=0.5), parser,
+            checkin_context=ctx,
+        )
+
     candidates, step = suggest_recovery(session, user_id, ev, ctx.reason, now, tz)
     if candidates:
         ctx.stage = "recovery"
         ctx.step_id = step.id
         ctx.goal_id = step.goal_id
+        ctx.candidates = candidates
+        why = _recovery_why(ctx.reason, step, ev, candidates)
         return Reply(
-            intro + "我在未来 3 天给你留了几个时间，挑一个重新开始？",
+            intro + why + "给你留了几个时间，挑一个重新开始？",
             Action(intent="schedule_step", raw="", confidence=0.6), parser,
             candidates=candidates, goal_id=step.goal_id, step_id=step.id,
             checkin_context=ctx,
         )
-    text = intro + "未来 3 天实在没有空档，步骤先留在清单里；想安排的时候跟我说「安排下一步」。"
+    text = intro + "未来几天实在没有空档，步骤先留在清单里；想安排的时候跟我说「安排下一步」。"
     nxt = _advance(session, user_id, ctx, now, tz)
     if nxt is None:
         return Reply(text, Action(intent="chat", raw="", confidence=0.5), parser,
@@ -730,7 +803,9 @@ def continue_checkin(
     tz: str = "Asia/Shanghai",
 ) -> Reply | None:
     """处理签到流程里的下一句；返回 None 表示这是明确的新指令，交给 handle 并保留 ctx。"""
-    if looks_like_new_command(text, now):
+    if looks_like_new_command(text, now) and not (
+        ctx.stage == "goal_options" and _match_goal_option(text.strip()) is not None
+    ):
         return None
     action, parser = parse(text, now, context={"expecting": "checkin"})
     handler = {
@@ -738,6 +813,7 @@ def continue_checkin(
         "outcome": _checkin_outcome,
         "reason": _checkin_reason,
         "recovery": _checkin_recovery,
+        "goal_options": _checkin_goal_options,
     }[ctx.stage]
     return handler(session, user_id, ctx, action, text.strip(), now, tz, parser)
 
@@ -854,13 +930,72 @@ def _checkin_reason(session, user_id, ctx, action, text, now, tz, parser) -> Rep
     return _offer_recovery(session, user_id, ctx, ev, now, tz, parser)
 
 
+_ORDINAL = re.compile(r"^\s*(?:选|挑|就)?\s*第?\s*([一1二2三3])\s*(?:个|张|条|项)?\s*[。\.!！]?\s*$")
+_ORDINAL_INDEX = {"一": 0, "1": 0, "二": 1, "2": 1, "三": 2, "3": 2}
+
+
 def _checkin_recovery(session, user_id, ctx, action, text, now, tz, parser) -> Reply:
     if _DECLINE.search(text):
         return decline_recovery(session, user_id, ctx, now, tz)
+    m = _ORDINAL.match(text)
+    if m:
+        idx = _ORDINAL_INDEX[m.group(1)]
+        if idx < len(ctx.candidates):
+            return accept_recovery(session, user_id, ctx, ctx.candidates[idx], now, tz)
+        return Reply(
+            f"只有 {len(ctx.candidates)} 个候选，说「第一个」到「第{len(ctx.candidates)}个」就行。",
+            action, parser, checkin_context=ctx,
+        )
     return Reply(
-        "在上面几个时间里挑一个就行；不想安排的话，说「算了」也可以。",
+        "在上面几个时间里挑一个就行（说「第一个」也可以）；不想安排的话，说「算了」也可以。",
         action, parser, checkin_context=ctx,
     )
+
+
+_GOAL_OPTIONS: tuple[tuple[str, re.Pattern], ...] = (
+    ("archive", re.compile(r"归档|放弃")),
+    ("pause", re.compile(r"暂停")),
+    ("extend_14", re.compile(r"14|十四")),
+    ("extend_7", re.compile(r"延后|推迟|延期|7|七")),
+)
+
+
+def _match_goal_option(text: str) -> str | None:
+    if _DECLINE.search(text):
+        return "decline"
+    for kind, pattern in _GOAL_OPTIONS:
+        if pattern.search(text):
+            return kind
+    return None
+
+
+def _checkin_goal_options(session, user_id, ctx, action, text, now, tz, parser) -> Reply:
+    goal = session.get(Goal, ctx.goal_id) if ctx.goal_id is not None else None
+    choice = _match_goal_option(text)
+    if goal is None or choice == "decline":
+        text_out = "好，目标先原样留着，想调整的时候随时说。"
+    elif choice == "archive":
+        goal_svc.archive_goal(session, goal)
+        text_out = f"已归档「{goal.title}」。放下不合适的目标也是进展。"
+    elif choice == "pause":
+        goal_svc.pause_goal(session, goal, now=as_utc_naive(now, tz))
+        text_out = f"「{goal.title}」先暂停了，日历上未来的块也收起来了。想恢复的时候跟我说。"
+    elif choice == "extend_14":
+        deadline = goal_svc.extend_deadline(session, goal, 14, today=now.date())
+        text_out = f"截止日延后到 {deadline.month}月{deadline.day}日，多了两周缓冲，不用有压力。"
+    elif choice == "extend_7":
+        deadline = goal_svc.extend_deadline(session, goal, 7, today=now.date())
+        text_out = f"截止日延后到 {deadline.month}月{deadline.day}日，松一口气，慢慢来。"
+    else:
+        return Reply(
+            "没太听懂——可以说「延后 7 天」「延后 14 天」「暂停」或「归档」。",
+            action, parser, checkin_context=ctx,
+        )
+    nxt = _advance(session, user_id, ctx, now, tz)
+    if nxt is None:
+        return Reply(text_out, action, parser, checkin_context=None)
+    nxt.text = text_out + "\n" + nxt.text
+    return nxt
 
 
 def accept_recovery(

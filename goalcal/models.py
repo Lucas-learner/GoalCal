@@ -31,7 +31,7 @@ class Goal(Base):
     title: Mapped[str] = mapped_column(String(200))
     outcome: Mapped[str] = mapped_column(Text, default="")
     deadline: Mapped[date | None] = mapped_column(Date, nullable=True)
-    status: Mapped[str] = mapped_column(String(20), default="active")  # active|done|archived
+    status: Mapped[str] = mapped_column(String(20), default="active")  # active|done|paused|archived
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
     template_key: Mapped[str] = mapped_column(String(40), default="generic")
 

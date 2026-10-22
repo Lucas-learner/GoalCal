@@ -102,6 +102,30 @@ def archive_goal(session: Session, goal: Goal) -> int:
     return removed
 
 
+def extend_deadline(session: Session, goal: Goal, days: int, today: date | None = None) -> date:
+    """截止日往后延，返回新截止日。"""
+    base = goal.deadline or (today or date.today())
+    goal.deadline = base + timedelta(days=days)
+    session.flush()
+    return goal.deadline
+
+
+def pause_goal(session: Session, goal: Goal, now: datetime | None = None) -> int:
+    """暂停目标：不再参与排期和过期块提醒；未来目标块撤掉，恢复时重新排。"""
+    from . import calendar_service as cal
+
+    reference = now or now_utc()
+    removed = sum(cal.cancel_future_blocks(session, step.id, reference) for step in goal.steps)
+    goal.status = "paused"
+    session.flush()
+    return removed
+
+
+def resume_goal(session: Session, goal: Goal) -> None:
+    goal.status = "active"
+    session.flush()
+
+
 def add_step(
     session: Session,
     goal: Goal,
