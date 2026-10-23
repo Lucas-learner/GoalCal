@@ -625,48 +625,49 @@ chat_col, cal_col, goals_col = st.columns([1, 1.3, 1], gap="large")
 
 with chat_col:
     st.subheader("Chat")
-    with st.container(height=600, border=False):
+    # 消息、快捷回复、候选卡片都在同一个固定高度滚动区里，列高恒定
+    with st.container(height=620, border=True):
         chat_ui.render_messages(st.session_state["messages"])
 
-    brief = st.session_state.get("goal_brief")
-    if brief is not None:
-        st.caption("Quick answers")
-        options = planner.quick_options(brief)
-        for row_idx, row in enumerate((options[:2], options[2:])):
-            if not row:
-                continue
-            cols = st.columns(len(row))
-            for col_idx, (col, option) in enumerate(zip(cols, row)):
-                key = f"goal_option_{row_idx}_{col_idx}"
-                if col.button(option, key=key, use_container_width=True):
-                    _run_turn(option)
-                    st.rerun()
+        brief = st.session_state.get("goal_brief")
+        if brief is not None:
+            st.caption("Quick answers")
+            options = planner.quick_options(brief)
+            for row_idx, row in enumerate((options[:2], options[2:])):
+                if not row:
+                    continue
+                cols = st.columns(len(row))
+                for col_idx, (col, option) in enumerate(zip(cols, row)):
+                    key = f"goal_option_{row_idx}_{col_idx}"
+                    if col.button(option, key=key, use_container_width=True):
+                        _run_turn(option)
+                        st.rerun()
 
-    checkin_ctx = st.session_state.get("checkin_context")
-    if brief is None and checkin_ctx is not None:
-        options = agent.checkin_quick_options(checkin_ctx)
-        if options:
-            st.caption("Quick replies")
-            cols = st.columns(len(options))
-            for col_idx, (col, option) in enumerate(zip(cols, options)):
-                key = f"checkin_option_{checkin_ctx.stage}_{col_idx}"
-                if col.button(option, key=key, use_container_width=True):
-                    _run_turn(option)
-                    st.rerun()
+        checkin_ctx = st.session_state.get("checkin_context")
+        if brief is None and checkin_ctx is not None:
+            options = agent.checkin_quick_options(checkin_ctx)
+            if options:
+                st.caption("Quick replies")
+                cols = st.columns(len(options))
+                for col_idx, (col, option) in enumerate(zip(cols, options)):
+                    key = f"checkin_option_{checkin_ctx.stage}_{col_idx}"
+                    if col.button(option, key=key, use_container_width=True):
+                        _run_turn(option)
+                        st.rerun()
 
-    pending = st.session_state.get("pending")
-    if pending and pending.get("batch"):
-        chat_ui.render_batch(pending["batch"], _accept_batch, _dismiss_pending)
-    elif pending and pending.get("origin") == "recovery":
-        chat_ui.render_proposals(
-            pending["candidates"], pending["step_id"], _accept_recovery, _dismiss_recovery,
-            on_filter=lambda key: _refilter_pending(pending["step_id"], key), now=_now(),
-        )
-    elif pending and pending.get("origin") != "goal":
-        chat_ui.render_proposals(
-            pending["candidates"], pending["step_id"], _accept, _dismiss_pending,
-            on_filter=lambda key: _refilter_pending(pending["step_id"], key), now=_now(),
-        )
+        pending = st.session_state.get("pending")
+        if pending and pending.get("batch"):
+            chat_ui.render_batch(pending["batch"], _accept_batch, _dismiss_pending)
+        elif pending and pending.get("origin") == "recovery":
+            chat_ui.render_proposals(
+                pending["candidates"], pending["step_id"], _accept_recovery, _dismiss_recovery,
+                on_filter=lambda key: _refilter_pending(pending["step_id"], key), now=_now(),
+            )
+        elif pending and pending.get("origin") != "goal":
+            chat_ui.render_proposals(
+                pending["candidates"], pending["step_id"], _accept, _dismiss_pending,
+                on_filter=lambda key: _refilter_pending(pending["step_id"], key), now=_now(),
+            )
 
     prompt = st.chat_input("Tell me a goal, or add something to your calendar…")
     if prompt:
@@ -682,7 +683,7 @@ with cal_col:
         events = cal.events_between(s, st.session_state["user_id"], start_utc, end_utc)
         fc_events = cal.to_fullcalendar(events, TZ)
 
-    state = calendar_view.render(fc_events, height=600, initial_date=now_local.date().isoformat())
+    state = calendar_view.render(fc_events, height=620, initial_date=now_local.date().isoformat())
     if state:
         signature = repr(state)
         if signature != st.session_state.get("_cal_sig"):
@@ -782,23 +783,20 @@ with goals_col:
                     on_filter=lambda key: _refilter_pending(pending["step_id"], key), now=_now(),
                 )
 
-    # 目标多了才用固定高度滚动；只有一个目标时让 New goal 紧跟其后
-    if len(snaps) > 1:
-        with st.container(height=600, border=False):
-            _render_goal_list()
-    else:
+    # 固定高度容器保证三栏底部对齐；New goal 放在容器内，单目标时紧跟卡片
+    with st.container(height=620, border=True):
         _render_goal_list()
 
-    with st.expander("➕ New goal", expanded=False):
-        with st.form("new_goal_form"):
-            new_title = st.text_input("Goal title", placeholder="e.g. Run a half marathon")
-            new_deadline = st.date_input(
-                "Deadline", value=_now().date() + timedelta(days=30)
-            )
-            with_template = st.checkbox("Auto-decompose with AI (outline + first steps)", value=True)
-            created = st.form_submit_button("Create goal", use_container_width=True)
-        if created:
-            if new_title.strip():
-                _create_goal_ui(new_title.strip(), new_deadline, with_template)
-            else:
-                st.warning("Give the goal a title first.")
+        with st.expander("➕ New goal", expanded=False):
+            with st.form("new_goal_form"):
+                new_title = st.text_input("Goal title", placeholder="e.g. Run a half marathon")
+                new_deadline = st.date_input(
+                    "Deadline", value=_now().date() + timedelta(days=30)
+                )
+                with_template = st.checkbox("Auto-decompose with AI (outline + first steps)", value=True)
+                created = st.form_submit_button("Create goal", use_container_width=True)
+            if created:
+                if new_title.strip():
+                    _create_goal_ui(new_title.strip(), new_deadline, with_template)
+                else:
+                    st.warning("Give the goal a title first.")
