@@ -625,12 +625,8 @@ chat_col, cal_col, goals_col = st.columns([1, 1.3, 1], gap="large")
 
 with chat_col:
     st.subheader("Chat")
-    messages = st.session_state["messages"]
-    if len(messages) > 12:
-        with st.container(height=600, border=False):
-            chat_ui.render_messages(messages)
-    else:
-        chat_ui.render_messages(messages)
+    with st.container(height=600, border=False):
+        chat_ui.render_messages(st.session_state["messages"])
 
     brief = st.session_state.get("goal_brief")
     if brief is not None:
@@ -686,7 +682,7 @@ with cal_col:
         events = cal.events_between(s, st.session_state["user_id"], start_utc, end_utc)
         fc_events = cal.to_fullcalendar(events, TZ)
 
-    state = calendar_view.render(fc_events, height=640, initial_date=now_local.date().isoformat())
+    state = calendar_view.render(fc_events, height=600, initial_date=now_local.date().isoformat())
     if state:
         signature = repr(state)
         if signature != st.session_state.get("_cal_sig"):
@@ -742,6 +738,18 @@ with goals_col:
     if not snaps:
         st.info("No active goal yet — tell me one in the chat.")
 
+    # 目标目录：多于 1 个目标时出现，用于在列表里跳转/过滤
+    if len(snaps) > 1:
+        choice = st.selectbox(
+            "Goal directory",
+            range(len(snaps) + 1),
+            key="goal_directory",
+            format_func=lambda i: "All goals" if i == 0 else f"{i}. {snaps[i - 1]['title']}",
+            label_visibility="collapsed",
+        )
+        if choice != 0:
+            snaps = [snaps[choice - 1]]
+
     def _render_goal_list() -> None:
         for snap in snaps:
             draft = st.session_state.get("replan_draft")
@@ -776,7 +784,7 @@ with goals_col:
 
     # 目标多了才用固定高度滚动；只有一个目标时让 New goal 紧跟其后
     if len(snaps) > 1:
-        with st.container(height=640, border=False):
+        with st.container(height=600, border=False):
             _render_goal_list()
     else:
         _render_goal_list()
