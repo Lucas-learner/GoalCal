@@ -683,7 +683,8 @@ with cal_col:
         events = cal.events_between(s, st.session_state["user_id"], start_utc, end_utc)
         fc_events = cal.to_fullcalendar(events, TZ)
 
-    state = calendar_view.render(fc_events, height=620, initial_date=now_local.date().isoformat())
+    # 日历底部与左右两栏（容器 620 + 下方输入框/按钮约 60px）对齐
+    state = calendar_view.render(fc_events, height=680, initial_date=now_local.date().isoformat())
     if state:
         signature = repr(state)
         if signature != st.session_state.get("_cal_sig"):
@@ -783,20 +784,20 @@ with goals_col:
                     on_filter=lambda key: _refilter_pending(pending["step_id"], key), now=_now(),
                 )
 
-    # 固定高度容器保证三栏底部对齐；New goal 放在容器内，单目标时紧跟卡片
+    # 固定高度容器保证三栏主体对齐；New goal 在容器外下方，与聊天输入框呼应
     with st.container(height=620, border=True):
         _render_goal_list()
 
-        with st.expander("➕ New goal", expanded=False):
-            with st.form("new_goal_form"):
-                new_title = st.text_input("Goal title", placeholder="e.g. Run a half marathon")
-                new_deadline = st.date_input(
-                    "Deadline", value=_now().date() + timedelta(days=30)
-                )
-                with_template = st.checkbox("Auto-decompose with AI (outline + first steps)", value=True)
-                created = st.form_submit_button("Create goal", use_container_width=True)
-            if created:
-                if new_title.strip():
-                    _create_goal_ui(new_title.strip(), new_deadline, with_template)
-                else:
-                    st.warning("Give the goal a title first.")
+    with st.expander("➕ New goal", expanded=False):
+        with st.form("new_goal_form"):
+            new_title = st.text_input("Goal title", placeholder="e.g. Run a half marathon")
+            new_deadline = st.date_input(
+                "Deadline", value=_now().date() + timedelta(days=30)
+            )
+            with_template = st.checkbox("Auto-decompose with AI (outline + first steps)", value=True)
+            created = st.form_submit_button("Create goal", use_container_width=True)
+        if created:
+            if new_title.strip():
+                _create_goal_ui(new_title.strip(), new_deadline, with_template)
+            else:
+                st.warning("Give the goal a title first.")
