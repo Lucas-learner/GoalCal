@@ -624,7 +624,8 @@ if flash := st.session_state.pop("flash", None):
 chat_col, cal_col, goals_col = st.columns([1, 1.3, 1], gap="large")
 
 with chat_col:
-    with st.container(height=560, border=False):
+    st.subheader("Chat")
+    with st.container(height=600, border=False):
         chat_ui.render_messages(st.session_state["messages"])
 
     brief = st.session_state.get("goal_brief")
@@ -673,6 +674,7 @@ with chat_col:
         st.rerun()
 
 with cal_col:
+    st.subheader("Calendar")
     now_local = _now()
     start_utc = as_utc_naive(now_local - timedelta(days=7), TZ)
     end_utc = as_utc_naive(now_local + timedelta(days=28), TZ)

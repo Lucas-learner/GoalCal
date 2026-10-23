@@ -14,6 +14,7 @@ def render(events: list[dict], height: int = 560, initial_date: str | None = Non
 
     options = {
         "initialView": "timeGridWeek",
+        "firstDay": 1,
         "editable": True,
         "selectable": True,
         "nowIndicator": True,
