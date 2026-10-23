@@ -625,8 +625,12 @@ chat_col, cal_col, goals_col = st.columns([1, 1.3, 1], gap="large")
 
 with chat_col:
     st.subheader("Chat")
-    with st.container(height=600, border=False):
-        chat_ui.render_messages(st.session_state["messages"])
+    messages = st.session_state["messages"]
+    if len(messages) > 12:
+        with st.container(height=600, border=False):
+            chat_ui.render_messages(messages)
+    else:
+        chat_ui.render_messages(messages)
 
     brief = st.session_state.get("goal_brief")
     if brief is not None:
@@ -737,7 +741,8 @@ with goals_col:
         snaps = [goal_svc.snapshot(g, now=now_local) for g in goals]
     if not snaps:
         st.info("No active goal yet — tell me one in the chat.")
-    with st.container(height=640, border=False):
+
+    def _render_goal_list() -> None:
         for snap in snaps:
             draft = st.session_state.get("replan_draft")
             if draft and draft.get("goal_id") != snap["id"]:
@@ -768,6 +773,13 @@ with goals_col:
                     pending["candidates"], pending["step_id"], _accept, _dismiss_pending,
                     on_filter=lambda key: _refilter_pending(pending["step_id"], key), now=_now(),
                 )
+
+    # 目标多了才用固定高度滚动；只有一个目标时让 New goal 紧跟其后
+    if len(snaps) > 1:
+        with st.container(height=640, border=False):
+            _render_goal_list()
+    else:
+        _render_goal_list()
 
     with st.expander("➕ New goal", expanded=False):
         with st.form("new_goal_form"):
