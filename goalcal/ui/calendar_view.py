@@ -26,7 +26,7 @@ def render(events: list[dict], height: int = 560, initial_date: str | None = Non
             "right": "timeGridWeek,timeGridDay,listWeek",
         },
         "buttonText": {"today": "Today", "week": "Week", "day": "Day", "list": "List"},
-        "dayHeaderFormat": {"weekday": "short", "month": "numeric", "day": "numeric"},
+        "dayHeaderFormat": {"weekday": "short", "month": "numeric", "day": "numeric", "omitCommas": True},
         "slotLabelFormat": {"hour": "2-digit", "minute": "2-digit", "hour12": False},
         "slotMinTime": "06:00:00",
         "slotMaxTime": "24:00:00",
@@ -40,7 +40,7 @@ def render(events: list[dict], height: int = 560, initial_date: str | None = Non
     if initial_date:
         options["initialDate"] = initial_date
     custom_css = """
-    .fc .fc-toolbar-title { font-size: 1.05rem; font-weight: 600; }
+    .fc .fc-toolbar-title { font-size: 0.95rem; font-weight: 500; }
     .fc .fc-button { padding: 0.15em 0.55em; font-size: 0.8rem; }
     .fc .fc-col-header-cell-cushion { font-size: 0.8rem; }
     .fc .fc-timegrid-slot-label-cushion { font-size: 0.75rem; }
