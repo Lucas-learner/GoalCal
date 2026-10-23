@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from . import metrics
@@ -18,7 +19,14 @@ from .domain import goals as goal_svc
 from .domain import planner
 from .domain import recovery
 from .domain import refine
-from .domain.scheduler import Candidate, Preferences, Requirement, propose
+from .domain.scheduler import (
+    Candidate,
+    Preferences,
+    Requirement,
+    _ceil_to,
+    free_intervals,
+    propose,
+)
 from .llm.action import Action
 from .llm.parser import parse
 from .llm.plan import generate_outline_plan, generate_plan
@@ -35,6 +43,7 @@ HELP = (
     "• report progress — “I finished the script today”\n"
     "• tell me your state — “I'm tired” / “busy” / “uninspired”\n"
     "• find time for a goal step — “Find time for my next step”\n"
+    "• pack a whole window — “Schedule everything this afternoon”\n"
     "• see your week — “When am I free this week?”"
 )
 
@@ -72,6 +81,7 @@ class Reply:
     action: Action
     parser: str
     candidates: list[Candidate] = field(default_factory=list)
+    batch: list[dict] | None = None
     goal_id: int | None = None
     step_id: int | None = None
     goal_brief: planner.GoalBrief | None = None
@@ -98,6 +108,7 @@ def handle(
         "create_goal": _create_goal,
         "delete_goal": _delete_goal,
         "schedule_step": _schedule_step,
+        "schedule_all": _schedule_all,
         "refine_steps": _refine_steps,
         "log_progress": _log_progress,
         "set_state": _set_state,
@@ -351,7 +362,7 @@ def _create_goal_now(session, user_id, brief, action, now, tz, parser) -> Reply:
     if brief.assumptions:
         body += "Assumptions: " + "; ".join(brief.assumptions) + ".\n"
     if candidates:
-        body += "\nHere are 3 slots for the first step. Pick one and I'll put it on your calendar."
+        body += f"\nHere are {len(candidates)} slots for the first step. Pick one and I'll put it on your calendar."
     return Reply(
         body,
         action,
@@ -451,7 +462,23 @@ def _schedule_step(session, user_id, action, now, tz, parser) -> Reply:
     if step is None:
         return Reply(f"“{goal.title}” is already complete. 🎉", action, parser)
 
-    candidates = _propose(session, user_id, step, now, tz, goal.deadline)
+    # 明确时间点（"安排在今天下午3点"）：直接建块跳过候选；低置信仍走候选
+    if action.start is not None and action.confidence >= CONFIRM_THRESHOLD:
+        candidate = Candidate(
+            start=action.start,
+            end=action.start + timedelta(minutes=step.est_min),
+            score=1.0,
+            reasons=["You picked this exact time."],
+        )
+        message = accept(session, user_id, step.id, candidate, now, tz)
+        return Reply(message, action, parser, goal_id=goal.id, step_id=step.id)
+
+    window = action.window
+    candidates = _propose(session, user_id, step, now, tz, goal.deadline, window=window)
+    if not candidates and window is not None:
+        # 窗口内没有空档：说明一声，回退到默认的 5 天范围
+        note += "That window has no free slot, so I looked a bit wider.\n"
+        candidates = _propose(session, user_id, step, now, tz, goal.deadline)
     if not candidates:
         return Reply(
             (note + "\n" if note else "")
@@ -461,9 +488,136 @@ def _schedule_step(session, user_id, action, now, tz, parser) -> Reply:
         )
     return Reply(
         (note + "\n" if note else "")
-        + f"Here are 3 slots for “{step.title}” ({step.est_min}m). Pick one and I'll book it.",
+        + f"Here are {len(candidates)} slots for “{step.title}” ({step.est_min}m). Pick one and I'll book it.",
         action, parser, candidates=candidates, goal_id=goal.id, step_id=step.id,
     )
+
+
+def _pack_window(
+    now: datetime, window: tuple[datetime, datetime] | None
+) -> tuple[datetime, datetime]:
+    """schedule_all 的装箱窗口：默认今天下午，下午已过则明天上午。
+
+    显式窗口整体已过（"今天下午"但现在是晚上）时顺推一天，保留时段。
+    """
+    tz = now.tzinfo
+    if window is None:
+        start = datetime.combine(now.date(), time(hour=12), tzinfo=tz)
+        end = datetime.combine(now.date(), time(hour=18), tzinfo=tz)
+        if now >= end:
+            start = datetime.combine(now.date() + timedelta(days=1), time(hour=8), tzinfo=tz)
+            end = datetime.combine(now.date() + timedelta(days=1), time(hour=12), tzinfo=tz)
+        return start, end
+    if window[1] <= now:
+        return window[0] + timedelta(days=1), window[1] + timedelta(days=1)
+    return window
+
+
+def _schedule_all(session, user_id, action, now, tz, parser) -> Reply:
+    """把所有 active 目标的 todo 步骤按 seq 贪心装箱进窗口空档。
+
+    规则：逐块 est_min、块间留 Preferences.buffer_minutes、当天目标块总时长
+    （含已有块）不超过 Preferences.max_goal_minutes_per_day，超限即停；
+    已经有未来块的步骤不重复装箱。
+    """
+    goals = goal_svc.active_goals(session, user_id)
+    if not goals:
+        return Reply(
+            "You don't have an active goal yet. Tell me one and I'll break it down.",
+            action, parser,
+        )
+    prefs = Preferences()
+    window = _pack_window(now, action.window)
+    busy = cal.busy_blocks(
+        session, user_id,
+        as_utc_naive(window[0], tz) - timedelta(hours=1),
+        as_utc_naive(window[1], tz),
+        tz,
+    )
+
+    scheduled_ids = set(
+        session.scalars(
+            select(Event.step_id).where(
+                Event.user_id == user_id,
+                Event.kind == "block",
+                Event.step_id.is_not(None),
+                Event.start_utc >= as_utc_naive(now, tz),
+            )
+        )
+    )
+    todo: list[Step] = []
+    already: list[str] = []
+    for goal in goals:
+        for step in sorted(goal.steps, key=lambda s: s.seq):
+            if step.status != "todo":
+                continue
+            if step.id in scheduled_ids:
+                already.append(step.title)
+            else:
+                todo.append(step)
+    label = f"{window[0]:%a %b %d %H:%M}–{window[1]:%H:%M}"
+    if not todo:
+        detail = " — everything pending is already on the calendar." if already else "."
+        return Reply(f"Nothing to pack{detail}", action, parser)
+
+    start_floor = max(window[0], _ceil_to(now, prefs.granularity))
+    gaps = free_intervals(
+        busy, start_floor, window[1],
+        buffer_minutes=prefs.buffer_minutes, min_minutes=15,
+    )
+    minutes_by_day: dict = {}
+    for b in busy:
+        if b.kind == "block":
+            minutes_by_day[b.start.date()] = minutes_by_day.get(b.start.date(), 0) + b.minutes
+
+    cursors = [g.start for g in gaps]
+    planned: list[dict] = []
+    unplaced: list[Step] = []
+    idx = 0
+    while idx < len(todo):
+        step = todo[idx]
+        placed = False
+        hit_cap = False
+        for i, gap in enumerate(gaps):
+            start = cursors[i]
+            end = start + timedelta(minutes=step.est_min)
+            if end > gap.end:
+                continue
+            day_minutes = minutes_by_day.get(start.date(), 0)
+            if day_minutes + step.est_min > prefs.max_goal_minutes_per_day:
+                hit_cap = True
+                break
+            cursors[i] = end + timedelta(minutes=prefs.buffer_minutes)
+            minutes_by_day[start.date()] = day_minutes + step.est_min
+            planned.append(
+                {"step_id": step.id, "title": step.title, "start": start, "end": end}
+            )
+            placed = True
+            break
+        if hit_cap:
+            unplaced.extend(todo[idx:])
+            break
+        if not placed:
+            unplaced.append(step)
+        idx += 1
+
+    if not planned:
+        return Reply(
+            f"Couldn't fit anything into {label} — try a wider window or shorter steps.",
+            action, parser,
+        )
+    metrics.record(
+        session, user_id, metrics.PROPOSAL_SHOWN, now,
+        payload={"count": len(planned), "batch": True},
+    )
+    lines = [f"• {p['title']} — {p['start']:%H:%M}–{p['end']:%H:%M}" for p in planned]
+    text = f"Packed {len(planned)} block(s) into {label}:\n" + "\n".join(lines)
+    if unplaced:
+        text += "\nDidn't fit: " + ", ".join(f"“{s.title}”" for s in unplaced) + "."
+    if already:
+        text += "\nAlready scheduled: " + ", ".join(f"“{t}”" for t in already) + "."
+    text += "\nBook them all?"
+    return Reply(text, action, parser, batch=planned)
 
 
 def _refine_steps(session, user_id, action, now, tz, parser) -> Reply:
@@ -527,7 +681,7 @@ def _log_progress(session, user_id, action, now, tz, parser) -> Reply:
         text = f"Nice — “{step.title}” done. Goal is now at **{pct}%**."
         candidates = _propose(session, user_id, nxt, now, tz, goal.deadline) if nxt else []
         if nxt and candidates:
-            text += f"\nNext: “{nxt.title}” ({nxt.est_min}m). Here are 3 slots."
+            text += f"\nNext: “{nxt.title}” ({nxt.est_min}m). Here are {len(candidates)} slots."
     if note:
         text += "\n" + note
     return Reply(
@@ -571,12 +725,16 @@ def _set_state(session, user_id, action, now, tz, parser) -> Reply:
 def _propose(
     session, user_id, step: Step | None, now, tz, deadline=None, days: int = 5,
     est_min: int | None = None, is_recovery: bool = False,
+    window: tuple[datetime, datetime] | None = None,
 ):
     if step is None:
         return []
     minutes = est_min or step.est_min
     start_utc = as_utc_naive(now, tz) - timedelta(hours=1)
     end_utc = as_utc_naive(now, tz) + timedelta(days=days + 1)
+    if window is not None:
+        start_utc = min(start_utc, as_utc_naive(window[0], tz))
+        end_utc = max(end_utc, as_utc_naive(window[1], tz))
     busy = cal.busy_blocks(session, user_id, start_utc, end_utc, tz)
     candidates = propose(
         Requirement(
@@ -587,8 +745,9 @@ def _propose(
         busy=busy,
         prefs=Preferences(),
         days=days,
-        top_n=3,
+        top_n=6,
         deadline=deadline,
+        window=window,
     )
     if candidates:
         metrics.record(
@@ -600,13 +759,14 @@ def _propose(
 
 
 def propose_for_step(
-    session: Session, user_id: int, step_id: int, now: datetime, tz: str, days: int = 5
+    session: Session, user_id: int, step_id: int, now: datetime, tz: str, days: int = 5,
+    window: tuple[datetime, datetime] | None = None,
 ) -> tuple[list[Candidate], Step | None]:
-    """给 UI 的“找时间”按钮用：为指定步骤生成候选。"""
+    """给 UI 的“找时间”按钮用：为指定步骤生成候选；给了 window 就只在该窗口内找。"""
     step = session.get(Step, step_id)
     if step is None or step.status == "done":
         return [], step
-    return _propose(session, user_id, step, now, tz, step.goal.deadline, days), step
+    return _propose(session, user_id, step, now, tz, step.goal.deadline, days, window=window), step
 
 
 def accept(
@@ -638,6 +798,38 @@ def accept(
     )
     session.flush()
     return f"Booked “{step.title}” on {candidate.start:%a %b %d, %H:%M}–{candidate.end:%H:%M}."
+
+
+def accept_batch(
+    session: Session, user_id: int, batch: list[dict], now: datetime, tz: str
+) -> str:
+    """批量接受：逐块建 Event（与 accept 同口径），proposal_accepted 只记一次。"""
+    booked = 0
+    for item in batch:
+        step = session.get(Step, item["step_id"])
+        if step is None or step.status == "done":
+            continue
+        cal.cancel_blocks(session, step.id)
+        cal.create_event(
+            session,
+            user_id,
+            f"{step.goal.title}: {step.title}",
+            item["start"],
+            item["end"],
+            kind="block",
+            source="proposal",
+            step_id=step.id,
+            tz=tz,
+        )
+        booked += 1
+    metrics.record(
+        session, user_id, metrics.PROPOSAL_ACCEPTED, now,
+        payload={"batch": booked},
+    )
+    session.flush()
+    if not booked:
+        return "Those steps are already done or gone — nothing was booked."
+    return f"Booked {booked} block(s). Show up and start with the first one."
 
 
 # ------------------------------------------------------------------ check-in

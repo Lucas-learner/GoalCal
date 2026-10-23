@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from goalcal.llm.natdate import extract_time, find_dates
+from goalcal.llm.natdate import extract_time, extract_window, find_dates
 
 TZ = ZoneInfo("Asia/Shanghai")
 NOW = datetime(2026, 10, 21, 9, 0, tzinfo=TZ)  # Wednesday
@@ -105,3 +105,39 @@ def test_day_after_tomorrow_wins_over_tomorrow():
 def test_results_are_sorted_by_position():
     found = find_dates("Friday then Monday", NOW)
     assert [d.date().isoformat() for _, d in found] == ["2026-10-23", "2026-10-26"]
+
+
+# ------------------------------------------------------------ 时间窗口
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("今天下午", (datetime(2026, 10, 21, 12, 0, tzinfo=TZ), datetime(2026, 10, 21, 18, 0, tzinfo=TZ))),
+        ("明天上午", (datetime(2026, 10, 22, 8, 0, tzinfo=TZ), datetime(2026, 10, 22, 12, 0, tzinfo=TZ))),
+        ("后天晚上", (datetime(2026, 10, 23, 18, 0, tzinfo=TZ), datetime(2026, 10, 23, 23, 0, tzinfo=TZ))),
+        ("今晚", (datetime(2026, 10, 21, 18, 0, tzinfo=TZ), datetime(2026, 10, 21, 23, 0, tzinfo=TZ))),
+        ("明晚", (datetime(2026, 10, 22, 18, 0, tzinfo=TZ), datetime(2026, 10, 22, 23, 0, tzinfo=TZ))),
+        ("this afternoon", (datetime(2026, 10, 21, 12, 0, tzinfo=TZ), datetime(2026, 10, 21, 18, 0, tzinfo=TZ))),
+        ("tomorrow morning", (datetime(2026, 10, 22, 8, 0, tzinfo=TZ), datetime(2026, 10, 22, 12, 0, tzinfo=TZ))),
+        ("tonight", (datetime(2026, 10, 21, 18, 0, tzinfo=TZ), datetime(2026, 10, 21, 23, 0, tzinfo=TZ))),
+        ("tomorrow night", (datetime(2026, 10, 22, 18, 0, tzinfo=TZ), datetime(2026, 10, 22, 23, 0, tzinfo=TZ))),
+    ],
+)
+def test_extract_window(text, expected):
+    assert extract_window(text, NOW) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "下午3点",  # 明确时间点不是窗口
+        "今晚9点",
+        "tonight at 9",
+        "tomorrow morning at 9",
+        "写脚本",
+        "明天",
+    ],
+)
+def test_extract_window_rejects_explicit_times_and_non_windows(text):
+    assert extract_window(text, NOW) is None

@@ -15,6 +15,7 @@ from pydantic import ValidationError
 from ..config import settings
 from .action import Action
 from .client import LLMClient
+from .natdate import extract_time, extract_window
 from .prompts import PROMPT_VERSION, build_system
 from .rules import extract_dates, parse_checkin_answer, parse_with_rules
 
@@ -60,7 +61,18 @@ def parse(
 
 
 def _reconcile_dates(action: Action, text: str, now: datetime) -> Action:
-    """以 natdate 的结果为准改写 start/deadline；规则抓不到才信 LLM 的时间。"""
+    """以 natdate 的结果为准改写 start/deadline/window；规则抓不到才信 LLM 的时间。"""
+    if action.intent in {"schedule_step", "schedule_all"}:
+        phrase = action.when_text or text
+        window = extract_window(phrase, now)
+        if window is not None:
+            action.window = window
+            return action
+        if action.intent == "schedule_step":
+            found = extract_dates(phrase, now)
+            if found and extract_time(phrase):
+                action.start = found[-1][1]
+        return action
     if action.intent not in {"add_event", "move_event", "create_goal"}:
         return action
     found = extract_dates(action.when_text or text, now)

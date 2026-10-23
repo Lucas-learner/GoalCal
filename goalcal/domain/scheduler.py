@@ -277,25 +277,40 @@ def propose(
     days: int = 5,
     top_n: int = 3,
     deadline: date | None = None,
+    window: tuple[datetime, datetime] | None = None,
 ) -> list[Candidate]:
-    """在 now 之后的 days 天内，给出 top_n 个候选时段（按分数降序）。"""
+    """在 now 之后的 days 天内，给出 top_n 个候选时段（按分数降序）。
+
+    给了 window 就只在窗口内挖空档（窗口可能跨天），窗口外日期不扫描；
+    窗口内没有候选就返回空，由上层决定提示或回退。
+    """
     prefs = prefs or Preferences()
     today = now.date()
     pool: list[Candidate] = []
 
-    for offset in range(days):
-        day = today + timedelta(days=offset)
+    if window is not None:
+        first_day = window[0].date()
+        span_days = (window[1].date() - first_day).days + 1
+    else:
+        first_day = today
+        span_days = days
+
+    for offset in range(span_days):
+        day = first_day + timedelta(days=offset)
         window_start = datetime.combine(
             day, time(hour=prefs.day_start_hour), tzinfo=now.tzinfo
         )
         window_end = datetime.combine(
             day, time(hour=prefs.day_end_hour), tzinfo=now.tzinfo
         )
-        if offset == 0:
-            window_start = max(window_start, _ceil_to(now, prefs.granularity))
+        if window is not None:
+            window_start = max(window_start, window[0])
+            window_end = min(window_end, window[1])
+        window_start = max(window_start, _ceil_to(now, prefs.granularity))
         if window_start >= window_end:
             continue
 
+        days_from_now = (day - today).days
         day_busy = [b for b in busy if b.end > window_start and b.start < window_end]
         goal_minutes = sum(
             b.minutes for b in day_busy
@@ -312,7 +327,7 @@ def propose(
                     abs((start - b.end).total_seconds()) <= 20 * 60 for b in day_busy
                 )
                 score, reasons = _score(
-                    start, end, req, prefs, goal_minutes, offset, deadline, today, adjacent
+                    start, end, req, prefs, goal_minutes, days_from_now, deadline, today, adjacent
                 )
                 pool.append(Candidate(start=start, end=end, score=score, reasons=reasons))
 

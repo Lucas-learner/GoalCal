@@ -181,7 +181,7 @@ def test_schedule_step_refines_when_no_pending_steps(session, user):
 
     # 没有待办步骤时自动补下一批（模板续批 3 步），并给出候选时段
     assert reply.step_id is not None
-    assert 1 <= len(reply.candidates) <= 3
+    assert 1 <= len(reply.candidates) <= 6
     assert "added" in reply.text
     session.refresh(goal)
     assert len(goal.steps) == 5

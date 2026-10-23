@@ -96,3 +96,60 @@ def test_candidates_are_at_least_one_hour_apart():
     got = propose(Requirement(est_min=30), WED, [], days=2, top_n=3)
     for a, b in zip(got, got[1:]):
         assert abs((a.start - b.start).total_seconds()) >= 3600
+
+
+# ------------------------------------------------------------ 时间窗口
+
+
+def test_window_restricts_candidates_to_the_window():
+    window = (
+        datetime(2026, 10, 21, 14, 0, tzinfo=TZ),
+        datetime(2026, 10, 21, 18, 0, tzinfo=TZ),
+    )
+    got = propose(Requirement(est_min=45), WED, [], window=window, top_n=6)
+    assert got
+    for c in got:
+        assert window[0] <= c.start and c.end <= window[1]
+
+
+def test_window_does_not_scan_outside_days():
+    # 窗口在后天：今天/明天的空档再好也不能出现
+    window = (
+        datetime(2026, 10, 23, 8, 0, tzinfo=TZ),
+        datetime(2026, 10, 23, 12, 0, tzinfo=TZ),
+    )
+    got = propose(Requirement(est_min=30), WED, [], window=window, top_n=6)
+    assert got
+    assert all(c.start.date() == date(2026, 10, 23) for c in got)
+
+
+def test_window_can_cross_midnight():
+    window = (
+        datetime(2026, 10, 21, 20, 0, tzinfo=TZ),
+        datetime(2026, 10, 22, 10, 0, tzinfo=TZ),
+    )
+    got = propose(Requirement(est_min=30), WED, [], window=window, top_n=6)
+    assert got
+    days = {c.start.date() for c in got}
+    assert days <= {date(2026, 10, 21), date(2026, 10, 22)}
+    for c in got:
+        assert window[0] <= c.start and c.end <= window[1]
+
+
+def test_window_without_gap_returns_empty():
+    # 窗口被一个大会议占满（含两侧 buffer）→ 空，由上层决定提示或回退
+    busy = [BusyBlock(datetime(2026, 10, 21, 13, 30, tzinfo=TZ),
+                      datetime(2026, 10, 21, 18, 30, tzinfo=TZ))]
+    window = (
+        datetime(2026, 10, 21, 14, 0, tzinfo=TZ),
+        datetime(2026, 10, 21, 18, 0, tzinfo=TZ),
+    )
+    assert propose(Requirement(est_min=45), WED, busy, window=window) == []
+
+
+def test_past_window_returns_empty():
+    window = (
+        datetime(2026, 10, 21, 7, 0, tzinfo=TZ),
+        datetime(2026, 10, 21, 8, 0, tzinfo=TZ),
+    )
+    assert propose(Requirement(est_min=45), WED, [], window=window) == []

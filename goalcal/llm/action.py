@@ -13,6 +13,7 @@ Intent = Literal[
     "create_goal",
     "delete_goal",
     "schedule_step",
+    "schedule_all",
     "refine_steps",
     "log_progress",
     "set_state",
@@ -28,6 +29,9 @@ class Action(BaseModel):
     when_text: str | None = Field(default=None, description="原文里的时间片段，由 natdate 解析成 start")
     start: datetime | None = None
     end: datetime | None = None
+    window: tuple[datetime, datetime] | None = Field(
+        default=None, description="时间窗口（今天下午/tonight 等），由 natdate.extract_window 解析"
+    )
     duration_min: int | None = None
     target: str | None = Field(default=None, description="move/delete 时要找的原事件标题")
     deadline: date | None = None

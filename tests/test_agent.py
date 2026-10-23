@@ -87,7 +87,7 @@ def test_create_goal_returns_steps_and_candidates(session, user):
     goal = goal_svc.active_goals(session, user.id)[0]
     assert len(goal.steps) == 2  # 滚动拆解：只落首批步骤
     assert goal_svc.outline_phases(goal)
-    assert 1 <= len(reply.candidates) <= 3
+    assert 1 <= len(reply.candidates) <= 6
     assert all(c.reasons for c in reply.candidates)
 
 
@@ -114,7 +114,7 @@ def test_piano_goal_is_created_after_clarification(session, user):
     assert len(goal.steps) == 2
     assert goal_svc.outline_phases(goal) == ["Setup & baseline", "Posture & scales", "Reading & rhythm", "First piece", "Consolidation"]
     assert goal.deadline == NOW.date() + timedelta(days=90)
-    assert 1 <= len(reply.candidates) <= 3
+    assert 1 <= len(reply.candidates) <= 6
 
 
 def test_llm_generated_plan_is_stored_for_custom_goal(session, user, monkeypatch):
@@ -382,7 +382,7 @@ def test_chat_can_schedule_the_next_goal_step(session, user):
 
     assert reply.action.intent == "schedule_step"
     assert reply.step_id is not None
-    assert 1 <= len(reply.candidates) <= 3
+    assert 1 <= len(reply.candidates) <= 6
     assert "slots" in reply.text.lower()
 
 
@@ -496,4 +496,166 @@ def test_confident_delete_still_executes(session, user):
     assert reply.action.confidence >= agent.CONFIRM_THRESHOLD
     assert "Deleted" in reply.text
     assert session.scalar(select(Event)) is None
+
+
+# ------------------------------------------------------------ 排期窗口与批量排
+
+
+def _goal_with_sized_steps(session, user, sizes, title="My project"):
+    defs = [
+        {
+            "seq": i + 1,
+            "milestone": "M",
+            "title": t,
+            "outcome": "",
+            "est_min": minutes,
+            "energy": 1,
+            "kind": "deep",
+        }
+        for i, (t, minutes) in enumerate(sizes)
+    ]
+    return goal_svc.create_goal(
+        session,
+        user.id,
+        title,
+        deadline=NOW.date() + timedelta(days=30),
+        step_defs=defs,
+        template_key="llm",
+    )
+
+
+def test_schedule_step_with_window_proposes_inside_window(session, user):
+    _goal_with_named_steps(session, user, ["写脚本", "画分镜"])
+    reply = agent.handle(session, user.id, "安排写脚本到今天下午", NOW, TZ)
+
+    assert reply.action.intent == "schedule_step"
+    assert reply.candidates
+    for c in reply.candidates:
+        assert c.start.date() == NOW.date()
+        assert 12 <= c.start.hour and c.end.hour <= 18
+
+
+def test_schedule_step_full_window_falls_back_with_note(session, user):
+    _goal_with_named_steps(session, user, ["写脚本"])
+    _event(
+        session, user, "Long meeting",
+        datetime(2026, 10, 21, 11, 30, tzinfo=ZoneInfo(TZ)), 420,  # 11:30–18:30 占满下午
+    )
+    reply = agent.handle(session, user.id, "安排写脚本到今天下午", NOW, TZ)
+
+    assert "no free slot" in reply.text
+    assert reply.candidates  # 回退到默认 5 天范围
+
+
+def test_schedule_step_with_explicit_time_books_directly(session, user):
+    goal = _goal_with_named_steps(session, user, ["写脚本", "画分镜"])
+    reply = agent.handle(session, user.id, "把写脚本安排在今天下午3点", NOW, TZ)
+
+    assert reply.action.intent == "schedule_step"
+    assert reply.candidates == []
+    assert "Booked" in reply.text
+    ev = session.scalar(select(Event).where(Event.kind == "block"))
+    assert ev is not None and ev.source == "proposal"
+    local = as_local(ev.start_utc, TZ)
+    assert (local.hour, local.minute) == (15, 0)
+    step = next(s for s in goal.steps if s.title == "写脚本")
+    assert ev.step_id == step.id
+    assert int((ev.end_utc - ev.start_utc).total_seconds() // 60) == step.est_min
+
+
+def test_propose_for_step_honors_window(session, user):
+    goal = _goal_with_named_steps(session, user, ["写脚本"])
+    step = goal.steps[0]
+    window = (
+        datetime(2026, 10, 22, 8, 0, tzinfo=ZoneInfo(TZ)),
+        datetime(2026, 10, 22, 12, 0, tzinfo=ZoneInfo(TZ)),
+    )
+    candidates, returned = agent.propose_for_step(session, user.id, step.id, NOW, TZ, window=window)
+    assert returned is not None
+    assert candidates
+    assert all(c.start.date() == date(2026, 10, 22) and c.end.hour <= 12 for c in candidates)
+
+
+def test_schedule_all_packs_steps_with_buffers(session, user):
+    _goal_with_sized_steps(
+        session, user,
+        [("Write the script", 30), ("Make the storyboard", 30), ("Record the video", 45)],
+    )
+    reply = agent.handle(session, user.id, "今天下午有空，把任务都排了", NOW, TZ)
+
+    assert reply.action.intent == "schedule_all"
+    assert reply.batch is not None and len(reply.batch) == 3
+    zone = ZoneInfo(TZ)
+    assert reply.batch[0]["start"] == datetime(2026, 10, 21, 12, 0, tzinfo=zone)
+    # 块间 10 分钟 buffer
+    assert reply.batch[1]["start"] == datetime(2026, 10, 21, 12, 40, tzinfo=zone)
+    assert reply.batch[2]["start"] == datetime(2026, 10, 21, 13, 20, tzinfo=zone)
+    assert "Book them all" in reply.text
+
+
+def test_schedule_all_stops_at_the_daily_cap(session, user):
+    _goal_with_sized_steps(session, user, [("A", 45), ("B", 45), ("C", 45), ("D", 45)])
+    reply = agent.handle(session, user.id, "今天下午有空，把任务都排了", NOW, TZ)
+
+    assert len(reply.batch) == 2  # 45+45=90，再加 45 超过 120 分钟上限即停
+    assert "Didn't fit" in reply.text
+    assert "“C”" in reply.text and "“D”" in reply.text
+
+
+def test_schedule_all_packs_across_goals_in_seq_order(session, user):
+    g1 = _goal_with_sized_steps(session, user, [("G1 first", 30), ("G1 second", 30)], "Goal one")
+    g2 = _goal_with_sized_steps(session, user, [("G2 first", 30)], "Goal two")
+    g2.created_at = g1.created_at + timedelta(seconds=1)
+    session.flush()
+
+    reply = agent.handle(session, user.id, "schedule everything tomorrow morning", NOW, TZ)
+
+    assert reply.batch is not None
+    assert [b["title"] for b in reply.batch] == ["G1 first", "G1 second", "G2 first"]
+    assert all(b["start"].date() == NOW.date() + timedelta(days=1) for b in reply.batch)
+
+
+def test_schedule_all_skips_already_scheduled_steps(session, user):
+    goal = _goal_with_sized_steps(session, user, [("A", 30), ("B", 30)])
+    step_a = sorted(goal.steps, key=lambda s: s.seq)[0]
+    ev = _event(session, user, "My project: A", NOW + timedelta(hours=4), 30, kind="block")
+    ev.step_id = step_a.id
+    session.flush()
+
+    reply = agent.handle(session, user.id, "把任务都排了", NOW, TZ)
+
+    assert reply.batch is not None and len(reply.batch) == 1
+    assert reply.batch[0]["title"] == "B"
+    assert "Already scheduled" in reply.text
+
+
+def test_schedule_all_full_window_reports_nothing_fit(session, user):
+    _goal_with_sized_steps(session, user, [("A", 60)])
+    _event(
+        session, user, "All afternoon",
+        datetime(2026, 10, 21, 11, 30, tzinfo=ZoneInfo(TZ)), 420,
+    )
+    reply = agent.handle(session, user.id, "今天下午有空，把任务都排了", NOW, TZ)
+
+    assert reply.batch is None
+    assert "Couldn't fit anything" in reply.text
+
+
+def test_accept_batch_books_every_block_and_metrics_once(session, user):
+    import json
+
+    from goalcal.models import Interaction
+
+    _goal_with_sized_steps(session, user, [("A", 30), ("B", 30), ("C", 30)])
+    reply = agent.handle(session, user.id, "今天下午有空，把任务都排了", NOW, TZ)
+    msg = agent.accept_batch(session, user.id, reply.batch, NOW, TZ)
+
+    assert "Booked 3 block(s)" in msg
+    events = list(session.scalars(select(Event).where(Event.kind == "block")))
+    assert len(events) == 3
+    assert {ev.step_id for ev in events} == {b["step_id"] for b in reply.batch}
+    assert all(ev.source == "proposal" for ev in events)
+    logs = list(session.scalars(select(Interaction).where(Interaction.kind == "proposal_accepted")))
+    assert len(logs) == 1
+    assert json.loads(logs[0].payload)["batch"] == 3
 

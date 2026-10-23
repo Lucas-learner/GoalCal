@@ -118,6 +118,61 @@ def test_unknown_falls_back_to_chat():
     assert parse_with_rules("hello there", NOW).intent == "chat"
 
 
+# ------------------------------------------------------------ 排期窗口 / 批量排
+
+
+def test_schedule_step_with_window():
+    a = parse_with_rules("安排写脚本到今天下午", NOW)
+    assert a.intent == "schedule_step"
+    assert a.window is not None
+    assert (a.window[0].hour, a.window[1].hour) == (12, 18)
+    assert a.window[0].date() == NOW.date()
+    assert "写脚本" in (a.progress_target or "")
+    assert a.start is None
+
+
+def test_schedule_step_with_window_english():
+    a = parse_with_rules("find time to write the script tonight", NOW)
+    assert a.intent == "schedule_step"
+    assert a.window is not None
+    assert (a.window[0].hour, a.window[1].hour) == (18, 23)
+
+
+def test_schedule_step_with_explicit_time_sets_start():
+    a = parse_with_rules("把写脚本安排在今天下午3点", NOW)
+    assert a.intent == "schedule_step"
+    assert a.window is None
+    assert a.start is not None
+    assert (a.start.hour, a.start.minute) == (15, 0)
+
+
+def test_schedule_all_with_window():
+    a = parse_with_rules("今天下午有空，把任务都排了", NOW)
+    assert a.intent == "schedule_all"
+    assert a.window is not None
+    assert (a.window[0].hour, a.window[1].hour) == (12, 18)
+
+
+def test_schedule_all_english():
+    a = parse_with_rules("schedule everything tomorrow morning", NOW)
+    assert a.intent == "schedule_all"
+    assert a.window is not None
+    assert a.window[0].date().isoformat() == "2026-10-22"
+    assert (a.window[0].hour, a.window[1].hour) == (8, 12)
+
+
+def test_schedule_all_without_window():
+    a = parse_with_rules("把所有步骤都排了", NOW)
+    assert a.intent == "schedule_all"
+    assert a.window is None
+
+
+def test_schedule_all_is_a_new_command():
+    from goalcal.llm.rules import parse_checkin_answer
+
+    assert parse_checkin_answer("今天下午有空，把任务都排了", NOW) is None
+
+
 # ------------------------------------------------------------ P0-2 回归：中文关键词误判
 
 

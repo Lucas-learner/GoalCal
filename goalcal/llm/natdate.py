@@ -44,6 +44,57 @@ PERIOD_HOURS = {
     "night": 20, "tonight": 20,
 }
 
+# 时间窗口（半开区间 [lo, hi)）：排期建议用，打分逻辑不变
+WINDOW_HOURS = {
+    "morning": (8, 12), "上午": (8, 12), "早上": (8, 12), "早晨": (8, 12),
+    "afternoon": (12, 18), "下午": (12, 18),
+    "evening": (18, 23), "晚上": (18, 23), "傍晚": (18, 23),
+    "night": (18, 23),
+}
+
+_CN_WINDOW_DAY = {"今天": 0, "今日": 0, "明天": 1, "后天": 2}
+_EN_WINDOW_DAY = {"today": 0, "this": 0, "tomorrow": 1, "day after tomorrow": 2}
+
+# 时段词后面紧跟数字（"下午3点"/"tonight at 9"）是明确时间点，不算窗口
+_CN_WINDOW = re.compile(
+    r"(今天|今日|明天|后天)?\s*(上午|早上|早晨|下午|晚上|傍晚)(?!\s*\d)"
+)
+_CN_NIGHT = re.compile(r"(今晚|明晚)(?!\s*\d)")
+_EN_WINDOW = re.compile(
+    r"\b(?:(today|tomorrow|this|day after tomorrow)\s+)?(morning|afternoon|evening|night)"
+    r"(?!\s*(?:at\s*)?\d)\b|\b(tonight)(?!\s*(?:at\s*)?\d)",
+    re.I,
+)
+
+
+def extract_window(text: str, now: datetime) -> tuple[datetime, datetime] | None:
+    """抽取"今天下午"/"tomorrow morning"/"tonight"这类时间窗口，返回本地时间半开区间。"""
+    tz = now.tzinfo
+
+    m = _CN_NIGHT.search(text)
+    if m:
+        offset = 0 if m.group(1) == "今晚" else 1
+        day = (now + timedelta(days=offset)).date()
+        return _dt(day, 18, 0, tz), _dt(day, 23, 0, tz)
+
+    m = _CN_WINDOW.search(text)
+    if m:
+        offset = _CN_WINDOW_DAY.get(m.group(1) or "今天", 0)
+        lo, hi = WINDOW_HOURS[m.group(2)]
+        day = (now + timedelta(days=offset)).date()
+        return _dt(day, lo, 0, tz), _dt(day, hi, 0, tz)
+
+    m = _EN_WINDOW.search(text)
+    if m:
+        if m.group(3):  # tonight
+            offset, lo, hi = 0, 18, 23
+        else:
+            offset = _EN_WINDOW_DAY[(m.group(1) or "today").lower()]
+            lo, hi = WINDOW_HOURS[m.group(2).lower()]
+        day = (now + timedelta(days=offset)).date()
+        return _dt(day, lo, 0, tz), _dt(day, hi, 0, tz)
+    return None
+
 
 def _dt(day: date, hour: int, minute: int, tz) -> datetime:
     return datetime.combine(day, time(hour, minute), tzinfo=tz)

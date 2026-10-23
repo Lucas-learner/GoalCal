@@ -42,6 +42,26 @@ def test_find_time_shows_candidate_slots():
     assert any("Suggested slots" in m.value for m in at.markdown)
 
 
+def test_candidate_chips_refilter_without_error():
+    at = _app()
+    next(b for b in at.button if b.label == "📅").click().run()
+    assert not at.exception, at.exception
+    next(b for b in at.button if b.label == "Tonight").click().run()
+    assert not at.exception, at.exception
+    assert any("Suggested slots" in m.value for m in at.markdown)
+
+
+def test_schedule_all_shows_batch_plan_and_books():
+    at = _app()
+    at.chat_input[0].set_value("今天下午有空，把任务都排了").run()
+    assert not at.exception, at.exception
+    assert any("Batch plan" in m.value for m in at.markdown)
+
+    next(b for b in at.button if b.label == "Book all").click().run()
+    assert not at.exception, at.exception
+    assert any(t.value.startswith("Booked") for t in at.toast)
+
+
 def test_calendar_delete_requires_confirmation():
     at = _app()
     with session_scope() as s:

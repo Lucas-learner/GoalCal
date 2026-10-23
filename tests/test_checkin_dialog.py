@@ -84,7 +84,7 @@ def test_quick_reply_done_resolves_and_celebrates(session, user):
     checkin = session.scalar(select(Checkin).where(Checkin.event_id == ev.id))
     assert checkin.verdict == "done"
     # 祝贺后给出下一步候选
-    assert 1 <= len(reply.candidates) <= 3
+    assert 1 <= len(reply.candidates) <= 6
     assert reply.step_id != step.id
 
 
@@ -104,7 +104,7 @@ def test_partial_quick_reply_asks_reason_then_offers_recovery(session, user):
     )
     assert reply.checkin_context is not None
     assert reply.checkin_context.stage == "recovery"
-    assert 1 <= len(reply.candidates) <= 3
+    assert 1 <= len(reply.candidates) <= 6
     checkin = session.scalar(select(Checkin).where(Checkin.event_id == ev.id))
     assert checkin.verdict == "partial" and checkin.reason == "tired"
 

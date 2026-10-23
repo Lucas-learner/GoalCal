@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 import streamlit as st
@@ -85,15 +85,16 @@ def _record_reply(reply) -> None:
     st.session_state["goal_brief"] = reply.goal_brief
     ctx = reply.checkin_context
     origin = "recovery" if ctx is not None and ctx.stage == "recovery" else "chat"
-    st.session_state["pending"] = (
-        {
+    if reply.batch:
+        st.session_state["pending"] = {"batch": reply.batch, "origin": "goal"}
+    elif reply.candidates:
+        st.session_state["pending"] = {
             "candidates": reply.candidates,
             "step_id": reply.step_id,
             "origin": origin,
         }
-        if reply.candidates
-        else None
-    )
+    else:
+        st.session_state["pending"] = None
     st.session_state["last_parser"] = reply.parser
 
 
@@ -147,8 +148,51 @@ def _accept(step_id: int, candidate) -> None:
     st.rerun()
 
 
+def _accept_batch(batch: list[dict]) -> None:
+    with session_scope() as s:
+        msg = agent.accept_batch(s, st.session_state["user_id"], batch, _now(), TZ)
+    st.session_state["messages"].append({"role": "assistant", "content": msg})
+    st.session_state["pending"] = None
+    _flash(msg)
+    st.rerun()
+
+
 def _dismiss_pending() -> None:
     st.session_state["pending"] = None
+    st.rerun()
+
+
+_CHIP_WINDOWS = {
+    "today_pm": (0, 12, 18),
+    "tonight": (0, 18, 23),
+    "tomorrow": (1, 8, 22),
+}
+
+
+def _chip_window(chip: str, now: datetime) -> tuple[datetime, datetime]:
+    if chip == "weekend":
+        day = now.date() + timedelta(days=(5 - now.weekday()) % 7)
+        lo, hi = 8, 22
+    else:
+        offset, lo, hi = _CHIP_WINDOWS[chip]
+        day = now.date() + timedelta(days=offset)
+    return (
+        datetime.combine(day, time(hour=lo), tzinfo=ZONE),
+        datetime.combine(day, time(hour=hi), tzinfo=ZONE),
+    )
+
+
+def _refilter_pending(step_id: int, chip: str) -> None:
+    """chip 窗口内重新 propose 同一步骤；窗口内无候选则保留原候选并提示。"""
+    window = _chip_window(chip, _now())
+    with session_scope() as s:
+        candidates, _ = agent.propose_for_step(
+            s, st.session_state["user_id"], step_id, _now(), TZ, window=window
+        )
+    if candidates and st.session_state.get("pending"):
+        st.session_state["pending"]["candidates"] = candidates
+    else:
+        _flash("Nothing free in that window — kept the current suggestions.")
     st.rerun()
 
 
@@ -610,13 +654,17 @@ with chat_col:
                     st.rerun()
 
     pending = st.session_state.get("pending")
-    if pending and pending.get("origin") == "recovery":
+    if pending and pending.get("batch"):
+        chat_ui.render_batch(pending["batch"], _accept_batch, _dismiss_pending)
+    elif pending and pending.get("origin") == "recovery":
         chat_ui.render_proposals(
-            pending["candidates"], pending["step_id"], _accept_recovery, _dismiss_recovery
+            pending["candidates"], pending["step_id"], _accept_recovery, _dismiss_recovery,
+            on_filter=lambda key: _refilter_pending(pending["step_id"], key), now=_now(),
         )
     elif pending and pending.get("origin") != "goal":
         chat_ui.render_proposals(
-            pending["candidates"], pending["step_id"], _accept, _dismiss_pending
+            pending["candidates"], pending["step_id"], _accept, _dismiss_pending,
+            on_filter=lambda key: _refilter_pending(pending["step_id"], key), now=_now(),
         )
 
     prompt = st.chat_input("Tell me a goal, or add something to your calendar…")
@@ -710,11 +758,13 @@ with goals_col:
             pending = st.session_state.get("pending")
             if (
                 pending
+                and not pending.get("batch")
                 and pending.get("origin") == "goal"
                 and pending["step_id"] in {step.id for step in snap["steps"]}
             ):
                 chat_ui.render_proposals(
-                    pending["candidates"], pending["step_id"], _accept, _dismiss_pending
+                    pending["candidates"], pending["step_id"], _accept, _dismiss_pending,
+                    on_filter=lambda key: _refilter_pending(pending["step_id"], key), now=_now(),
                 )
 
     with st.expander("➕ New goal", expanded=False):

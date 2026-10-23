@@ -48,6 +48,21 @@ def check(case: dict, action) -> tuple[bool, list[str]]:
     if "duration_min" in exp and action.duration_min != exp["duration_min"]:
         problems.append(f"duration {action.duration_min} != {exp['duration_min']}")
 
+    if "window" in exp:
+        if action.window is None:
+            problems.append("window missing")
+        else:
+            tzinfo = action.window[0].tzinfo
+            want_s = datetime.fromisoformat(exp["window"][0]).replace(tzinfo=tzinfo)
+            want_e = datetime.fromisoformat(exp["window"][1]).replace(tzinfo=tzinfo)
+            if (
+                abs((action.window[0] - want_s).total_seconds()) > 60
+                or abs((action.window[1] - want_e).total_seconds()) > 60
+            ):
+                problems.append(
+                    f"window {action.window[0]:%m-%d %H:%M}–{action.window[1]:%H:%M} != {exp['window']}"
+                )
+
     if "deadline" in exp and (action.deadline is None or action.deadline.isoformat() != exp["deadline"]):
         problems.append(f"deadline {action.deadline} != {exp['deadline']}")
 

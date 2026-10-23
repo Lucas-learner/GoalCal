@@ -16,7 +16,7 @@ except ImportError:  # pragma: no cover - 依赖缺失时的降级路径
     search_dates = None
 
 from .action import Action
-from .natdate import extract_time, find_dates
+from .natdate import extract_time, extract_window, find_dates
 
 GOAL_MARKERS = re.compile(
     r"\b(i want to|i'd like to|i plan to|i'm going to|my goal|help me (to )?|goal is)\b|"
@@ -45,7 +45,16 @@ QUERY_MARKERS = re.compile(
 )
 SCHEDULE_STEP_MARKERS = re.compile(
     r"\b(find time|make time|schedule (the )?next|next step|work on (my )?goal)\b|"
-    r"找个?时间|安排(一下)?下一步|下一步|推进目标",
+    r"\bschedule\b[^.。;!?]{1,30}?\b(?:to|for|on)\s+"
+    r"(?:today|tomorrow|tonight|this\s+(?:morning|afternoon|evening))\b|"
+    r"找个?时间|安排(一下)?下一步|下一步|推进目标|"
+    r"安排[^。.;!?，,]{1,20}?[到在]\s*(?:今天|今日|明天|后天|今晚|明晚)|"
+    r"把[^。.;!?，,]{1,20}?安排",
+    re.I,
+)
+SCHEDULE_ALL_MARKERS = re.compile(
+    r"都排了|排满|都安排|把(任务|步骤|所有|全部)[^。.;!?，,]{0,8}都|"
+    r"\bschedule everything\b|\bschedule all\b|\bpack my\b|\bpack the\b",
     re.I,
 )
 REFINE_STEP_MARKERS = re.compile(
@@ -91,6 +100,7 @@ NEW_COMMAND_INTENTS = {
     "delete_goal",
     "query_events",
     "schedule_step",
+    "schedule_all",
     "refine_steps",
     "create_goal",
 }
@@ -287,19 +297,35 @@ def parse_with_rules(text: str, now: datetime) -> Action:
             raw=raw,
         )
 
-    # 6) 给目标步骤找时间（"安排下一步" 要先于泛化的 "帮我安排…" 加日程）
-    if SCHEDULE_STEP_MARKERS.search(raw):
-        target = _clean_title(raw, spans)
-        if re.fullmatch(r"(下一步|next step)", target, re.I):
-            target = None
+    # 6) 批量排（要先于单步排：“把任务都排了”也含“排/安排”字眼）
+    if SCHEDULE_ALL_MARKERS.search(raw):
         return Action(
-            intent="schedule_step",
-            progress_target=target or None,
+            intent="schedule_all",
+            window=extract_window(raw, now),
             confidence=0.7,
             raw=raw,
         )
 
-    # 7) 加日程（显式指令，早于建目标/查询："帮我安排明天10点开会"、"help me add …"）
+    # 7) 给目标步骤找时间（"安排下一步" 要先于泛化的 "帮我安排…" 加日程）
+    if SCHEDULE_STEP_MARKERS.search(raw):
+        target = _clean_title(raw, spans)
+        if re.fullmatch(r"(下一步|next step)", target, re.I):
+            target = None
+        window = extract_window(raw, now)
+        start = None
+        if window is None and dates and extract_time(raw):
+            # 明确时间点（"安排在…3点"）：直接定，跳过候选
+            start = dates[-1][1]
+        return Action(
+            intent="schedule_step",
+            progress_target=target or None,
+            start=start,
+            window=window,
+            confidence=0.7,
+            raw=raw,
+        )
+
+    # 8) 加日程（显式指令，早于建目标/查询："帮我安排明天10点开会"、"help me add …"）
     if ADD_MARKERS.search(raw):
         when = _attach(dates[0][1], now) if dates else None
         title = _clean_title(raw, spans)
@@ -312,7 +338,7 @@ def parse_with_rules(text: str, now: datetime) -> Action:
             raw=raw,
         )
 
-    # 8) 建目标（"I want to ... in 30 days"）
+    # 9) 建目标（"I want to ... in 30 days"）
     if GOAL_MARKERS.search(raw):
         deadline = None
         if dates:
@@ -348,16 +374,16 @@ def parse_with_rules(text: str, now: datetime) -> Action:
             raw=raw,
         )
 
-    # 9) 报进度（否定句 "I did not finish …" / "没做完" 不算完成）
+    # 10) 报进度（否定句 "I did not finish …" / "没做完" 不算完成）
     if DONE_MARKERS.search(raw) and not ADD_MARKERS.search(raw) and not NEGATED_DONE.search(raw):
         target = _clean_title(raw, spans)
         return Action(intent="log_progress", progress_target=target, confidence=0.6, raw=raw)
 
-    # 10) 查
+    # 11) 查
     if QUERY_MARKERS.search(raw):
         return Action(intent="query_events", confidence=0.6, raw=raw)
 
-    # 11) 隐式加日程：只有日期/时间、没有指令词（"明天10点开会"、"周五下午3点半开会"）
+    # 12) 隐式加日程：只有日期/时间、没有指令词（"明天10点开会"、"周五下午3点半开会"）
     if dates and (duration or extract_time(raw)):
         when = _attach(dates[0][1], now)
         title = _clean_title(raw, spans)

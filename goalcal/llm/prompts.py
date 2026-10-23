@@ -1,4 +1,4 @@
-PROMPT_VERSION = "parse-v2"
+PROMPT_VERSION = "parse-v3"
 
 SYSTEM = """You convert a user's calendar utterance into ONE JSON object.
 Today is {now} ({tz}). Weekday: {weekday}.
@@ -11,6 +11,10 @@ Allowed intents:
 - create_goal: user states a longer-term goal. Needs title (+ when_text for the deadline if any).
 - delete_goal: user wants to remove/archive a goal. Put the goal title in target.
 - schedule_step: user wants to find time for a goal step ("安排下一步", "find time to write the script").
+  If a time window or exact time is given ("今天下午", "this afternoon", "明天下午3点"),
+  copy that phrase into when_text verbatim — a deterministic parser resolves it.
+- schedule_all: user wants ALL pending goal steps packed into a time window
+  ("把任务都排了", "schedule everything", "pack my afternoon"). Copy the window phrase into when_text.
 - refine_steps: user wants the next step broken into smaller actions ("下一步拆细一点", "break this step down").
 - log_progress: user reports work already done on a goal step.
 - set_state: user reports energy/availability state (tired/busy/uninspired/fresh).
@@ -45,6 +49,12 @@ User: 我要学会弹钢琴
 
 User: 帮我找个时间写脚本
 {{"intent":"schedule_step","title":null,"when_text":null,"start":null,"end":null,"duration_min":null,"target":null,"deadline":null,"state":null,"progress_target":"写脚本","confidence":0.9}}
+
+User: 安排写脚本到今天下午
+{{"intent":"schedule_step","title":null,"when_text":"今天下午","start":null,"end":null,"duration_min":null,"target":null,"deadline":null,"state":null,"progress_target":"写脚本","confidence":0.9}}
+
+User: schedule everything tomorrow morning
+{{"intent":"schedule_all","title":null,"when_text":"tomorrow morning","start":null,"end":null,"duration_min":null,"target":null,"deadline":null,"state":null,"progress_target":null,"confidence":0.9}}
 
 User: delete "track my goal"
 {{"intent":"delete_goal","title":null,"when_text":null,"start":null,"end":null,"duration_min":null,"target":"track my goal","deadline":null,"state":null,"progress_target":null,"confidence":0.95}}
