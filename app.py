@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import urllib.request
 from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
@@ -11,7 +12,7 @@ from goalcal.config import settings
 from goalcal.db import get_engine, init_db, session_scope
 from goalcal.domain import calendar_service as cal
 from goalcal.domain import goals as goal_svc
-from goalcal.domain import planner
+from goalcal.domain import ics_import, planner
 from goalcal.models import Base, Event, Goal, Step
 from goalcal.seed import seed_if_empty
 from goalcal.timeutil import as_local, as_utc_naive, local_now
@@ -256,8 +257,10 @@ def _complete_step(step_id: int) -> None:
         if step is None or step.status == "done":
             return
         title = step.title
-        goal_svc.complete_step(s, step, raw_text="completed from UI", now=as_utc_naive(_now(), TZ))
-        cal.cancel_future_blocks(s, step_id, as_utc_naive(_now(), TZ))
+        now_utc = as_utc_naive(_now(), TZ)
+        goal_svc.complete_step(s, step, raw_text="completed from UI", now=now_utc)
+        cal.resolve_due_blocks_done(s, step_id, now_utc)
+        cal.cancel_future_blocks(s, step_id, now_utc)
         note = agent.auto_refine_if_low(s, st.session_state["user_id"], step.goal, _now())
     pending = st.session_state.get("pending")
     if pending and pending.get("step_id") == step_id:
@@ -607,6 +610,34 @@ with st.sidebar:
     ):
         _reset_demo()
         st.rerun()
+
+    with st.expander("Import my calendar (.ics)", expanded=False):
+        uploaded = st.file_uploader("Choose an .ics file", type=["ics"])
+        url = st.text_input("…or ICS subscription URL", key="ics_url")
+        if st.button("Import / Refresh", key="ics_import", use_container_width=True):
+            content = None
+            try:
+                if uploaded is not None:
+                    content = uploaded.getvalue()
+                elif url.strip():
+                    with urllib.request.urlopen(url.strip(), timeout=15) as resp:
+                        content = resp.read()
+            except Exception as exc:
+                _flash(f"Couldn't fetch that calendar: {exc}")
+                st.rerun()
+            if content is None:
+                _flash("Pick an .ics file or paste a URL first.")
+                st.rerun()
+            try:
+                with session_scope() as s:
+                    result = ics_import.import_ics(s, st.session_state["user_id"], content, TZ)
+                _flash(
+                    f"Imported: {result.added} added · "
+                    f"{result.updated} updated · {result.skipped} skipped"
+                )
+            except Exception as exc:
+                _flash(f"Import failed: {exc}")
+            st.rerun()
 
     st.divider()
     st.subheader("How do you feel")

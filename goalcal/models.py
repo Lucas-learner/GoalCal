@@ -80,6 +80,7 @@ class Event(Base):
     kind: Mapped[str] = mapped_column(String(20), default="external")
     status: Mapped[str] = mapped_column(String(20), default="planned")  # planned|done|partial|missed|skipped|moved
     source: Mapped[str] = mapped_column(String(20), default="chat")  # chat|seed|import|proposal
+    uid: Mapped[str | None] = mapped_column(String(200), nullable=True, index=True)  # ICS 导入去重键
     step_id: Mapped[int | None] = mapped_column(ForeignKey("steps.id"), nullable=True)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)

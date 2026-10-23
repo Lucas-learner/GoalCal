@@ -112,6 +112,28 @@ def delete_event(session: Session, event: Event) -> None:
     session.flush()
 
 
+def resolve_due_blocks_done(session: Session, step_id: int, now: datetime) -> int:
+    """把步骤里已开始且仍 planned 的块标成 done；已 resolve（签到过）的块不动。
+
+    now 为 UTC naive。用于“步骤直接完成”时把块当作完成记录留在日历上。
+    """
+    events = list(
+        session.scalars(
+            select(Event).where(
+                Event.step_id == step_id,
+                Event.kind == "block",
+                Event.status == "planned",
+                Event.start_utc < now,
+            )
+        )
+    )
+    for ev in events:
+        ev.status = "done"
+        ev.resolved_at = now
+    session.flush()
+    return len(events)
+
+
 def cancel_future_blocks(
     session: Session, step_id: int, reference_utc: datetime | None = None
 ) -> int:
@@ -143,6 +165,21 @@ def cancel_blocks(session: Session, step_id: int) -> int:
     return len(events)
 
 
+_KIND_COLORS = {"external": "#94a3b8", "buffer": "#e2e8f0"}
+_BLOCK_COLORS = {
+    "planned": "#0f766e",
+    "done": "#6ba589",
+    "partial": "#d97706",
+    "missed": "#cbd5e1",
+}
+
+
+def _event_color(ev: Event) -> str:
+    if ev.kind == "block":
+        return _BLOCK_COLORS.get(ev.status, _BLOCK_COLORS["planned"])
+    return _KIND_COLORS.get(ev.kind, "#94a3b8")
+
+
 def to_fullcalendar(events: list[Event], tz: str) -> list[dict]:
     out = []
     for ev in events:
@@ -154,10 +191,13 @@ def to_fullcalendar(events: list[Event], tz: str) -> list[dict]:
                 "title": ev.title,
                 "start": start.isoformat(),
                 "end": end.isoformat(),
-                "color": {"external": "#94a3b8", "block": "#0f766e", "buffer": "#e2e8f0"}.get(
-                    ev.kind, "#94a3b8"
-                ),
-                "extendedProps": {"kind": ev.kind, "step_id": ev.step_id, "source": ev.source},
+                "color": _event_color(ev),
+                "extendedProps": {
+                    "kind": ev.kind,
+                    "status": ev.status,
+                    "step_id": ev.step_id,
+                    "source": ev.source,
+                },
             }
         )
     return out

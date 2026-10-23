@@ -669,7 +669,8 @@ def _log_progress(session, user_id, action, now, tz, parser) -> Reply:
         now=as_utc_naive(now, tz),
     )
     if not partial:
-        # 步骤已完成，取消还挂在日历上的未来目标块，避免“做完了还留着块”
+        # 步骤已完成：已开始的块标 done 留作完成记录，未来块照常取消
+        cal.resolve_due_blocks_done(session, step.id, as_utc_naive(now, tz))
         cal.cancel_future_blocks(session, step.id, as_utc_naive(now, tz))
     note = auto_refine_if_low(session, user_id, goal, now)
     pct = int(goal_svc.progress(goal) * 100)

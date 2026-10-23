@@ -328,6 +328,26 @@ def test_completing_a_step_cancels_its_block(session, user):
     assert "done" in reply.text.lower()
 
 
+def test_completing_a_step_keeps_due_block_as_done_record(session, user):
+    step_id = _book_first_step(session, user)
+    step = session.get(Step, step_id)
+    future = session.scalar(select(Event).where(Event.step_id == step_id))
+    past = cal.create_event(
+        session, user.id, f"Video: {step.title}",
+        NOW - timedelta(hours=3), NOW - timedelta(hours=2),
+        kind="block", source="proposal", step_id=step_id, tz=TZ,
+    )
+
+    agent.handle(session, user.id, "I finished the script today", NOW, TZ)
+
+    ev = session.get(Event, past.id)
+    assert ev is not None
+    assert ev.status == "done"
+    assert ev.resolved_at == as_utc_naive(NOW, TZ)
+    assert session.get(Event, future.id) is None
+    assert session.get(Step, step_id).status == "done"
+
+
 def test_deleting_a_block_sends_the_step_back_to_todo(session, user):
     step_id = _book_first_step(session, user)
     ev = session.scalar(select(Event).where(Event.step_id == step_id))
