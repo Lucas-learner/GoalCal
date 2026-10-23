@@ -741,7 +741,8 @@ with goals_col:
         st.info("No active goal yet — tell me one in the chat.")
 
     # 目标目录：多于 1 个目标时出现，用于在列表里跳转/过滤
-    if len(snaps) > 1:
+    show_directory = len(snaps) > 1
+    if show_directory:
         choice = st.selectbox(
             "Goal directory",
             range(len(snaps) + 1),
@@ -784,8 +785,9 @@ with goals_col:
                     on_filter=lambda key: _refilter_pending(pending["step_id"], key), now=_now(),
                 )
 
-    # 固定高度容器保证三栏主体对齐；New goal 在容器外下方，与聊天输入框呼应
-    with st.container(height=620, border=True):
+    # 固定高度容器保证三栏主体对齐；目录下拉框占的高度从容器里扣除，
+    # New goal 在容器外下方，与聊天输入框呼应
+    with st.container(height=576 if show_directory else 620, border=True):
         _render_goal_list()
 
     with st.expander("➕ New goal", expanded=False):
