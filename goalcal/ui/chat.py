@@ -55,12 +55,15 @@ def render_proposals(
         if c.start.date() != last_day:
             last_day = c.start.date()
             st.caption(_day_label(c.start, today))
-        label = f"{c.start:%H:%M}–{c.end:%H:%M} · {c.minutes} min · {c.score:.0%} match"
-        with st.container(border=True):
-            st.markdown(f"**{label}**")
-            st.caption(" · ".join(c.reasons))
-            if st.button("Book this", key=f"book_{step_id}_{i}_{c.start.isoformat()}", use_container_width=True, type="primary"):
-                on_accept(step_id, c)
+        slot, book = st.columns([3, 1])
+        slot.markdown(f"**{c.start:%H:%M}–{c.end:%H:%M}** · {c.minutes} min")
+        if book.button(
+            "Book",
+            key=f"book_{step_id}_{i}_{c.start.isoformat()}",
+            use_container_width=True,
+            type="primary",
+        ):
+            on_accept(step_id, c)
 
 
 def render_batch(batch: list[dict], on_accept, on_dismiss=None) -> None:
