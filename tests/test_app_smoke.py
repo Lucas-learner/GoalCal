@@ -39,16 +39,17 @@ def test_find_time_shows_candidate_slots():
     at = _app()
     next(b for b in at.button if b.label == "📅").click().run()
     assert not at.exception, at.exception
-    assert any("Suggested slots" in m.value for m in at.markdown)
+    assert any(b.label == "Book" for b in at.button)
 
 
 def test_candidate_chips_refilter_without_error():
     at = _app()
     next(b for b in at.button if b.label == "📅").click().run()
     assert not at.exception, at.exception
-    next(b for b in at.button if b.label == "Tonight").click().run()
+    sel = next(s for s in at.selectbox if s.key.startswith("filter_sel_"))
+    sel.set_value(2).run()  # Tonight
     assert not at.exception, at.exception
-    assert any("Suggested slots" in m.value for m in at.markdown)
+    assert any(b.label == "Book" for b in at.button)
 
 
 def test_schedule_all_shows_batch_plan_and_books():

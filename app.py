@@ -169,7 +169,9 @@ _CHIP_WINDOWS = {
 }
 
 
-def _chip_window(chip: str, now: datetime) -> tuple[datetime, datetime]:
+def _chip_window(chip: str, now: datetime) -> tuple[datetime, datetime] | None:
+    if chip == "any":
+        return None
     if chip == "weekend":
         day = now.date() + timedelta(days=(5 - now.weekday()) % 7)
         lo, hi = 8, 22
@@ -565,6 +567,28 @@ def _new_event_dialog(start: datetime) -> None:
             _create_quick_event(title.strip(), picked, int(minutes))
 
 
+@st.dialog("Suggested slots")
+def _slots_dialog() -> None:
+    """候选时段悬浮框：chat / goal / recovery / batch 都走这里，不占栏内空间。"""
+    pending = st.session_state.get("pending")
+    if not pending:
+        return
+    if pending.get("batch"):
+        chat_ui.render_batch(pending["batch"], _accept_batch, _dismiss_pending)
+        return
+    on_filter = lambda key: _refilter_pending(pending["step_id"], key)  # noqa: E731
+    if pending.get("origin") == "recovery":
+        chat_ui.render_proposals(
+            pending["candidates"], pending["step_id"], _accept_recovery, _dismiss_recovery,
+            on_filter=on_filter, now=_now(),
+        )
+    else:
+        chat_ui.render_proposals(
+            pending["candidates"], pending["step_id"], _accept, _dismiss_pending,
+            on_filter=on_filter, now=_now(),
+        )
+
+
 _ensure_state()
 _start_checkin_if_needed()
 
@@ -654,20 +678,6 @@ with chat_col:
                     if col.button(option, key=key, use_container_width=True):
                         _run_turn(option)
                         st.rerun()
-
-        pending = st.session_state.get("pending")
-        if pending and pending.get("batch"):
-            chat_ui.render_batch(pending["batch"], _accept_batch, _dismiss_pending)
-        elif pending and pending.get("origin") == "recovery":
-            chat_ui.render_proposals(
-                pending["candidates"], pending["step_id"], _accept_recovery, _dismiss_recovery,
-                on_filter=lambda key: _refilter_pending(pending["step_id"], key), now=_now(),
-            )
-        elif pending and pending.get("origin") != "goal":
-            chat_ui.render_proposals(
-                pending["candidates"], pending["step_id"], _accept, _dismiss_pending,
-                on_filter=lambda key: _refilter_pending(pending["step_id"], key), now=_now(),
-            )
 
     prompt = st.chat_input("Tell me a goal, or add something to your calendar…")
     if prompt:
@@ -773,17 +783,6 @@ with goals_col:
                 on_discard_replan=_discard_replan,
                 replan_draft=draft,
             )
-            pending = st.session_state.get("pending")
-            if (
-                pending
-                and not pending.get("batch")
-                and pending.get("origin") == "goal"
-                and pending["step_id"] in {step.id for step in snap["steps"]}
-            ):
-                chat_ui.render_proposals(
-                    pending["candidates"], pending["step_id"], _accept, _dismiss_pending,
-                    on_filter=lambda key: _refilter_pending(pending["step_id"], key), now=_now(),
-                )
 
     # 固定高度容器保证三栏主体对齐；目录下拉框占的高度从容器里扣除，
     # New goal 在容器外下方，与聊天输入框呼应
@@ -803,3 +802,7 @@ with goals_col:
                 _create_goal_ui(new_title.strip(), new_deadline, with_template)
             else:
                 st.warning("Give the goal a title first.")
+
+# 有待选时段（chat/goal/recovery/batch）就弹出悬浮框
+if st.session_state.get("pending"):
+    _slots_dialog()

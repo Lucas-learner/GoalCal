@@ -29,24 +29,24 @@ def render_proposals(
     on_filter=None,
     now: datetime | None = None,
 ) -> None:
-    """候选时段卡片：演示时最稳的交互，也是 acceptance rate 的埋点位置。
+    """候选时段（在悬浮对话框里渲染）：紧凑行 + 窗口下拉过滤。
 
-    on_filter 传入时在卡片上方渲染窗口快捷 chips，回调收到 chip key；
-    候选按天分组显示。
+    on_filter 收到 chip key（"any" 表示不过滤）；候选按天分组显示。
     """
     if not candidates or step_id is None:
         return
-    head, dismiss = st.columns([4, 1])
-    head.markdown("**Suggested slots**")
-    if on_dismiss is not None and dismiss.button(
-        "Dismiss", key=f"dismiss_{step_id}", use_container_width=True
-    ):
-        on_dismiss()
     if on_filter is not None:
-        cols = st.columns(len(FILTER_CHIPS))
-        for col, (key, label) in zip(cols, FILTER_CHIPS):
-            if col.button(label, key=f"filter_{step_id}_{key}", use_container_width=True):
-                on_filter(key)
+        keys = ["any"] + [k for k, _ in FILTER_CHIPS]
+        labels = ["Any time"] + [label for _, label in FILTER_CHIPS]
+        sel_key = f"filter_sel_{step_id}"
+        st.selectbox(
+            "Window",
+            range(len(labels)),
+            key=sel_key,
+            format_func=lambda i: labels[i],
+            label_visibility="collapsed",
+            on_change=lambda: on_filter(keys[st.session_state[sel_key]]),
+        )
     today = (now or datetime.now(tz=candidates[0].start.tzinfo)).date()
     last_day = None
     i = 0
@@ -64,6 +64,9 @@ def render_proposals(
             type="primary",
         ):
             on_accept(step_id, c)
+    if on_dismiss is not None:
+        if st.button("Dismiss", key=f"dismiss_{step_id}", use_container_width=True):
+            on_dismiss()
 
 
 def render_batch(batch: list[dict], on_accept, on_dismiss=None) -> None:
