@@ -175,10 +175,10 @@ def generate_outline_plan(
         )
         plan = OutlinePlan.model_validate(data)
     except ValidationError as exc:
-        log.warning("LLM 大纲结构校验失败: %s", exc)
+        log.warning("LLM fallback or validation failure")
         return None
     except Exception as exc:  # noqa: BLE001 - 拆解失败必须能回退
-        log.warning("LLM 大纲生成失败(%s)，回退模板", exc)
+        log.warning("LLM fallback or validation failure")
         return None
 
     outline = [str(p).strip()[:120] for p in plan.outline if str(p).strip()][:5]
@@ -250,10 +250,10 @@ def generate_plan(
         )
         plan = Plan.model_validate(data)
     except ValidationError as exc:
-        log.warning("LLM 计划结构校验失败: %s", exc)
+        log.warning("LLM fallback or validation failure")
         return None
     except Exception as exc:  # noqa: BLE001 - 拆解失败必须能回退
-        log.warning("LLM 计划生成失败(%s)，回退模板", exc)
+        log.warning("LLM fallback or validation failure")
         return None
 
     steps = _clean_steps(plan.steps, complexity)

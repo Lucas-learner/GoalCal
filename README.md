@@ -1,3 +1,9 @@
+> 邀请用户、自动诊断与反馈：[试用说明](docs/trial.md)。
+
+> 当前试用入口及免费额度：[ngrok 部署说明](docs/ngrok.md)。
+
+> 公网多用户版本：请先阅读 [本机部署与维护手册](docs/production.md)。应用现在要求登录，不再自动填充 demo 数据；下方原型说明中的时间机器和整库重置不再适用于服务界面。
+
 # GoalCal
 
 > A calendar that advances your goals, not just your meetings.

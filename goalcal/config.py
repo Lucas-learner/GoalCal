@@ -7,7 +7,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parent.parent
-load_dotenv(ROOT / ".env")
+load_dotenv(os.getenv("GOALCAL_ENV_FILE", ROOT / ".env"))
 
 
 def _bool(value: str | None, default: bool = False) -> bool:
@@ -18,7 +18,9 @@ def _bool(value: str | None, default: bool = False) -> bool:
 
 @dataclass(frozen=True)
 class Settings:
-    db_url: str = "sqlite:///./goalcal.db"
+    production: bool = True
+    ai_daily_limit: int = 30
+    db_url: str = f"sqlite:///{ROOT / 'var' / 'goalcal-production.db'}"
     tz: str = "Asia/Shanghai"
     llm_api_key: str = ""
     llm_base_url: str = "https://api.siliconflow.cn/v1"
@@ -31,8 +33,14 @@ class Settings:
 
 
 def get_settings() -> Settings:
+    configured_url = os.getenv("GOALCAL_DB_URL", f"sqlite:///{ROOT / 'var' / 'goalcal-production.db'}")
+    if _bool(os.getenv("GOALCAL_PRODUCTION"), True):
+        if not configured_url.startswith("sqlite:////"):
+            raise ValueError("Production requires an absolute SQLite database URL")
     return Settings(
-        db_url=os.getenv("GOALCAL_DB_URL", "sqlite:///./goalcal.db"),
+        production=_bool(os.getenv("GOALCAL_PRODUCTION"), True),
+        ai_daily_limit=int(os.getenv("GOALCAL_AI_DAILY_LIMIT", "30")),
+        db_url=configured_url,
         tz=os.getenv("GOALCAL_TZ", "Asia/Shanghai"),
         llm_api_key=os.getenv("LLM_API_KEY", ""),
         llm_base_url=os.getenv("LLM_BASE_URL", "https://api.siliconflow.cn/v1"),

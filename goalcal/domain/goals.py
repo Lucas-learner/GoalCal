@@ -8,7 +8,7 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
 from ..data.goal_templates import first_batch, full_steps, milestones, pick_template
-from ..models import Checkin, Event, Goal, Step, User
+from ..models import Checkin, Event, Goal, Step, User, Interaction
 from ..timeutil import now_utc
 
 
@@ -205,6 +205,7 @@ def delete_step(session: Session, step: Step) -> None:
     # 非 block 的关联事件保留，但解除外键，避免删步骤时变孤儿
     session.execute(update(Event).where(Event.step_id == step.id).values(step_id=None))
     session.execute(delete(Checkin).where(Checkin.step_id == step.id))
+    session.execute(update(Interaction).where(Interaction.step_id == step.id).values(step_id=None))
     session.delete(step)
     session.flush()
 
@@ -219,6 +220,7 @@ def replace_steps(
         cal.cancel_blocks(session, step.id)
         session.execute(update(Event).where(Event.step_id == step.id).values(step_id=None))
         session.execute(delete(Checkin).where(Checkin.step_id == step.id))
+        session.execute(update(Interaction).where(Interaction.step_id == step.id).values(step_id=None))
         session.delete(step)
     session.flush()
     session.refresh(goal)

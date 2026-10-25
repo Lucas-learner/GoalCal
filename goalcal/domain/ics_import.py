@@ -22,6 +22,9 @@ from ..timeutil import as_utc_naive, now_utc
 
 EXPAND_DAYS = 56  # RRULE 只展开未来 8 周
 DEFAULT_MINUTES = 60
+MAX_BYTES = 5 * 1024 * 1024
+MAX_EVENTS = 5000
+MAX_SCAN = 10000
 _SUPPORTED_FREQS = {"DAILY", "WEEKLY"}
 
 
@@ -51,7 +54,7 @@ def _event_window(component, tz: str) -> tuple[datetime, datetime] | None:
     return _to_utc_naive(start, tz), _to_utc_naive(end, tz)
 
 
-def _expand(component, tz: str, now: datetime) -> list[tuple[str, datetime, datetime]] | None:
+def _expand(component, tz: str, now: datetime, budget: list[int] | None = None) -> list[tuple[str, datetime, datetime]] | None:
     """展开成 (uid, start_utc, end_utc) 列表；无法处理（含全天事件）返回 None。"""
     window = _event_window(component, tz)
     if window is None:
@@ -70,11 +73,19 @@ def _expand(component, tz: str, now: datetime) -> list[tuple[str, datetime, date
         return None
 
     # dateutil 用原始（可能带时区的）DTSTART 展开，逐实例再转 UTC naive
+    if set(rule_prop) - {"FREQ", "INTERVAL", "COUNT", "UNTIL", "BYDAY", "WKST", "BYMONTHDAY", "BYMONTH"}:
+        raise ValueError("Unsupported recurrence complexity")
+    if int(rule_prop.get("INTERVAL", [1])[0]) < 1:
+        raise ValueError("Invalid recurrence interval")
+    budget = budget if budget is not None else [0]
     dtstart = component.decoded("DTSTART")
     rule = rrulestr(f"RRULE:{rule_prop.to_ical().decode()}", dtstart=dtstart)
     horizon = now + timedelta(days=EXPAND_DAYS)
     out = []
     for index, occurrence in enumerate(rule, start=1):
+        budget[0] += 1
+        if budget[0] > MAX_SCAN:
+            raise ValueError("Recurrence scan limit exceeded")
         occ_utc = _to_utc_naive(occurrence, tz)
         if occ_utc > horizon:
             break
@@ -84,7 +95,7 @@ def _expand(component, tz: str, now: datetime) -> list[tuple[str, datetime, date
     return out
 
 
-def import_ics(
+def _import_ics(
     session: Session,
     user_id: int,
     content: bytes,
@@ -92,7 +103,21 @@ def import_ics(
     now: datetime | None = None,
 ) -> ImportResult:
     now = now or now_utc()
+    if len(content) > MAX_BYTES:
+        raise ValueError("Calendar exceeds 5 MB")
     calendar = Calendar.from_ical(content)
+    components = calendar.walk("VEVENT")
+    if len(components) > MAX_EVENTS:
+        raise ValueError("Too many events")
+    budget = [0]
+    prepared = []
+    count = 0
+    for component in components:
+        expanded = _expand(component, tz, now, budget)
+        count += len(expanded or [])
+        if count > MAX_EVENTS:
+            raise ValueError("Too many expanded events")
+        prepared.append((component, expanded))
     existing = {
         ev.uid: ev
         for ev in session.scalars(
@@ -104,8 +129,7 @@ def import_ics(
         )
     }
     result = ImportResult()
-    for component in calendar.walk("VEVENT"):
-        expanded = _expand(component, tz, now)
+    for component, expanded in prepared:
         if not expanded:
             result.skipped += 1
             continue
@@ -134,3 +158,9 @@ def import_ics(
                 result.added += 1
     session.flush()
     return result
+
+
+def import_ics(session, user_id, content, tz, now=None):
+    # Savepoint keeps the entire import atomic even if a caller catches errors.
+    with session.begin_nested():
+        return _import_ics(session, user_id, content, tz, now)

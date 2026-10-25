@@ -1,62 +1,63 @@
 from __future__ import annotations
 
-import urllib.request
+from contextlib import contextmanager
+import logging
+from goalcal.safe_fetch import fetch_ics
 from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 import streamlit as st
 from sqlalchemy import select
 
-from goalcal import agent, metrics
+from goalcal import agent, metrics, feedback, telemetry
 from goalcal.config import settings
-from goalcal.db import get_engine, init_db, session_scope
+from goalcal.db import init_db
+from goalcal import tenancy, auth
+from goalcal.ui.auth import require_login, clear_state
+from goalcal.logging_setup import configure_logging
 from goalcal.domain import calendar_service as cal
 from goalcal.domain import goals as goal_svc
 from goalcal.domain import ics_import, planner
-from goalcal.models import Base, Event, Goal, Step
-from goalcal.seed import seed_if_empty
+from goalcal.models import Event, Goal, Step
 from goalcal.timeutil import as_local, as_utc_naive, local_now
 from goalcal.ui import calendar_view, chat as chat_ui, progress
 
 st.set_page_config(page_title="GoalCal", page_icon="📆", layout="wide")
-init_db()
-TZ = settings.tz
+configure_logging()
+try:
+    init_db()
+except Exception as exc:
+    logging.getLogger('goalcal').error('startup_failed error_type=%s', type(exc).__name__)
+    st.error('数据库初始化失败，服务尚未启动。请查看本机管理日志并检查迁移备份。')
+    st.stop()
+principal = require_login()
+TZ = principal.tz
 ZONE = ZoneInfo(TZ)
 
-def _reset_demo() -> None:
-    Base.metadata.drop_all(get_engine())
-    Base.metadata.create_all(get_engine())
-    with session_scope() as s:
-        seed_if_empty(s, TZ)
-    for key in (
-        "messages", "pending", "user_id", "selected_event_id",
-        "confirm_delete_id", "new_event_start", "_cal_sig", "flash", "goal_brief",
-        "checkin_context", "replan_draft",
-    ):
-        st.session_state.pop(key, None)
+@contextmanager
+def session_scope(operation="dashboard.load"):
+    operation_id = None
+    try:
+        with telemetry.operation(operation, principal.user_id) as operation_id:
+            with tenancy.session_scope(st.session_state.get("auth_token")) as session:
+                yield session
+    except auth.AuthError:
+        clear_state()
+        st.rerun(scope="app")
+    except Exception as exc:
+        st.session_state['last_error_id'] = operation_id
+        st.error(f'操作未完成，本次更改已回滚。问题编号：{operation_id}。可在侧栏提交反馈。')
+        st.stop()
 
 
 def _ensure_state() -> None:
-    if st.session_state.get("user_id"):
-        return
-    with session_scope() as s:
-        user = seed_if_empty(s, TZ)
-        st.session_state["user_id"] = user.id
-    if "messages" not in st.session_state:
-        st.session_state["messages"] = [
-            {
-                "role": "assistant",
-                "content": "Hi — tell me a goal, or click **Find time** on a goal step. "
-                "Not sure? Try a quick action below.",
-            }
-        ]
-    st.session_state.setdefault("pending", None)
-    st.session_state.setdefault("goal_brief", None)
-    st.session_state.setdefault("checkin_context", None)
+    st.session_state.setdefault("messages", [{"role": "assistant", "content": "Hi — tell me a goal, or add something to your calendar."}])
+    for key in ("pending", "goal_brief", "checkin_context"):
+        st.session_state.setdefault(key, None)
 
 
 def _now() -> datetime:
-    return local_now(TZ) + timedelta(days=st.session_state.get("day_offset", 0))
+    return local_now(TZ)
 
 
 def _flash(message: str) -> None:
@@ -74,7 +75,7 @@ def _start_checkin_if_needed() -> None:
         or st.session_state.get("goal_brief") is not None
     ):
         return
-    with session_scope() as s:
+    with session_scope("start_checkin_if_needed") as s:
         ctx, question = agent.begin_checkin(s, st.session_state["user_id"], _now(), TZ)
     if ctx is not None:
         st.session_state["checkin_context"] = ctx
@@ -107,7 +108,7 @@ def _run_turn(text: str) -> None:
         st.session_state["goal_brief"] = None
     ctx = st.session_state.get("checkin_context")
     follow_up = None
-    with session_scope() as s:
+    with session_scope("run_turn") as s:
         with st.spinner("Thinking…"):
             if brief is not None:
                 reply = agent.continue_goal(
@@ -141,7 +142,7 @@ def _run_turn(text: str) -> None:
 
 
 def _accept(step_id: int, candidate) -> None:
-    with session_scope() as s:
+    with session_scope("accept") as s:
         msg = agent.accept(s, st.session_state["user_id"], step_id, candidate, _now(), TZ)
     st.session_state["messages"].append({"role": "assistant", "content": msg})
     st.session_state["pending"] = None
@@ -150,7 +151,7 @@ def _accept(step_id: int, candidate) -> None:
 
 
 def _accept_batch(batch: list[dict]) -> None:
-    with session_scope() as s:
+    with session_scope("accept_batch") as s:
         msg = agent.accept_batch(s, st.session_state["user_id"], batch, _now(), TZ)
     st.session_state["messages"].append({"role": "assistant", "content": msg})
     st.session_state["pending"] = None
@@ -158,8 +159,12 @@ def _accept_batch(batch: list[dict]) -> None:
     st.rerun()
 
 
-def _dismiss_pending() -> None:
+def _clear_pending() -> None:
     st.session_state["pending"] = None
+
+
+def _dismiss_pending() -> None:
+    _clear_pending()
     st.rerun()
 
 
@@ -188,7 +193,7 @@ def _chip_window(chip: str, now: datetime) -> tuple[datetime, datetime] | None:
 def _refilter_pending(step_id: int, chip: str) -> None:
     """chip 窗口内重新 propose 同一步骤；窗口内无候选则保留原候选并提示。"""
     window = _chip_window(chip, _now())
-    with session_scope() as s:
+    with session_scope("refilter_pending") as s:
         candidates, _ = agent.propose_for_step(
             s, st.session_state["user_id"], step_id, _now(), TZ, window=window
         )
@@ -201,7 +206,7 @@ def _refilter_pending(step_id: int, chip: str) -> None:
 
 def _accept_recovery(step_id: int, candidate) -> None:
     ctx = st.session_state.get("checkin_context")
-    with session_scope() as s:
+    with session_scope("accept_recovery") as s:
         reply = agent.accept_recovery(
             s, st.session_state["user_id"], ctx, candidate, _now(), TZ
         )
@@ -218,7 +223,7 @@ def _accept_recovery(step_id: int, candidate) -> None:
 
 def _dismiss_recovery() -> None:
     ctx = st.session_state.get("checkin_context")
-    with session_scope() as s:
+    with session_scope("dismiss_recovery") as s:
         reply = agent.decline_recovery(s, st.session_state["user_id"], ctx, _now(), TZ)
     st.session_state["checkin_context"] = reply.checkin_context
     st.session_state["messages"].append({"role": "assistant", "content": reply.text})
@@ -234,7 +239,7 @@ def _dismiss_recovery() -> None:
 
 
 def _schedule_step(step_id: int) -> None:
-    with session_scope() as s:
+    with session_scope("schedule_step") as s:
         candidates, step = agent.propose_for_step(
             s, st.session_state["user_id"], step_id, _now(), TZ
         )
@@ -252,7 +257,7 @@ def _schedule_step(step_id: int) -> None:
 
 
 def _complete_step(step_id: int) -> None:
-    with session_scope() as s:
+    with session_scope("complete_step") as s:
         step = s.get(Step, step_id)
         if step is None or step.status == "done":
             return
@@ -270,7 +275,7 @@ def _complete_step(step_id: int) -> None:
 
 
 def _unschedule_step(step_id: int, event_id: int) -> None:
-    with session_scope() as s:
+    with session_scope("unschedule_step") as s:
         ev = s.get(Event, event_id)
         if ev is not None:
             cal.delete_event(s, ev)
@@ -279,7 +284,7 @@ def _unschedule_step(step_id: int, event_id: int) -> None:
 
 
 def _add_step(goal_id: int, title: str, minutes: int, energy: int, kind: str) -> None:
-    with session_scope() as s:
+    with session_scope("add_step") as s:
         goal = s.get(Goal, goal_id)
         if goal is None:
             return
@@ -297,7 +302,7 @@ def _edit_step(
     energy: int,
     kind: str,
 ) -> None:
-    with session_scope() as s:
+    with session_scope("edit_step") as s:
         step = s.get(Step, step_id)
         if step is None:
             return
@@ -317,7 +322,7 @@ def _edit_step(
 
 
 def _delete_step(step_id: int) -> None:
-    with session_scope() as s:
+    with session_scope("delete_step") as s:
         step = s.get(Step, step_id)
         if step is None:
             return
@@ -335,14 +340,14 @@ def _create_goal_ui(title: str, deadline, with_template: bool) -> None:
     if with_template:
         brief = planner.assess(title, deadline, title, today=now.date())
         brief = planner.fill_defaults(brief, today=now.date())
-        with session_scope() as s:
+        with session_scope("create_goal_ui") as s:
             with st.spinner("Planning steps…"):
                 _, source = agent.create_goal_from_brief(
                     s, st.session_state["user_id"], brief, now, TZ
                 )
         kind = "AI-plan" if source == "llm" else "template"
     else:
-        with session_scope() as s:
+        with session_scope("create_goal_ui") as s:
             goal_svc.create_goal(
                 s,
                 st.session_state["user_id"],
@@ -356,7 +361,7 @@ def _create_goal_ui(title: str, deadline, with_template: bool) -> None:
 
 
 def _archive_goal(goal_id: int) -> None:
-    with session_scope() as s:
+    with session_scope("archive_goal") as s:
         goal = s.get(Goal, goal_id)
         if goal is None:
             return
@@ -393,7 +398,7 @@ def _preview_replan(goal_id: int, instruction: str) -> None:
         )
         st.rerun()
         return
-    with session_scope() as s:
+    with session_scope("preview_replan") as s:
         goal = s.get(Goal, goal_id)
         if goal is None:
             return
@@ -422,7 +427,7 @@ def _apply_replan(goal_id: int) -> None:
     draft = st.session_state.get("replan_draft")
     if not draft or draft.get("goal_id") != goal_id:
         return
-    with session_scope() as s:
+    with session_scope("apply_replan") as s:
         goal = s.get(Goal, goal_id)
         if goal is None:
             return
@@ -473,25 +478,28 @@ def _blocks_by_step(session, user_id: int, step_ids: list[int]) -> dict[int, dic
     return out
 
 
+def _dismiss_calendar_dialog() -> None:
+    calendar_view.dismiss_dialog(st.session_state)
+
+
 def _delete_calendar_event(event_id: int) -> None:
-    with session_scope() as s:
+    with session_scope("delete_calendar_event") as s:
         ev = s.get(Event, event_id)
         title = ev.title if ev is not None else ""
         if ev is not None:
             cal.delete_event(s, ev)
-    st.session_state["selected_event_id"] = None
-    st.session_state["confirm_delete_id"] = None
+    _dismiss_calendar_dialog()
     _flash(f"Deleted “{title}”." if title else "Event already gone.")
     st.rerun()
 
 
 def _create_quick_event(title: str, start: datetime, minutes: int) -> None:
-    with session_scope() as s:
+    with session_scope("create_quick_event") as s:
         cal.create_event(
             s, st.session_state["user_id"], title, start,
             start + timedelta(minutes=minutes), source="ui", tz=TZ,
         )
-    st.session_state["new_event_start"] = None
+    _dismiss_calendar_dialog()
     _flash(f"Added “{title}” on {start:%a %b %d, %H:%M}.")
     st.rerun()
 
@@ -499,9 +507,9 @@ def _create_quick_event(title: str, start: datetime, minutes: int) -> None:
 # ---------------------------------------------------------------- calendar dialogs
 
 
-@st.dialog("Event details")
+@st.dialog("Event details", on_dismiss=_dismiss_calendar_dialog)
 def _event_detail_dialog(event_id: int) -> None:
-    with session_scope() as s:
+    with session_scope("event_detail_dialog") as s:
         row = s.get(Event, event_id)
         detail = None
         if row is not None:
@@ -522,7 +530,7 @@ def _event_detail_dialog(event_id: int) -> None:
     if detail is None:
         st.info("That event is already gone.")
         if st.button("Close", key=f"close_gone_{event_id}", use_container_width=True):
-            st.session_state["selected_event_id"] = None
+            _dismiss_calendar_dialog()
             st.rerun()
         return
     st.markdown(f"**{detail['title']}**")
@@ -546,11 +554,11 @@ def _event_detail_dialog(event_id: int) -> None:
             st.session_state["confirm_delete_id"] = event_id
             st.rerun()
         if close.button("Close", key=f"close_{event_id}", use_container_width=True):
-            st.session_state["selected_event_id"] = None
+            _dismiss_calendar_dialog()
             st.rerun()
 
 
-@st.dialog("New event")
+@st.dialog("New event", on_dismiss=_dismiss_calendar_dialog)
 def _new_event_dialog(start: datetime) -> None:
     with st.form("new_event_form", clear_on_submit=True):
         title = st.text_input("Title", placeholder="e.g. Coffee with Amy")
@@ -560,7 +568,7 @@ def _new_event_dialog(start: datetime) -> None:
             "Add event", use_container_width=True, type="primary"
         )
     if st.button("Cancel", key="cancel_new_event", use_container_width=True):
-        st.session_state["new_event_start"] = None
+        _dismiss_calendar_dialog()
         st.rerun()
     if submitted:
         if not title.strip():
@@ -570,7 +578,7 @@ def _new_event_dialog(start: datetime) -> None:
             _create_quick_event(title.strip(), picked, int(minutes))
 
 
-@st.dialog("Suggested slots")
+@st.dialog("Suggested slots", on_dismiss=_clear_pending)
 def _slots_dialog() -> None:
     """候选时段悬浮框：chat / goal / recovery / batch 都走这里，不占栏内空间。"""
     pending = st.session_state.get("pending")
@@ -598,17 +606,10 @@ _start_checkin_if_needed()
 # ---------------------------------------------------------------- sidebar
 
 with st.sidebar:
-    st.subheader("Time machine")
-    st.slider(
-        "Days ahead", 0, 14, 0,
-        help="Reminders and rescheduling are time-triggered — use this to fast-forward during the demo.",
-        key="day_offset",
-    )
-    st.caption(f"Now: {_now():%a %b %d, %H:%M}")
-    if settings.db_url.startswith("sqlite") and st.button(
-        "Reset demo data", use_container_width=True
-    ):
-        _reset_demo()
+    st.caption(f"{principal.username} · {TZ}")
+    if st.button("退出登录"):
+        auth.logout(st.session_state.get("auth_token"))
+        clear_state()
         st.rerun()
 
     with st.expander("Import my calendar (.ics)", expanded=False):
@@ -620,24 +621,39 @@ with st.sidebar:
                 if uploaded is not None:
                     content = uploaded.getvalue()
                 elif url.strip():
-                    with urllib.request.urlopen(url.strip(), timeout=15) as resp:
-                        content = resp.read()
+                    content = fetch_ics(url.strip())
             except Exception as exc:
-                _flash(f"Couldn't fetch that calendar: {exc}")
+                _flash("无法下载日历：请检查公开 HTTP/HTTPS 地址、大小及网络连接。")
                 st.rerun()
             if content is None:
                 _flash("Pick an .ics file or paste a URL first.")
                 st.rerun()
             try:
-                with session_scope() as s:
+                with session_scope("ics.import") as s:
                     result = ics_import.import_ics(s, st.session_state["user_id"], content, TZ)
                 _flash(
                     f"Imported: {result.added} added · "
                     f"{result.updated} updated · {result.skipped} skipped"
                 )
             except Exception as exc:
-                _flash(f"Import failed: {exc}")
+                _flash("导入失败：文件无效或超过大小、事件数、重复规则限制；本次导入已回滚。")
             st.rerun()
+
+    with st.expander("反馈问题 / 建议", expanded=False):
+        st.caption("反馈会保存在本机并供维护者查看；聊天正文不会自动加入运行日志。")
+        with st.form("trial_feedback", clear_on_submit=True):
+            feedback_category = st.selectbox("问题类型", feedback.CATEGORIES, key="feedback_category")
+            feedback_message = st.text_area("发生了什么？希望怎样改进？", max_chars=2000,
+                                            help="可描述操作步骤、预期和实际结果；请勿填写密码或密钥。")
+            feedback_sent = st.form_submit_button("提交反馈")
+        if feedback_sent:
+            if len(feedback_message.strip()) < 5:
+                st.warning("请填写至少 5 个字符的反馈。")
+            else:
+                with session_scope("feedback.submit") as s:
+                    feedback_id = feedback.submit(s, feedback_category, feedback_message,
+                                                  st.session_state.get("last_error_id"))
+                st.success(f"反馈已保存，编号 #{feedback_id}。谢谢！")
 
     st.divider()
     st.subheader("How do you feel")
@@ -653,8 +669,8 @@ with st.sidebar:
             st.rerun()
 
     st.divider()
-    st.subheader("Metrics (last 7 days, simulated)")
-    with session_scope() as s:
+    st.subheader("Metrics (last 7 days)")
+    with session_scope("metrics.read") as s:
         uid = st.session_state["user_id"]
         acc = metrics.acceptance_rate(s, uid, _now())
         rec = metrics.recovery_rate_72h(s, uid, _now())
@@ -720,19 +736,26 @@ with cal_col:
     now_local = _now()
     start_utc = as_utc_naive(now_local - timedelta(days=7), TZ)
     end_utc = as_utc_naive(now_local + timedelta(days=28), TZ)
-    with session_scope() as s:
+    with session_scope("calendar.read") as s:
         events = cal.events_between(s, st.session_state["user_id"], start_utc, end_utc)
         fc_events = cal.to_fullcalendar(events, TZ)
 
     # 日历底部与左右两栏（容器 620 + 下方输入框/按钮约 60px）对齐
-    state = calendar_view.render(fc_events, height=680, initial_date=now_local.date().isoformat())
+    state = calendar_view.render(
+        fc_events, height=680, tz=TZ,
+        initial_date=st.session_state.get("_calendar_date", now_local.date().isoformat()),
+        initial_view=st.session_state.get("_calendar_view", "timeGridWeek"),
+        key=f"goalcal_calendar_{st.session_state.get('_calendar_generation', 0)}",
+    )
     if state:
         signature = repr(state)
         if signature != st.session_state.get("_cal_sig"):
             st.session_state["_cal_sig"] = signature
+            calendar_view.remember_view(st.session_state, state)
             callback = state.get("callback")
 
             if callback == "eventClick":
+                _clear_pending()
                 st.session_state["selected_event_id"] = int(
                     state["eventClick"]["event"]["id"]
                 )
@@ -740,8 +763,10 @@ with cal_col:
                 st.session_state["new_event_start"] = None
 
             elif callback == "dateClick":
+                _clear_pending()
+                st.session_state["confirm_delete_id"] = None
                 info = state["dateClick"]
-                picked = datetime.fromisoformat(info["date"])
+                picked = calendar_view.calendar_wall_time(info["date"], TZ)
                 if picked.tzinfo is None:
                     picked = picked.replace(tzinfo=ZONE)
                 picked = picked.astimezone(ZONE)
@@ -752,9 +777,9 @@ with cal_col:
 
             elif callback == "eventChange":
                 moved = state["eventChange"]["event"]
-                start = datetime.fromisoformat(moved["start"])
-                end = datetime.fromisoformat(moved["end"])
-                with session_scope() as s:
+                start = calendar_view.calendar_wall_time(moved["start"], TZ)
+                end = calendar_view.calendar_wall_time(moved["end"], TZ)
+                with session_scope("calendar.move") as s:
                     row = s.get(Event, int(moved["id"]))
                     if row is not None:
                         row.start_utc = as_utc_naive(start, TZ)
@@ -773,7 +798,7 @@ with cal_col:
 
 with goals_col:
     st.subheader("Goals")
-    with session_scope() as s:
+    with session_scope("goals.read") as s:
         goals = goal_svc.active_goals(s, st.session_state["user_id"])
         step_ids = [step.id for goal in goals for step in goal.steps]
         blocks = _blocks_by_step(s, st.session_state["user_id"], step_ids)

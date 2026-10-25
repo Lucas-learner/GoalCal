@@ -7,6 +7,11 @@ textColor = "#0f172a"
 
 [server]
 headless = true
+address = "127.0.0.1"
+port = 8501
+enableXsrfProtection = true
+enableCORS = true
+maxUploadSize = 5
 
 [browser]
 gatherUsageStats = false

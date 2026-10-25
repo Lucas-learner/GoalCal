@@ -3,7 +3,7 @@ PY ?= python
 .PHONY: install run test eval reset fmt
 
 install:
-	$(PY) -m pip install -r requirements.txt
+	$(PY) -m pip install -r requirements.lock
 
 run:
 	$(PY) -m streamlit run app.py

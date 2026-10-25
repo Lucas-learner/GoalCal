@@ -18,3 +18,10 @@ bench/*.log
 # IDE
 .idea/
 .vscode/
+
+var/
+*.db-wal
+*.db-shm
+*.log
+.env.production
+deploy/generated/

@@ -58,7 +58,7 @@ def _llm_defs(goal: Goal, step: Step) -> list[dict[str, Any]] | None:
         ]
         defs = [d for d in defs if d["title"]]
     except Exception as exc:  # noqa: BLE001 - 细化失败必须能回退
-        log.warning("LLM 细化失败(%s)，回退规则拆解", exc)
+        log.warning("LLM fallback or validation failure")
         return None
     return defs[:3] if len(defs) >= 2 else None
 
@@ -163,7 +163,7 @@ def _upcoming_llm_defs(session: Session, goal: Goal) -> list[dict[str, Any]] | N
         ]
         defs = [d for d in defs if d["title"]]
     except Exception as exc:  # noqa: BLE001 - 细化失败必须能回退
-        log.warning("LLM 滚动细化失败(%s)，回退模板/规则", exc)
+        log.warning("LLM fallback or validation failure")
         return None
     return defs[:3] if defs else None
 
@@ -171,7 +171,21 @@ def _upcoming_llm_defs(session: Session, goal: Goal) -> list[dict[str, Any]] | N
 def _template_upcoming_defs(goal: Goal) -> list[dict[str, Any]]:
     """模板目标按模板顺序取下一批（模板步骤本来有序，天然适合滚动）。"""
     if goal.template_key not in TEMPLATES:
-        return []
+        # AI-created outlines still need a usable next phase when the provider
+        # is unavailable, over quota, or this transaction already holds a write
+        # lock. Instantiate each remaining phase once, without inventing detail.
+        existing = {step.milestone for step in goal.steps}
+        phase = next((name for name in outline_phases(goal) if name not in existing), None)
+        if not phase:
+            return []
+        return [
+            {"milestone": phase, "title": f"Define the next action for {phase}"[:200],
+             "outcome": "Write one concrete action and its completion criterion",
+             "est_min": 15, "energy": 1, "kind": "admin"},
+            {"milestone": phase, "title": f"Complete a first action for {phase}"[:200],
+             "outcome": "Record the result and what needs to happen next",
+             "est_min": 30, "energy": 1, "kind": "deep"},
+        ]
     full = full_steps(goal.template_key)
     used = {s.title for s in goal.steps}
     idx = 0

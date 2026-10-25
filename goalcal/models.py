@@ -16,6 +16,9 @@ class User(Base):
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    username: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    password_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    disabled: Mapped[bool] = mapped_column(Boolean, default=False)
     name: Mapped[str] = mapped_column(String(80), default="demo")
     tz: Mapped[str] = mapped_column(String(64), default="Asia/Shanghai")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)

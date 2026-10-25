@@ -3,10 +3,10 @@ from __future__ import annotations
 import difflib
 from datetime import datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import select, update, delete
 from sqlalchemy.orm import Session
 
-from ..models import Event
+from ..models import Event, Step, Checkin, Interaction, RescheduleLog
 from ..timeutil import as_local, as_utc_naive, now_utc as _utcnow
 from .scheduler import BusyBlock
 
@@ -23,6 +23,10 @@ def create_event(
     step_id: int | None = None,
     tz: str = "Asia/Shanghai",
 ) -> Event:
+    if step_id is not None:
+        step = session.get(Step, step_id)
+        if step is None or step.goal.user_id != user_id:
+            raise ValueError("Step is unavailable")
     if end <= start:
         # LLM 偶尔会给出 end <= start；兜底成 1 小时，避免写入非法事件
         end = start + timedelta(minutes=60)
@@ -108,6 +112,10 @@ def move_event(session: Session, event: Event, new_start: datetime, tz: str) -> 
 
 def delete_event(session: Session, event: Event) -> None:
     """硬删事件。scheduled 由未来目标块推导，步骤状态无需回写。"""
+    session.execute(update(Checkin).where(Checkin.event_id == event.id).values(event_id=None))
+    session.execute(update(Interaction).where(Interaction.event_id == event.id).values(event_id=None))
+    session.execute(update(RescheduleLog).where(RescheduleLog.new_event_id == event.id).values(new_event_id=None))
+    session.execute(delete(RescheduleLog).where(RescheduleLog.event_id == event.id))
     session.delete(event)
     session.flush()
 

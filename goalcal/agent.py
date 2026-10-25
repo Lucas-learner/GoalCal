@@ -96,10 +96,6 @@ def handle(
     tz: str = "Asia/Shanghai",
 ) -> Reply:
     action, parser = parse(text, now)
-    metrics.record(
-        session, user_id, metrics.PARSE, now,
-        payload={"parser": parser, "intent": action.intent},
-    )
     handler = {
         "add_event": _add_event,
         "move_event": _move_event,
@@ -119,7 +115,12 @@ def handle(
         return Reply(text, action, parser)
     if action.intent in RISKY_INTENTS and action.confidence < CONFIRM_THRESHOLD:
         return Reply(_confirm_text(action), action, parser)
-    return handler(session, user_id, action, now, tz, parser)
+    reply = handler(session, user_id, action, now, tz, parser)
+    metrics.record(
+        session, user_id, metrics.PARSE, now,
+        payload={"parser": parser, "intent": action.intent},
+    )
+    return reply
 
 
 # ------------------------------------------------------------------ handlers
@@ -765,7 +766,7 @@ def propose_for_step(
 ) -> tuple[list[Candidate], Step | None]:
     """给 UI 的“找时间”按钮用：为指定步骤生成候选；给了 window 就只在该窗口内找。"""
     step = session.get(Step, step_id)
-    if step is None or step.status == "done":
+    if step is None or step.goal.user_id != user_id or step.status == "done":
         return [], step
     return _propose(session, user_id, step, now, tz, step.goal.deadline, days, window=window), step
 
@@ -775,7 +776,7 @@ def accept(
     now: datetime, tz: str,
 ) -> str:
     step = session.get(Step, step_id)
-    if step is None:
+    if step is None or step.goal.user_id != user_id:
         return "That step no longer exists."
     if step.status == "done":
         return f"“{step.title}” is already done — nothing to book."
@@ -808,7 +809,7 @@ def accept_batch(
     booked = 0
     for item in batch:
         step = session.get(Step, item["step_id"])
-        if step is None or step.status == "done":
+        if step is None or step.goal.user_id != user_id or step.status == "done":
             continue
         cal.cancel_blocks(session, step.id)
         cal.create_event(

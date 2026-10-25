@@ -289,10 +289,13 @@ def test_refine_upcoming_template_continuation(session, user):
     assert min(s.seq for s in created) == 3
 
 
-def test_refine_upcoming_returns_empty_without_llm_and_template(session, user):
+def test_refine_upcoming_uses_outline_without_llm_and_template(session, user):
     goal = _goal_with_defs(session, user, [("M", "唯一步骤", 30)], outline=["M", "N"])
     goal_svc.complete_step(session, goal.steps[0])
 
+    created = refine.refine_upcoming(session, goal)
+    assert len(created) == 2
+    assert all(step.milestone == "N" for step in created)
     assert refine.refine_upcoming(session, goal) == []
 
 

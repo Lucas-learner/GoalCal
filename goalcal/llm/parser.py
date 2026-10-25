@@ -51,12 +51,12 @@ def parse(
                 if action.intent == "create_goal":
                     guard = parse_with_rules(text, now)
                     if guard.intent == "delete_goal":
-                        log.info("LLM 把删目标读成建目标，改用规则结果: %s", text)
+                        log.warning("LLM fallback or validation failure")
                         return guard.normalized(now), "rules:guard"
                 return action.normalized(now), f"llm:{PROMPT_VERSION}"
-            log.warning("LLM 输出为空，回落规则解析: %s", text)
+            log.warning("LLM fallback or validation failure")
         except Exception as exc:  # noqa: BLE001 - 兜底优先，不能让对话崩
-            log.warning("LLM 解析失败(%s)，回落规则解析: %s", exc, text)
+            log.warning("LLM fallback or validation failure")
     return parse_with_rules(text, now).normalized(now), "rules:v1"
 
 
@@ -93,14 +93,14 @@ def _reconcile_dates(action: Action, text: str, now: datetime) -> Action:
 
 def _parse_with_llm(text: str, now: datetime) -> Action | None:
     client = LLMClient()
-    system = build_system(now.isoformat(), settings.tz, now.strftime("%A"))
+    system = build_system(now.isoformat(), str(now.tzinfo or "Asia/Shanghai"), now.strftime("%A"))
     data = client.complete_json(system, text)
     if not data:
         return None
     try:
         action = Action.model_validate(data)
     except ValidationError as exc:
-        log.info("结构化输出校验失败: %s", exc)
+        log.warning("LLM fallback or validation failure")
         return None
     action.raw = text
     return action
