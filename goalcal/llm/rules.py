@@ -30,7 +30,10 @@ ADD_MARKERS = re.compile(
     r"帮我(加|安排|建|创建)|帮忙(加|安排)|添加|安排一个|加一个",
     re.I,
 )
-MOVE_MARKERS = re.compile(r"\b(move|reschedule|shift|push|postpone)\b|改到|移到|挪到|推迟|提前", re.I)
+MOVE_MARKERS = re.compile(
+    r"\b(move|reschedule|shift|push|postpone)\b|\bdo\b[^.?!]*\binstead\b|改到|移到|挪到|推迟|提前",
+    re.I,
+)
 DELETE_MARKERS = re.compile(r"\b(delete|cancel|remove|drop)\b|删除|删掉|取消|去掉", re.I)
 DELETE_GOAL_MARKERS = re.compile(
     r"\b(delete|remove|archive|cancel|drop)\b.*\bgoals?\b|"
@@ -39,7 +42,7 @@ DELETE_GOAL_MARKERS = re.compile(
     re.I,
 )
 QUERY_MARKERS = re.compile(
-    r"\b(what do i have|what'?s on|show|list|am i free|free time|my schedule|do i have)\b|"
+    r"\b(what do i have|what'?s on|what'?s my day look like|show|list|am i free|free time|my schedule|do i have)\b|"
     r"我有什么|有什么安排|有啥安排|有空|空闲|日程",
     re.I,
 )

@@ -18,84 +18,93 @@ def _step_actions(
     on_delete_step,
     on_edit_step=None,
 ) -> None:
-    """一行步骤的操作按钮；图标 + 悬浮提示，大小一致；prefix 保证同一页面里 key 唯一。"""
-    cols = st.columns(5)
+    """高频操作直接显示，其余收进 More；prefix 保证同一页面里 key 唯一。"""
+    cols = st.columns(3)
     if on_schedule is not None and cols[0].button(
-        "📅" if block is None else "🔄",
+        "Find time" if block is None else "Reschedule",
         key=f"{prefix}_find_{step.id}",
-        help="Find time" if block is None else "Reschedule",
         use_container_width=True,
     ):
         on_schedule(step.id)
     if on_complete is not None and cols[1].button(
-        "✅",
+        "Complete",
         key=f"{prefix}_done_{step.id}",
-        help="Mark done",
         use_container_width=True,
     ):
         on_complete(step.id)
-    if block is not None and on_unschedule is not None and cols[2].button(
-        "✕",
-        key=f"{prefix}_cancel_{step.id}",
-        help="Cancel block",
-        use_container_width=True,
-    ):
-        on_unschedule(step.id, block["id"])
-    if on_edit_step is not None:
-        with cols[3].popover("✏️", help="Edit step"):
-            with st.form(f"{prefix}_edit_{step.id}"):
-                title = st.text_input(
-                    "Title", value=step.title, key=f"{prefix}_edit_title_{step.id}"
-                )
-                milestone = st.text_input(
-                    "Milestone",
-                    value=step.milestone,
-                    key=f"{prefix}_edit_milestone_{step.id}",
-                )
-                outcome = st.text_input(
-                    "Done looks like",
-                    value=step.outcome or "",
-                    key=f"{prefix}_edit_outcome_{step.id}",
-                )
-                c1, c2, c3 = st.columns(3)
-                minutes = c1.number_input(
-                    "Minutes",
-                    min_value=5,
-                    max_value=240,
-                    value=int(step.est_min),
-                    step=5,
-                    key=f"{prefix}_edit_min_{step.id}",
-                )
-                energy = c2.selectbox(
-                    "Energy",
-                    [0, 1, 2],
-                    index=max(0, min(int(step.energy), 2)),
-                    key=f"{prefix}_edit_energy_{step.id}",
-                )
-                kind = c3.selectbox(
-                    "Type",
-                    KINDS,
-                    index=KINDS.index(step.kind) if step.kind in KINDS else 0,
-                    key=f"{prefix}_edit_kind_{step.id}",
-                )
-                if st.form_submit_button("Save changes", use_container_width=True):
-                    if title.strip():
-                        on_edit_step(
-                            step.id,
-                            title.strip(),
-                            milestone,
-                            outcome,
-                            int(minutes),
-                            int(energy),
-                            kind,
-                        )
-                    else:
-                        st.warning("Give the step a title first.")
-    if on_delete_step is not None:
-        with cols[4].popover("🗑", help="Delete step"):
-            st.caption("This also removes its check-ins and future blocks.")
-            if st.button("Confirm delete", key=f"{prefix}_del_{step.id}", use_container_width=True):
-                on_delete_step(step.id)
+    has_more = (
+        (block is not None and on_unschedule is not None)
+        or on_edit_step is not None
+        or on_delete_step is not None
+    )
+    if has_more:
+        with cols[2].popover(
+            "More", key=f"{prefix}_more_{step.id}", use_container_width=True
+        ):
+            if block is not None and on_unschedule is not None and st.button(
+                "Cancel block",
+                key=f"{prefix}_cancel_{step.id}",
+                use_container_width=True,
+            ):
+                on_unschedule(step.id, block["id"])
+            if on_edit_step is not None:
+                st.markdown("**Edit step**")
+                with st.form(f"{prefix}_edit_{step.id}"):
+                    title = st.text_input(
+                        "Title", value=step.title, key=f"{prefix}_edit_title_{step.id}"
+                    )
+                    milestone = st.text_input(
+                        "Milestone",
+                        value=step.milestone,
+                        key=f"{prefix}_edit_milestone_{step.id}",
+                    )
+                    outcome = st.text_input(
+                        "Done looks like",
+                        value=step.outcome or "",
+                        key=f"{prefix}_edit_outcome_{step.id}",
+                    )
+                    c1, c2, c3 = st.columns(3)
+                    minutes = c1.number_input(
+                        "Minutes",
+                        min_value=5,
+                        max_value=240,
+                        value=int(step.est_min),
+                        step=5,
+                        key=f"{prefix}_edit_min_{step.id}",
+                    )
+                    energy = c2.selectbox(
+                        "Energy",
+                        [0, 1, 2],
+                        index=max(0, min(int(step.energy), 2)),
+                        key=f"{prefix}_edit_energy_{step.id}",
+                    )
+                    kind = c3.selectbox(
+                        "Type",
+                        KINDS,
+                        index=KINDS.index(step.kind) if step.kind in KINDS else 0,
+                        key=f"{prefix}_edit_kind_{step.id}",
+                    )
+                    if st.form_submit_button("Save changes", use_container_width=True):
+                        if title.strip():
+                            on_edit_step(
+                                step.id,
+                                title.strip(),
+                                milestone,
+                                outcome,
+                                int(minutes),
+                                int(energy),
+                                kind,
+                            )
+                        else:
+                            st.warning("Give the step a title first.")
+            if on_delete_step is not None:
+                st.markdown("**Delete step**")
+                st.caption("This also removes its check-ins and future blocks.")
+                if st.button(
+                    "Confirm delete", key=f"{prefix}_del_{step.id}",
+                    use_container_width=True,
+                ):
+                    on_delete_step(step.id)
 
 
 def render_goal(
@@ -137,12 +146,12 @@ def render_goal(
         if nxt is not None:
             block = blocks_by_step.get(nxt.id)
             st.markdown(f"**Next:** {nxt.title}")
-            detail = f"{nxt.est_min} min · {nxt.kind} · energy {nxt.energy}/2"
+            detail = f"{nxt.est_min} min"
             if block is not None:
                 detail += f" · 📌 {block['start']:%a %b %d, %H:%M}"
             st.caption(detail)
             _step_actions(
-                nxt, block, "next", on_schedule, on_complete, on_unschedule,
+                nxt, block, f"next_{goal['id']}", on_schedule, on_complete, on_unschedule,
                 on_delete_step, on_edit_step,
             )
         elif goal["total"] == 0:
@@ -179,7 +188,7 @@ def render_goal(
                     st.markdown(line)
                     if s.status == "todo":
                         _step_actions(
-                            s, block, "all", on_schedule, on_complete, on_unschedule,
+                            s, block, f"all_{goal['id']}", on_schedule, on_complete, on_unschedule,
                             on_delete_step, on_edit_step,
                         )
 
@@ -208,23 +217,34 @@ def render_goal(
                         else:
                             st.warning("Give the step a title first.")
 
-        if on_preview_replan is not None:
-            with st.popover("🔄 Adjust plan with AI", use_container_width=True):
-                st.caption(
-                    "Not a reroll. Describe what should change, preview the revised plan, "
-                    "and apply it only if it fits. Blank requests are ignored."
-                )
-                with st.form(f"replan_form_{goal['id']}"):
-                    instruction = st.text_area(
-                        "What should change?",
-                        placeholder="e.g. Finer-grained steps focused on problem sets; cap each step at 30 min",
-                        height=78,
-                        key=f"replan_instruction_{goal['id']}",
+        if on_preview_replan is not None or on_archive_goal is not None:
+            with st.popover(
+                "Manage goal", key=f"manage_goal_{goal['id']}", use_container_width=True
+            ):
+                if on_preview_replan is not None:
+                    st.markdown("**Adjust plan with AI**")
+                    st.caption(
+                        "Describe a change, then preview before applying. Blank requests are ignored."
                     )
-                    if st.form_submit_button(
-                        "Preview revised plan", use_container_width=True
+                    with st.form(f"replan_form_{goal['id']}"):
+                        instruction = st.text_area(
+                            "What should change?",
+                            placeholder="e.g. Finer-grained steps focused on problem sets; cap each step at 30 min",
+                            height=78,
+                            key=f"replan_instruction_{goal['id']}",
+                        )
+                        if st.form_submit_button(
+                            "Preview revised plan", use_container_width=True
+                        ):
+                            on_preview_replan(goal["id"], instruction.strip())
+                if on_archive_goal is not None:
+                    st.markdown("**Archive goal**")
+                    st.caption("Future blocks will be removed; progress history stays in the DB.")
+                    if st.button(
+                        "Confirm archive goal", key=f"archive_goal_{goal['id']}",
+                        use_container_width=True,
                     ):
-                        on_preview_replan(goal["id"], instruction.strip())
+                        on_archive_goal(goal["id"])
 
         if replan_draft and replan_draft.get("goal_id") == goal["id"]:
             plan = replan_draft.get("plan") or []
@@ -282,15 +302,6 @@ def render_goal(
                     use_container_width=True,
                 ):
                     on_discard_replan()
-
-        if on_archive_goal is not None:
-            with st.popover("🗑 Archive goal", use_container_width=True):
-                st.caption("Future blocks will be removed; progress history stays in the DB.")
-                if st.button(
-                    "Confirm archive goal", key=f"archive_goal_{goal['id']}",
-                    use_container_width=True,
-                ):
-                    on_archive_goal(goal["id"])
 
 
 def render_summary(goal: dict) -> None:

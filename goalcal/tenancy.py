@@ -10,7 +10,10 @@ from sqlalchemy import event, select, inspect
 from sqlalchemy.orm import Session, with_loader_criteria
 from . import auth
 from .db import get_engine
-from .models import User, Goal, Step, Event, Checkin, StateLog, RescheduleLog, Interaction
+from .models import (
+    User, Goal, Step, Event, Checkin, StateLog, RescheduleLog, Interaction,
+    UserPreference, Conversation, Message,
+)
 
 current_session = ContextVar('goalcal_session', default=None)
 
@@ -27,11 +30,14 @@ def criteria(uid):
     goals = select(Goal.__table__.c.id).where(Goal.__table__.c.user_id == uid)
     steps = select(Step.__table__.c.id).where(Step.__table__.c.goal_id.in_(goals))
     events = select(Event.__table__.c.id).where(Event.__table__.c.user_id == uid)
+    conversations = select(Conversation.__table__.c.id).where(Conversation.__table__.c.user_id == uid)
     return {
         User: User.id == uid, Goal: Goal.user_id == uid,
         Step: Step.goal_id.in_(goals), Event: Event.user_id == uid,
         Checkin: Checkin.step_id.in_(steps), StateLog: StateLog.user_id == uid,
         RescheduleLog: RescheduleLog.event_id.in_(events), Interaction: Interaction.user_id == uid,
+        UserPreference: UserPreference.user_id == uid,
+        Conversation: Conversation.user_id == uid, Message: Message.conversation_id.in_(conversations),
     }
 
 
@@ -63,16 +69,20 @@ def validate_object(session, row):
     if hasattr(row, 'user_id') and row.user_id != uid:
         raise AccessDenied('Record belongs to another account')
     state = inspect(row)
-    for field in ('user_id', 'goal_id', 'step_id', 'event_id', 'new_event_id'):
+    references = {
+        'goal_id': Goal, 'step_id': Step, 'event_id': Event,
+        'new_event_id': Event, 'conversation_id': Conversation,
+    }
+    for field in ('user_id', *references):
         if field in state.attrs and state.persistent and state.attrs[field].history.deleted:
             old = state.attrs[field].history.deleted[0]
             # Validate OLD references as well as new ones (no laundering objects).
-            model = {'goal_id': Goal, 'step_id': Step, 'event_id': Event, 'new_event_id': Event}.get(field)
+            model = references.get(field)
             if model and old is not None and session.get(model, old) is None:
                 raise AccessDenied('Invalid original reference')
             if field == 'user_id' and old != uid:
                 raise AccessDenied('Cannot reassign ownership')
-    for field, model in [('goal_id', Goal), ('step_id', Step), ('event_id', Event), ('new_event_id', Event)]:
+    for field, model in references.items():
         value = getattr(row, field, None)
         if value is not None and session.get(model, value) is None:
             raise AccessDenied('Record reference is unavailable')

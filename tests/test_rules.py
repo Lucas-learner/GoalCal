@@ -57,6 +57,24 @@ def test_move_event_keeps_target():
     assert a.start.weekday() == 4
 
 
+def test_polite_reschedule_with_instead():
+    a = parse_with_rules("Can we do the review Thursday instead?", NOW)
+    assert a.intent == "move_event"
+    assert "review" in (a.target or "")
+    assert a.start.date().isoformat() == "2026-10-22"
+
+
+def test_query_what_my_day_looks_like():
+    a = parse_with_rules("what's my day look like", NOW)
+    assert a.intent == "query_events"
+
+
+def test_add_event_next_friday_uses_following_calendar_week():
+    a = parse_with_rules("Add a meeting next Friday at 10am", NOW)
+    assert a.intent == "add_event"
+    assert a.start == datetime(2026, 10, 30, 10, 0, tzinfo=TZ)
+
+
 def test_delete_event():
     a = parse_with_rules("Cancel the dentist appointment", NOW)
     assert a.intent == "delete_event"

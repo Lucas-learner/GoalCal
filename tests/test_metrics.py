@@ -112,6 +112,7 @@ def test_proposal_shown_and_accepted(session, user):
     reply = agent.handle(
         session, user.id, "I want to publish my first short video in 30 days", NOW, TZ
     )
+    reply = agent.confirm_goal_draft(session, user.id, reply.goal_draft, True, NOW, TZ)
 
     shown = _interactions(session, metrics.PROPOSAL_SHOWN)
     assert len(shown) == 1
@@ -270,6 +271,7 @@ def test_end_to_end_fast_forward_recovery_rate_is_100(session, user):
     reply = agent.handle(
         session, user.id, "I want to publish my first short video in 30 days", NOW, TZ
     )
+    reply = agent.confirm_goal_draft(session, user.id, reply.goal_draft, True, NOW, TZ)
     agent.accept(session, user.id, reply.step_id, reply.candidates[0], NOW, TZ)
 
     later = NOW + timedelta(days=2)  # 时间机器快进 2 天

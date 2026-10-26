@@ -9,7 +9,7 @@ GoalCal 先使用 ngrok，域名购买与 Cloudflare 正式隧道延后。
 ## 已安装的本机配置
 
 - 独立生产数据库：`var/goalcal-production.db`；账号、目标和日历继续保存在本机。
-- 应用仅监听 `127.0.0.1:8501`，保持 XSRF 防护。
+- 登录网关监听 `127.0.0.1:8501`，Streamlit 监听 `127.0.0.1:8502`；公网隧道只指向网关，保持 XSRF 防护。
 - 用户级后台任务：`local.goalcal.app`、`local.goalcal.tunnel`、`local.goalcal.backup`。Mac 用户登录后启动，应用和隧道异常退出后自动恢复。
 - 隧道使用本机已有 ngrok 认证文件 `~/Library/Application Support/ngrok/ngrok.yml`，权限为 600；认证令牌未写入仓库、命令参数或此文档。
 - 固定入口通过 `--url` 写入隧道服务参数，避免重启时换地址；不要重置 ngrok 账号分配的开发域名。

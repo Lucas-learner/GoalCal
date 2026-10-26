@@ -28,11 +28,9 @@ def render_proposals(
     on_dismiss=None,
     on_filter=None,
     now: datetime | None = None,
+    start_index: int = 0,
 ) -> None:
-    """候选时段（在悬浮对话框里渲染）：紧凑行 + 窗口下拉过滤。
-
-    on_filter 收到 chip key（"any" 表示不过滤）；候选按天分组显示。
-    """
+    """对话内的编号候选卡片；on_filter 收到 chip key（any 表示不过滤）。"""
     if not candidates or step_id is None:
         return
     if on_filter is not None:
@@ -49,14 +47,14 @@ def render_proposals(
         )
     today = (now or datetime.now(tz=candidates[0].start.tzinfo)).date()
     last_day = None
-    i = 0
-    for c in candidates:
-        i += 1
+    for i, c in enumerate(candidates, start_index + 1):
         if c.start.date() != last_day:
             last_day = c.start.date()
             st.caption(_day_label(c.start, today))
         slot, book = st.columns([3, 1])
-        slot.markdown(f"**{c.start:%H:%M}–{c.end:%H:%M}** · {c.minutes} min")
+        slot.markdown(f"**{i}. {c.start:%H:%M}–{c.end:%H:%M}** · {c.minutes} min")
+        if c.reasons:
+            slot.caption(c.reasons[0])
         if book.button(
             "Book",
             key=f"book_{step_id}_{i}_{c.start.isoformat()}",

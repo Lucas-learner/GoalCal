@@ -82,6 +82,7 @@ def test_create_goal_returns_steps_and_candidates(session, user):
     reply = agent.handle(
         session, user.id, "I want to publish my first short video in 30 days", NOW, TZ
     )
+    reply = agent.confirm_goal_draft(session, user.id, reply.goal_draft, True, NOW, TZ)
     assert reply.action.intent == "create_goal"
     assert reply.goal_id is not None and reply.step_id is not None
     goal = goal_svc.active_goals(session, user.id)[0]
@@ -106,6 +107,7 @@ def test_piano_goal_is_created_after_clarification(session, user):
         session, user.id, first.goal_brief,
         "零基础，3 个月，能弹一首简单曲子", NOW, TZ,
     )
+    reply = agent.confirm_goal_draft(session, user.id, reply.goal_draft, True, NOW, TZ)
 
     assert reply.goal_brief is None
     assert "Goal set" in reply.text
@@ -223,7 +225,8 @@ def test_piano_goal_defaults_when_answer_is_vague(session, user):
     first = agent.handle(session, user.id, "我要学会弹钢琴", NOW, TZ)
     reply = agent.continue_goal(session, user.id, first.goal_brief, "随便", NOW, TZ)
 
-    assert "Assumptions" in reply.text
+    assert reply.goal_draft.brief.assumptions
+    reply = agent.confirm_goal_draft(session, user.id, reply.goal_draft, True, NOW, TZ)
     goal = goal_svc.active_goals(session, user.id)[0]
     assert len(goal.steps) == 2
     assert goal.deadline == NOW.date() + timedelta(days=90)
@@ -262,6 +265,7 @@ def test_accept_books_block_and_step_reads_as_scheduled(session, user):
     reply = agent.handle(
         session, user.id, "I want to publish my first short video in 30 days", NOW, TZ
     )
+    reply = agent.confirm_goal_draft(session, user.id, reply.goal_draft, True, NOW, TZ)
     chosen = reply.candidates[0]
     message = agent.accept(session, user.id, reply.step_id, chosen, NOW, TZ)
 
@@ -302,6 +306,7 @@ def _book_first_step(session, user, now=NOW):
     reply = agent.handle(
         session, user.id, "I want to publish my first short video in 30 days", now, TZ
     )
+    reply = agent.confirm_goal_draft(session, user.id, reply.goal_draft, True, now, TZ)
     agent.accept(session, user.id, reply.step_id, reply.candidates[0], NOW, TZ)
     return reply.step_id
 
@@ -310,6 +315,7 @@ def test_accept_twice_replaces_block_instead_of_stacking(session, user):
     reply = agent.handle(
         session, user.id, "I want to publish my first short video in 30 days", NOW, TZ
     )
+    reply = agent.confirm_goal_draft(session, user.id, reply.goal_draft, True, NOW, TZ)
     agent.accept(session, user.id, reply.step_id, reply.candidates[0], NOW, TZ)
     agent.accept(session, user.id, reply.step_id, reply.candidates[1], NOW, TZ)
 
@@ -321,7 +327,7 @@ def test_accept_twice_replaces_block_instead_of_stacking(session, user):
 
 def test_completing_a_step_cancels_its_block(session, user):
     step_id = _book_first_step(session, user)
-    reply = agent.handle(session, user.id, "I finished the script today", NOW, TZ)
+    reply = agent.handle(session, user.id, "I finished Write one sentence today", NOW, TZ)
 
     assert session.get(Step, step_id).status == "done"
     assert session.scalars(select(Event).where(Event.step_id == step_id)).all() == []
@@ -338,7 +344,7 @@ def test_completing_a_step_keeps_due_block_as_done_record(session, user):
         kind="block", source="proposal", step_id=step_id, tz=TZ,
     )
 
-    agent.handle(session, user.id, "I finished the script today", NOW, TZ)
+    agent.handle(session, user.id, "I finished Write one sentence today", NOW, TZ)
 
     ev = session.get(Event, past.id)
     assert ev is not None

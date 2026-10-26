@@ -15,7 +15,7 @@ def submit(session, category, message, operation_id=None):
         raise ValueError('Authenticated feedback session required')
     message = message.strip()
     if category not in CATEGORIES or not 5 <= len(message) <= 2000:
-        raise ValueError('请选择问题类型，并填写 5–2000 个字符的反馈')
+        raise ValueError('Choose a category and enter 5–2000 characters of feedback')
     if operation_id and not re.fullmatch(r'[a-f0-9]{16}', operation_id):
         raise ValueError('Invalid diagnostic reference')
     row = metrics.record(session, principal.user_id, 'user_feedback', now_utc(),

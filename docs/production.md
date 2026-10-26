@@ -2,7 +2,7 @@
 
 > 当前公网试用采用 ngrok 免费固定网址，详见 [ngrok 入口和维护说明](ngrok.md)。本文的 Cloudflare 域名发布流程留待后续。
 
-应用和数据留在这台 Mac，浏览器经 HTTPS → Cloudflare Tunnel → 127.0.0.1:8501 访问。首版面向 5–20 人邀请试用。必须完成最后的外网验收后才能视为部署完成。
+应用和数据留在这台 Mac。当前试用由浏览器经 HTTPS → ngrok → 127.0.0.1:8501 访问；Cloudflare Tunnel 是下文保留的后续部署方案。首版面向 5–20 人邀请试用。必须完成最后的外网验收后才能视为部署完成。
 
 ## 安装与首次账号
 
@@ -22,7 +22,7 @@ export GOALCAL_ENV_FILE="$PWD/.env.production"
 .venv/bin/python -m goalcal.admin migrate
 .venv/bin/python -m goalcal.admin create-user owner --tz Asia/Shanghai
 .venv/bin/python -m goalcal.admin invite
-.venv/bin/streamlit run app.py
+.venv/bin/python -m goalcal.service app
 ```
 
 密码由终端隐藏输入，无默认密码；用户名 3–32 个字母、数字或下划线，密码 12–256 字符。邀请码仅打印一次，数据库只保存 SHA-256 摘要，默认 7 天、一次有效。`invite --days 3` 可更改有效期。不要把邀请码输出写入日志。
@@ -35,7 +35,7 @@ export GOALCAL_ENV_FILE="$PWD/.env.production"
 .venv/bin/python -m goalcal.admin reset-password alice
 ```
 
-禁用、启用、重置密码都会撤销原会话。退出会清空当前浏览器会话中的聊天、候选和草稿。会话不写入浏览器持久 cookie，最长 12 小时，断线或刷新后可能需要重新登录。每次操作检查会话，禁用后静止页面上已经显示的内容会在下一次操作时退出。
+禁用、启用、重置密码都会撤销原会话。公网入口 8501 是登录网关，Streamlit 只监听本机 8502。网关用 `HttpOnly`、`SameSite=Lax`、公网 HTTPS 下 `Secure` 的同源 Cookie 保存随机会话令牌，最长 12 小时；硬刷新可恢复登录。退出时服务端撤销令牌并清除 Cookie。聊天、候选和草稿仍保存在数据库中，重新登录后可以恢复。每次操作检查会话，禁用后静止页面上已经显示的内容会在下一次操作时退出。不要直接将 8502 暴露到公网，也不要将会话令牌放入 URL 或浏览器本地存储。
 
 登录限流持久保存：单用户名每 15 分钟最多 5 次失败；全站同一窗口最多 100 次登录尝试（保护本机密码哈希资源）。成功登录清除该用户名计数。注册时可以设置 IANA 时区，例如 `America/New_York`。
 

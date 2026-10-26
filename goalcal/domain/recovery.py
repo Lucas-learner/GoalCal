@@ -31,7 +31,7 @@ def unresolved_blocks(session: Session, user_id: int, now: datetime) -> list[Eve
             .where(
                 Event.user_id == user_id,
                 Event.kind == "block",
-                Event.status == "planned",
+                Event.status.in_(("planned", "moved")),
                 Event.end_utc < now,
                 or_(Goal.id.is_(None), Goal.status == "active"),
             )

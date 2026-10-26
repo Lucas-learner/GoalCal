@@ -85,6 +85,6 @@ def render(events: list[dict], height: int = 560, initial_date: str | None = Non
         events=wall_events,
         options=options,
         custom_css=custom_css,
-        callbacks=["eventClick", "dateClick", "eventChange"],
+        callbacks=["eventClick", "dateClick", "eventChange", "datesSet"],
         key=key,
     )

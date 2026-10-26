@@ -6,14 +6,17 @@ LLM 只出现在 `parse()` 里；下面所有写库动作都是确定性代码�
 
 from __future__ import annotations
 
+import difflib
 import re
-from dataclasses import dataclass, field
-from datetime import datetime, time, timedelta
+import uuid
+from dataclasses import dataclass, field, replace
+from datetime import date, datetime, time, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from . import metrics
+from . import memory, metrics
+from .data.goal_templates import first_batch, full_steps, milestones, pick_template
 from .domain import calendar_service as cal
 from .domain import goals as goal_svc
 from .domain import planner
@@ -21,7 +24,6 @@ from .domain import recovery
 from .domain import refine
 from .domain.scheduler import (
     Candidate,
-    Preferences,
     Requirement,
     _ceil_to,
     free_intervals,
@@ -76,6 +78,22 @@ def _confirm_text(action: Action) -> str:
 
 
 @dataclass
+class PendingAction:
+    action: Action
+    parser: str
+
+
+@dataclass
+class GoalDraft:
+    brief: planner.GoalBrief
+    deadline: date
+    outline: list[str]
+    step_defs: list[dict]
+    source: str
+    draft_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+
+
+@dataclass
 class Reply:
     text: str
     action: Action
@@ -85,7 +103,9 @@ class Reply:
     goal_id: int | None = None
     step_id: int | None = None
     goal_brief: planner.GoalBrief | None = None
+    goal_draft: GoalDraft | None = None
     checkin_context: "CheckinContext | None" = None
+    pending_action: PendingAction | None = None
 
 
 def handle(
@@ -114,11 +134,41 @@ def handle(
         text = HELP if HELP_MARKERS.search(action.raw or "") else CLARIFY
         return Reply(text, action, parser)
     if action.intent in RISKY_INTENTS and action.confidence < CONFIRM_THRESHOLD:
-        return Reply(_confirm_text(action), action, parser)
+        return Reply(
+            _confirm_text(action), action, parser,
+            pending_action=PendingAction(action=action, parser=parser),
+        )
     reply = handler(session, user_id, action, now, tz, parser)
     metrics.record(
         session, user_id, metrics.PARSE, now,
         payload={"parser": parser, "intent": action.intent},
+    )
+    return reply
+
+
+def confirm_action(
+    session: Session,
+    user_id: int,
+    pending_action: PendingAction,
+    approved: bool,
+    now: datetime,
+    tz: str = "Asia/Shanghai",
+) -> Reply:
+    action = pending_action.action
+    parser = pending_action.parser
+    if not approved:
+        return Reply("Okay — nothing was changed.", action, parser)
+    handler = {
+        "move_event": _move_event,
+        "delete_event": _delete_event,
+        "delete_goal": _delete_goal,
+    }.get(action.intent)
+    if handler is None:
+        return Reply("That action is no longer available. Nothing was changed.", action, parser)
+    reply = handler(session, user_id, action, now, tz, parser)
+    metrics.record(
+        session, user_id, metrics.PARSE, now,
+        payload={"parser": parser, "intent": action.intent, "confirmed": True},
     )
     return reply
 
@@ -171,7 +221,9 @@ def _move_event(session, user_id, action, now, tz, parser) -> Reply:
 
 def _delete_event(session, user_id, action, now, tz, parser) -> Reply:
     target = action.target or action.title or ""
-    ev = cal.find_event(session, user_id, target, now_utc=as_utc_naive(now, tz))
+    ev = cal.find_event(
+        session, user_id, target, now_utc=as_utc_naive(now, tz), exact=True,
+    )
     if ev is None:
         return Reply(f"I couldn't find “{target}”. Nothing was deleted.", action, parser)
     title = ev.title
@@ -192,17 +244,54 @@ def _query(session, user_id, action, now, tz, parser) -> Reply:
     return Reply("Here's what's coming up:\n" + "\n".join(lines), action, parser)
 
 
+def _step_title(value: str) -> str:
+    return value.casefold().replace(" ", "")
+
+
+def _matching_steps(goals: list[Goal], target: str) -> list[Step]:
+    needle = _step_title(target)
+    pending = [
+        step
+        for goal in goals
+        for step in sorted(goal.steps, key=lambda item: item.seq)
+        if step.status == "todo"
+    ]
+    exact = [step for step in pending if _step_title(step.title) == needle]
+    if exact:
+        return exact
+    substring = [
+        step for step in pending
+        if needle in _step_title(step.title) or _step_title(step.title) in needle
+    ]
+    if substring:
+        return substring
+    return [
+        step for step in pending
+        if difflib.SequenceMatcher(None, needle, _step_title(step.title)).ratio() >= 0.75
+    ]
+
+
+def _resolve_step(goals: list[Goal], target: str | None) -> tuple[Goal | None, Step | None, str | None]:
+    if target:
+        matches = _matching_steps(goals, target)
+        if not matches:
+            return None, None, f'I couldn\'t find a pending step matching "{target}". Which step did you mean?'
+        if len(matches) > 1:
+            names = ", ".join(f'"{step.goal.title}: {step.title}"' for step in matches[:4])
+            return None, None, f'"{target}" matches more than one step: {names}. Which one did you mean?'
+        return matches[0].goal, matches[0], None
+    goal = next((goal for goal in goals if _pick_step(goal) is not None), goals[0])
+    return goal, _pick_step(goal), None
+
+
 def _pick_step(goal, prefer_low_energy: bool = False, target: str | None = None) -> Step | None:
     if goal.status != "active":
         return None
     steps = sorted(goal.steps, key=lambda s: s.seq)
     pending = [s for s in steps if s.status == "todo"]
     if target:
-        needle = target.lower().replace(" ", "")
-        for s in pending:
-            title = s.title.lower().replace(" ", "")
-            if needle in title or title in needle:
-                return s
+        matches = _matching_steps([goal], target)
+        return matches[0] if len(matches) == 1 else None
     if prefer_low_energy:
         for s in pending:
             if s.energy <= 1:
@@ -216,7 +305,12 @@ def looks_like_new_command(text: str, now: datetime) -> bool:
     状态/进度类短回答（"太累了"、"done"）不算新指令，应按当前上下文解释。
     """
     action = parse_with_rules(text, now)
-    return action.intent in NEW_COMMAND_INTENTS
+    target = (action.progress_target or "").casefold().strip(" .,!?'\"“”")
+    targeted_progress = (
+        action.intent == "log_progress"
+        and target not in {"", "done", "finished", "completed", "it", "this", "that", "它", "这个", "那个"}
+    )
+    return action.intent in NEW_COMMAND_INTENTS or targeted_progress
 
 
 def auto_refine_if_low(
@@ -254,7 +348,7 @@ def _create_goal(session, user_id, action, now, tz, parser) -> Reply:
             parser,
             goal_brief=brief,
         )
-    return _create_goal_now(session, user_id, brief, action, now, tz, parser)
+    return _preview_goal_now(session, user_id, brief, action, now, tz, parser)
 
 
 def continue_goal(
@@ -279,20 +373,17 @@ def continue_goal(
     updated = planner.apply_answer(brief, text, today=now.date())
     if not planner.ready(updated):
         updated = planner.fill_defaults(updated, today=now.date())
-    return _create_goal_now(session, user_id, updated, action, now, tz, "goal:clarify")
+    return _preview_goal_now(session, user_id, updated, action, now, tz, "goal:clarify")
 
 
-def create_goal_from_brief(
+def prepare_goal_draft(
     session: Session,
     user_id: int,
     brief: planner.GoalBrief,
     now: datetime,
     tz: str = "Asia/Shanghai",
-) -> tuple[Goal, str]:
-    """LLM 生成阶段大纲 + 首批步骤；失败才用模板（模板内部也是大纲 + 首批）。
-
-    返回 (goal, source)。滚动拆解：只落第一批 2–3 步，后续由 refine_upcoming 补。
-    """
+) -> GoalDraft:
+    brief = planner.fill_defaults(brief, today=now.date())
     deadline = brief.deadline or (now.date() + timedelta(days=90))
     plan = generate_outline_plan(
         brief.title,
@@ -306,71 +397,112 @@ def create_goal_from_brief(
     )
     if plan:
         outline, step_defs = plan
-        goal = goal_svc.create_goal(
-            session,
-            user_id,
-            brief.title,
-            deadline=deadline,
-            step_defs=step_defs,
-            template_key="llm",
-            outline=outline,
-        )
-        return goal, "llm"
+        return GoalDraft(brief, deadline, outline, step_defs, "llm")
+    template_key = pick_template(brief.title)
+    return GoalDraft(
+        brief,
+        deadline,
+        milestones(template_key),
+        first_batch(full_steps(template_key)),
+        template_key,
+    )
+
+
+def create_goal_from_draft(session: Session, user_id: int, draft: GoalDraft) -> Goal:
+    existing = session.scalar(select(Goal).where(Goal.user_id == user_id, Goal.draft_id == draft.draft_id))
+    if existing is not None:
+        return existing
     goal = goal_svc.create_goal(
-        session,
-        user_id,
-        brief.title,
-        deadline=deadline,
-        complexity=brief.complexity,
+        session, user_id, draft.brief.title, deadline=draft.deadline,
+        step_defs=draft.step_defs, template_key=draft.source, outline=draft.outline,
     )
-    return goal, "template"
-
-
-def _create_goal_now(session, user_id, brief, action, now, tz, parser) -> Reply:
-    brief = planner.fill_defaults(brief, today=now.date())
-    deadline = brief.deadline or (now.date() + timedelta(days=90))
-    goal, source = create_goal_from_brief(session, user_id, brief, now, tz)
+    goal.draft_id = draft.draft_id
     session.flush()
+    return goal
 
-    steps = sorted(goal.steps, key=lambda s: s.seq)
-    preview = "\n".join(
-        f"  {s.seq}. {s.title} · {s.est_min}m" for s in steps[:5]
-    )
-    first = steps[0]
-    candidates = _propose(session, user_id, first, now, tz, goal.deadline)
 
-    label = planner.complexity_label(brief.complexity)
-    phase_names = goal_svc.outline_phases(goal)
-    body = (
-        f"Goal set: **{goal.title}** — deadline {deadline:%b %d} "
-        f"({(deadline - now.date()).days} days).\n"
-        f"I treated it as a **{label}** goal and sketched {len(phase_names)} phases: "
-        f"{' → '.join(phase_names)}.\n"
-        f"Here are the first {len(steps)} steps (the rest are planned just-in-time):\n{preview}\n"
+def create_goal_from_brief(
+    session: Session,
+    user_id: int,
+    brief: planner.GoalBrief,
+    now: datetime,
+    tz: str = "Asia/Shanghai",
+) -> tuple[Goal, str]:
+    draft = prepare_goal_draft(session, user_id, brief, now, tz)
+    goal = create_goal_from_draft(session, user_id, draft)
+    return goal, "llm" if draft.source == "llm" else "template"
+
+
+def revise_goal_draft(
+    draft: GoalDraft,
+    instruction: str,
+    now: datetime,
+    tz: str = "Asia/Shanghai",
+) -> GoalDraft | None:
+    brief = planner.apply_answer(draft.brief, instruction, today=now.date())
+    deadline = brief.deadline or draft.deadline
+    if deadline != draft.deadline and re.search(
+        r"\b(deadline|due date|due in|in \d+ (?:days?|weeks?|months?))\b|截止|期限",
+        instruction,
+        re.I,
+    ) and not re.search(r"\b(step|plan|outline|title|milestone)\b|步骤|计划|标题|阶段", instruction, re.I):
+        return replace(draft, brief=brief, deadline=deadline)
+    plan = generate_plan(
+        brief.title,
+        deadline,
+        today=now.date(),
+        level=brief.level,
+        target=brief.target,
+        complexity=brief.complexity,
+        raw=draft.brief.raw,
+        tz=tz,
+        instruction=instruction,
+        current_steps=[item["title"] for item in draft.step_defs],
     )
-    if source == "llm":
-        body += "These steps were generated for this specific goal.\n"
+    if not plan:
+        return None
+    outline = list(dict.fromkeys(item["milestone"] for item in plan if item.get("milestone")))
+    return GoalDraft(brief, deadline, outline or draft.outline, plan[:3], "llm", draft.draft_id)
+
+
+def confirm_goal_draft(
+    session: Session,
+    user_id: int,
+    draft: GoalDraft,
+    schedule_first: bool,
+    now: datetime,
+    tz: str = "Asia/Shanghai",
+) -> Reply:
+    goal = create_goal_from_draft(session, user_id, draft)
+    session.flush()
+    action = Action(intent="create_goal", title=goal.title, raw=draft.brief.raw, confidence=1.0)
+    steps = sorted(goal.steps, key=lambda item: item.seq)
+    candidates = []
+    first = steps[0] if steps else None
+    if schedule_first and first is not None:
+        candidates = _propose(session, user_id, first, now, tz, goal.deadline)
+    text = f"Goal set: **{goal.title}**."
+    if schedule_first and first is not None:
+        text += f" Choose a time for **{first.title}** below."
     else:
-        body += (
-            "AI planning was unavailable, so I used the closest built-in plan; "
-            "you can edit or delete any step.\n"
-        )
-    if brief.level or brief.target:
-        body += (
-            f"Plan assumptions: level **{brief.level or 'unspecified'}**, "
-            f"target **{brief.target or 'finish the goal'}**.\n"
-        )
-    if brief.assumptions:
-        body += "Assumptions: " + "; ".join(brief.assumptions) + ".\n"
-    if candidates:
-        body += f"\nHere are {len(candidates)} slots for the first step. Pick one and I'll put it on your calendar."
+        text += " You can ask me to schedule the next step whenever you're ready."
     return Reply(
-        body,
+        text,
         action,
-        parser,
+        "goal:confirm",
         candidates=candidates,
         goal_id=goal.id,
-        step_id=first.id,
+        step_id=first.id if first is not None else None,
+    )
+
+
+def _preview_goal_now(session, user_id, brief, action, now, tz, parser) -> Reply:
+    draft = prepare_goal_draft(session, user_id, brief, now, tz)
+    return Reply(
+        f"Goal draft ready for **{draft.brief.title}**. Review it below, or tell me what to adjust.",
+        action,
+        parser,
+        goal_draft=draft,
     )
 
 
@@ -430,7 +562,21 @@ def _delete_goal(session, user_id, action, now, tz, parser) -> Reply:
     goals = goal_svc.active_goals(session, user_id)
     if not goals:
         return Reply("You don't have an active goal to delete.", action, parser)
-    goal = goal_svc.find_goal(session, user_id, target)
+    goal = None
+    if target:
+        needle = target.casefold().strip().strip("\"'“”")
+        exact = [goal for goal in goals if goal.title.casefold() == needle]
+        matches = exact or [
+            goal for goal in goals
+            if needle in goal.title.casefold() or goal.title.casefold() in needle
+        ]
+        if len(matches) > 1:
+            names = ", ".join(f"“{match.title}”" for match in matches[:4])
+            return Reply(f"Which goal should I delete: {names}? Nothing was deleted.", action, parser)
+        if matches:
+            goal = matches[0]
+    elif len(goals) == 1:
+        goal = goals[0]
     if goal is None:
         if not target:
             names = ", ".join(f"“{g.title}”" for g in goals[:3])
@@ -453,8 +599,9 @@ def _schedule_step(session, user_id, action, now, tz, parser) -> Reply:
             "You don't have an active goal yet. Tell me one and I'll break it down.",
             action, parser,
         )
-    goal = goals[0]
-    step = _pick_step(goal, target=action.progress_target or action.title)
+    goal, step, error = _resolve_step(goals, action.progress_target or action.title)
+    if error is not None:
+        return Reply(error, action, parser)
     note = ""
     if step is None:
         # 没有待办步骤不一定是目标完成：滚动拆解下可能只是下一批还没补
@@ -527,7 +674,7 @@ def _schedule_all(session, user_id, action, now, tz, parser) -> Reply:
             "You don't have an active goal yet. Tell me one and I'll break it down.",
             action, parser,
         )
-    prefs = Preferences()
+    prefs = memory.get_scheduler_preferences(session, user_id)
     window = _pack_window(now, action.window)
     busy = cal.busy_blocks(
         session, user_id,
@@ -629,8 +776,9 @@ def _refine_steps(session, user_id, action, now, tz, parser) -> Reply:
             "You don't have an active goal yet. Tell me one and I'll break it down.",
             action, parser,
         )
-    goal = goals[0]
-    step = _pick_step(goal, target=action.progress_target or action.title)
+    goal, step, error = _resolve_step(goals, action.progress_target or action.title)
+    if error is not None:
+        return Reply(error, action, parser)
     if step is None:
         return Reply(f'"{goal.title}" has no steps left to break down.', action, parser)
 
@@ -659,8 +807,9 @@ def _log_progress(session, user_id, action, now, tz, parser) -> Reply:
     goals = goal_svc.active_goals(session, user_id)
     if not goals:
         return Reply("You don't have an active goal yet. Tell me one and I'll break it down.", action, parser)
-    goal = goals[0]
-    step = _pick_step(goal, target=action.progress_target or action.title)
+    goal, step, error = _resolve_step(goals, action.progress_target or action.title)
+    if error is not None:
+        return Reply(error, action, parser)
     if step is None:
         return Reply(f"“{goal.title}” is already complete. 🎉", action, parser)
 
@@ -702,11 +851,16 @@ def _set_state(session, user_id, action, now, tz, parser) -> Reply:
     if action.state == "busy":
         return Reply("Got it — I'll keep this week light and only suggest short blocks.", action, parser)
 
-    goal = next(iter(goal_svc.active_goals(session, user_id)), None)
-    if goal is None:
+    goals = goal_svc.active_goals(session, user_id)
+    if not goals:
         return Reply("Noted. Tell me a goal and I'll keep it in mind when scheduling.", action, parser)
 
-    step = _pick_step(goal, prefer_low_energy=action.state in {"tired", "uninspired"})
+    target = action.progress_target or action.title
+    goal, step, error = _resolve_step(goals, target)
+    if error is not None:
+        return Reply(error, action, parser)
+    if not target:
+        step = _pick_step(goal, prefer_low_energy=action.state in {"tired", "uninspired"})
     if step is None:
         return Reply("Noted.", action, parser)
     candidates = _propose(session, user_id, step, now, tz, goal.deadline)
@@ -745,7 +899,7 @@ def _propose(
         ),
         now=now,
         busy=busy,
-        prefs=Preferences(),
+        prefs=memory.get_scheduler_preferences(session, user_id),
         days=days,
         top_n=6,
         deadline=deadline,
@@ -1144,7 +1298,7 @@ def _checkin_batch(session, user_id, ctx, action, text, now, tz, parser) -> Repl
     def resolve_all(outcome: str, reason: str | None) -> None:
         for event_id in ctx.event_ids:
             ev = session.get(Event, event_id)
-            if ev is None or ev.status != "planned":
+            if ev is None or ev.status not in ("planned", "moved"):
                 continue
             recovery.resolve_block(session, ev, outcome, now_utc)
             if reason is not None:

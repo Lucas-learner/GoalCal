@@ -74,16 +74,20 @@ def find_event(
     user_id: int,
     hint: str,
     now_utc: datetime | None = None,
+    exact: bool = False,
 ) -> Event | None:
-    """按标题模糊找事件，给 Move/Delete 用。
-
-    now_utc 传入后优先匹配未来事件，避免“改到周五”改到几个月前的同名事件。
-    """
+    """按标题找事件；now_utc 传入后优先匹配未来事件，exact 用于删除等精确操作。"""
     events = list(session.scalars(select(Event).where(Event.user_id == user_id)))
     if not events:
         return None
     hint_l = hint.lower().strip()
     if not hint_l:
+        return None
+
+    exact_matches = [ev for ev in events if ev.title.lower() == hint_l]
+    if exact_matches:
+        return _best_match(exact_matches, now_utc)
+    if exact:
         return None
 
     substring = [

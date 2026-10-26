@@ -179,8 +179,13 @@ def find_dates(text: str, now: datetime) -> list[tuple[str, datetime]]:
         r"friday|fri|saturday|sat|sunday|sun)\b",
         text, re.I,
     ):
-        force_next = (m.group(1) or "").lower() in {"next", "coming"}
-        add(m, _next_weekday(now, WEEKDAYS[m.group(2).lower()], force_next))
+        qualifier = (m.group(1) or "").lower()
+        target = WEEKDAYS[m.group(2).lower()]
+        if qualifier == "next":
+            d = (now + timedelta(days=7 - now.weekday() + target)).date()
+        else:
+            d = _next_weekday(now, target, qualifier == "coming")
+        add(m, d)
 
     # 6) 中文星期：周五 / 星期五 / 礼拜五 / 下周五
     for m in re.finditer(r"(下+|这|本)?\s*(?:周|星期|礼拜)([一二三四五六日天])", text):

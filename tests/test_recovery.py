@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 import pytest
 from sqlalchemy import select
 
+from goalcal import agent
 from goalcal.domain import calendar_service as cal
 from goalcal.domain import goals as goal_svc
 from goalcal.domain import recovery
@@ -52,9 +53,27 @@ def test_non_block_events_are_not_unresolved(session, user):
 
 
 def test_resolved_blocks_are_not_unresolved(session, user):
-    for status in ("done", "partial", "missed", "skipped", "moved"):
+    for status in ("done", "partial", "missed", "skipped"):
         _event(session, user, NOW_LOCAL - timedelta(hours=3), status=status)
     assert recovery.unresolved_blocks(session, user.id, NOW) == []
+
+
+def test_moved_past_block_still_begins_checkin(session, user):
+    _, step, ev = _block_with_step(session, user, NOW_LOCAL - timedelta(hours=3))
+    ev.status = "moved"
+    session.flush()
+
+    assert recovery.unresolved_blocks(session, user.id, NOW) == [ev]
+    ctx, prompt = agent.begin_checkin(session, user.id, NOW_LOCAL, TZ)
+    assert ctx is not None and ctx.event_ids == [ev.id]
+    assert step.title in prompt
+
+    reply = agent.continue_checkin(session, user.id, ctx, "done", NOW_LOCAL, TZ)
+    assert reply is not None and reply.checkin_context is None
+    assert ev.status == "done"
+    assert step.status == "done"
+    checkin = session.scalar(select(Checkin).where(Checkin.event_id == ev.id))
+    assert checkin is not None and checkin.verdict == "done"
 
 
 def test_unresolved_blocks_are_ordered_earliest_first(session, user):

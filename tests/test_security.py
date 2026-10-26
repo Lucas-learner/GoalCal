@@ -215,7 +215,7 @@ def test_tenant_timezone_reaches_parser(accounts, monkeypatch):
 
 def test_legacy_migration_preserves_unclaimed_data(tmp_path):
     from sqlalchemy import create_engine
-    from goalcal.migrations import migrate
+    from goalcal.migrations import migrate, VERSION
     path = tmp_path / 'old.db'
     with sqlite3.connect(path) as con:
         con.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, tz TEXT, created_at DATETIME)")
@@ -224,7 +224,7 @@ def test_legacy_migration_preserves_unclaimed_data(tmp_path):
     migrate(engine)
     migrate(engine)
     with sqlite3.connect(path) as con:
-        assert con.execute('PRAGMA user_version').fetchone()[0] == 1
+        assert con.execute('PRAGMA user_version').fetchone()[0] == VERSION
         assert con.execute('SELECT name,username,password_hash FROM users').fetchone() == ('demo', None, None)
     assert list((tmp_path / 'backups').glob('pre-migration-*.db'))
     engine.dispose()

@@ -301,7 +301,9 @@ def propose(
             day, time(hour=prefs.day_start_hour), tzinfo=now.tzinfo
         )
         window_end = datetime.combine(
-            day, time(hour=prefs.day_end_hour), tzinfo=now.tzinfo
+            day + timedelta(days=prefs.day_end_hour // 24),
+            time(hour=prefs.day_end_hour % 24),
+            tzinfo=now.tzinfo,
         )
         if window is not None:
             window_start = max(window_start, window[0])
