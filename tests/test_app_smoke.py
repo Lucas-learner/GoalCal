@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from streamlit.testing.v1 import AppTest
 
 from goalcal.db import session_scope, init_db
@@ -8,7 +8,7 @@ from goalcal import auth
 from goalcal.models import User
 import uuid
 import pytest
-from goalcal.models import Event, Goal
+from goalcal.models import Conversation, Event, Goal
 
 APP = str(Path(__file__).resolve().parent.parent / "app.py")
 
@@ -48,6 +48,23 @@ def _app() -> AppTest:
     return at
 
 
+def _empty_app() -> AppTest:
+    """注册一个没有任何目标/日程/历史的全新账号并登录。"""
+    username = "ui_" + uuid.uuid4().hex[:12]
+    invitation = auth.invite()
+    at = AppTest.from_file(APP, default_timeout=30).run()
+    next(t for t in at.text_input if t.key == "register_name").set_value(username)
+    next(t for t in at.text_input if t.label == "Password (at least 12 characters)").set_value("new-user-password-42")
+    next(t for t in at.text_input if t.label == "Invitation code").set_value(invitation)
+    next(b for b in at.button if b.label == "Register").click().run()
+    next(t for t in at.text_input if t.key == "login_name").set_value(username)
+    next(t for t in at.text_input if t.key == "login_password").set_value("new-user-password-42")
+    next(b for b in at.button if b.label == "Log in").click().run()
+    assert not at.exception
+    assert at.chat_input
+    return at
+
+
 def _goals(at):
     return at.switch_page("routes/goals.py").run()
 
@@ -73,6 +90,163 @@ def test_app_boots_to_chat_without_three_column_workbench():
     assert at.title[0].value == "GoalCal"
     assert at.chat_input
     assert not any(b.label == "Find time" for b in at.button)
+
+
+def test_empty_state_without_data_falls_back_to_starters():
+    at = _empty_app()
+    assert any(b.key == "starter_0" for b in at.button)
+    assert not any(b.key == "home_find_time" for b in at.button)
+    at.chat_input[0].set_value("hmm").run()
+    assert not at.exception, at.exception
+    assert not at.title
+    assert not any((b.key or "").startswith("starter_") for b in at.button)
+    assert any(m.value for m in at.markdown)
+
+
+def test_home_shows_real_status_and_executable_suggestions():
+    at = _app()
+    assert at.title[0].value == "GoalCal"
+    assert any("Publish my first short video" in m.value for m in at.markdown)
+    captions = {c.value for c in at.caption}
+    assert any(c.startswith("Next step:") for c in captions)
+    assert any("Test appointment" in c for c in captions)
+
+    next(b for b in at.button if b.key == "home_find_time").click().run()
+    assert not at.exception, at.exception
+    assert at.session_state["pending"] is not None
+    assert any(b.label == "Book" for b in at.button)
+    # 待处理面板出现时不重复渲染首页状态区
+    assert not at.title
+    next(b for b in at.button if b.label == "Dismiss").click().run()
+    assert not at.exception, at.exception
+    assert at.session_state["pending"] is None
+
+
+def test_home_review_today_runs_a_real_query_turn():
+    at = _app()
+    next(b for b in at.button if b.key == "home_review_today").click().run()
+    assert not at.exception, at.exception
+    assert at.session_state["has_user_history"] is True
+    assert not at.title
+    assert any("Test appointment" in m.value for m in at.markdown)
+
+
+def test_chat_scrolls_to_latest_after_a_turn_and_when_history_reloads(monkeypatch):
+    from goalcal.ui import chat as chat_ui
+
+    calls = []
+    monkeypatch.setattr(chat_ui, "scroll_to_bottom", lambda: calls.append("scroll"))
+    at = _app()
+    assert calls == []
+
+    at.chat_input[0].set_value("hmm").run()
+    assert not at.exception, at.exception
+    assert calls == ["scroll"]
+
+    at.session_state["conversation_loaded"] = False
+    at.run()
+    assert not at.exception, at.exception
+    assert calls == ["scroll", "scroll"]
+
+
+def _seed_history(at, count):
+    from goalcal import conversation as conv
+
+    uid = at.session_state["user_id"]
+    with session_scope() as s:
+        conv.save_state(s, uid, [
+            {"role": "user" if i % 2 else "assistant", "content": f"history-{i:02d}",
+             "client_id": f"seed-{i:02d}"}
+            for i in range(count)
+        ], {})
+
+
+def _history_markdowns(at):
+    return [m.value for m in at.markdown if m.value.startswith("history-")]
+
+
+def test_long_history_loads_latest_page_then_earlier_keeps_anchor(monkeypatch):
+    from goalcal.ui import chat as chat_ui
+    from goalcal.models import Message
+
+    bottoms, anchors = [], []
+    monkeypatch.setattr(chat_ui, "scroll_to_bottom", lambda: bottoms.append("bottom"))
+    monkeypatch.setattr(chat_ui, "scroll_to_message", lambda cid: anchors.append(cid))
+
+    at = _app()
+    _seed_history(at, 31)
+    at.session_state["conversation_loaded"] = False
+    at.run()
+    assert not at.exception, at.exception
+    # 初始只渲染最近 30 条；重开回到底部
+    assert _history_markdowns(at) == [f"history-{i:02d}" for i in range(1, 31)]
+    assert bottoms == ["bottom"] and anchors == []
+
+    with session_scope() as s:
+        anchor_cid = s.scalar(select(Message.client_id).where(Message.content == "history-01"))
+
+    next(b for b in at.button if b.key == "load_earlier").click().run()
+    assert not at.exception, at.exception
+    # Load earlier prepend 更早一页并锚定原首条，不回到底部
+    assert _history_markdowns(at) == [f"history-{i:02d}" for i in range(31)]
+    assert anchors == [anchor_cid] and bottoms == ["bottom"]
+    assert not any(b.key == "load_earlier" for b in at.button)
+
+    # 新消息追加到完整历史，但当前页面始终只保留最近 30 条并回到最新
+    at.chat_input[0].set_value("still here").run()
+    assert not at.exception, at.exception
+    assert len(at.session_state["messages"]) == 30
+    assert _history_markdowns(at) == [f"history-{i:02d}" for i in range(3, 31)]
+    assert any(m.value == "still here" for m in at.markdown)
+    assert bottoms == ["bottom", "bottom"]
+    with session_scope() as s:
+        total = s.scalar(
+            select(func.count(Message.id)).where(
+                Message.conversation_id == select(Conversation.id).where(
+                    Conversation.user_id == at.session_state["user_id"]
+                ).scalar_subquery()
+            )
+        )
+    assert total == 34  # 欢迎消息 + 31 条历史 + 本轮 user/assistant 各一条
+
+
+def test_load_earlier_after_in_session_truncation():
+    """会话内累计超过一页后消息被截断（没有数据库 id），Load earlier 不能是死按钮。"""
+    at = _app()
+    for i in range(16):
+        at.chat_input[0].set_value(f"msg {i:02d}").run()
+        assert not at.exception, at.exception
+    assert len(at.session_state["messages"]) == 30
+    assert not any(m.get("id") for m in at.session_state["messages"])
+
+    next(b for b in at.button if b.key == "load_earlier").click().run()
+    assert not at.exception, at.exception
+    # 从数据库恢复锚点并 prepend 了更早的消息（最早的 "msg 00" 回来了）
+    assert any(m["content"] == "msg 00" for m in at.session_state["messages"])
+    assert at.session_state["chat_has_more"] is False
+
+
+def test_sidebar_does_not_duplicate_chat_navigation_or_goal_status():
+    at = _app()
+    captions = {c.value for c in at.caption}
+    assert not any(c.startswith("Goal:") for c in captions)
+    assert not any(b.key == "sidebar_history" for b in at.button)
+
+    at.chat_input[0].set_value("hmm").run()
+    assert not at.exception, at.exception
+    assert not any(b.key == "sidebar_history" for b in at.button)
+    assert at.chat_input
+
+
+def test_goal_draft_card_is_a_single_flat_panel():
+    at = _app()
+    at.chat_input[0].set_value("I want to publish my first short video in 30 days").run()
+    assert not at.exception, at.exception
+    captions = {c.value for c in at.caption}
+    assert "Goal draft" in captions
+    assert "GOAL DRAFT" not in captions
+    labels = {b.label for b in at.button}
+    assert {"Create & schedule", "Save goal", "Cancel"} <= labels
 
 
 def test_chat_turn_creates_a_goal():
@@ -491,6 +665,81 @@ def test_save_goal_by_text_clears_draft_and_does_not_book():
     assert _goal_count(at) == before + 1
     at.run()
     assert _goal_count(at) == before + 1
+
+
+def _fake_extract_two_events(monkeypatch):
+    from goalcal import agent
+    from goalcal.llm.action import Action
+    from datetime import timedelta
+
+    def fake_extract(session, user_id, text, now, tz, *, client=None):
+        day = (now + timedelta(days=1)).replace(second=0, microsecond=0)
+        first = day.replace(hour=15, minute=30)
+        second = day.replace(hour=20, minute=0)
+        return [
+            Action(intent="add_event", title="写脚本", start=first, end=first + timedelta(minutes=45), confidence=0.9),
+            Action(intent="add_event", title="剪辑", start=second, end=second + timedelta(hours=1), confidence=0.85),
+        ]
+
+    monkeypatch.setattr(agent.event_plan, "extract_events", fake_extract)
+
+
+def _event_titles(at):
+    with session_scope() as s:
+        return sorted(
+            e.title for e in s.scalars(select(Event).where(Event.user_id == at.session_state["user_id"]))
+        )
+
+
+def test_event_draft_panel_restores_then_confirm_writes_both(monkeypatch):
+    _fake_extract_two_events(monkeypatch)
+    at = _app()
+    before = _event_titles(at)
+    at.chat_input[0].set_value("帮我安排进日历").run()
+    assert not at.exception, at.exception
+    assert at.session_state["event_draft"] is not None
+    assert "Calendar preview" in {c.value for c in at.caption}
+    assert {"Add to calendar", "Cancel"} <= {b.label for b in at.button}
+    assert not at.title  # 预览显示时不渲染首页状态区
+    assert _event_titles(at) == before  # 预览不写库
+
+    returning = _app()
+    assert returning.session_state["event_draft"] is not None
+    assert "Calendar preview" in {c.value for c in returning.caption}
+    next(b for b in returning.button if b.label == "Add to calendar").click().run()
+    assert not returning.exception, returning.exception
+    assert returning.session_state["event_draft"] is None
+    assert any("Added 2 event(s)" in m.value for m in returning.markdown)
+    assert _event_titles(returning) == sorted(before + ["写脚本", "剪辑"])
+    assert _app().session_state["event_draft"] is None
+
+
+def test_event_draft_cancel_writes_nothing(monkeypatch):
+    _fake_extract_two_events(monkeypatch)
+    at = _app()
+    before = _event_titles(at)
+    at.chat_input[0].set_value("帮我安排进日历").run()
+    next(b for b in at.button if b.label == "Cancel").click().run()
+    assert not at.exception, at.exception
+    assert at.session_state["event_draft"] is None
+    assert any("nothing was added" in m.value for m in at.markdown)
+    assert _event_titles(at) == before
+    assert _app().session_state["event_draft"] is None
+
+
+def test_event_draft_new_command_exits_preview_without_writing(monkeypatch):
+    _fake_extract_two_events(monkeypatch)
+    at = _app()
+    before = _event_titles(at)
+    at.chat_input[0].set_value("帮我安排进日历").run()
+    assert at.session_state["event_draft"] is not None
+    at.chat_input[0].set_value("Add review meeting tomorrow 10am").run()
+    assert not at.exception, at.exception
+    assert at.session_state["event_draft"] is None
+    titles = _event_titles(at)
+    assert "review meeting" in titles
+    assert "写脚本" not in titles and "剪辑" not in titles
+    assert len(titles) == len(before) + 1
 
 
 @pytest.mark.parametrize("selection", ["第二个", "2", "second", "button"])

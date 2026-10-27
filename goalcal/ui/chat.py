@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 from ..domain.scheduler import Candidate
 
@@ -53,8 +55,6 @@ def render_proposals(
             st.caption(_day_label(c.start, today))
         slot, book = st.columns([3, 1])
         slot.markdown(f"**{i}. {c.start:%H:%M}–{c.end:%H:%M}** · {c.minutes} min")
-        if c.reasons:
-            slot.caption(c.reasons[0])
         if book.button(
             "Book",
             key=f"book_{step_id}_{i}_{c.start.isoformat()}",
@@ -68,7 +68,7 @@ def render_proposals(
 
 
 def render_batch(batch: list[dict], on_accept, on_dismiss=None) -> None:
-    """批量排期卡片：列出每块（步骤标题 + 起止时间），一个 Book all / Dismiss。"""
+    """批量排期面板：每块一行（步骤标题 + 起止时间），一个 Book all / Dismiss。"""
     if not batch:
         return
     head, dismiss = st.columns([4, 1])
@@ -78,18 +78,55 @@ def render_batch(batch: list[dict], on_accept, on_dismiss=None) -> None:
     ):
         on_dismiss()
     for item in batch:
-        with st.container(border=True):
-            st.markdown(f"**{item['title']}**")
-            st.caption(f"{item['start']:%a %b %d · %H:%M}–{item['end']:%H:%M}")
+        st.markdown(f"• **{item['title']}** — {item['start']:%a %b %d · %H:%M}–{item['end']:%H:%M}")
     if st.button("Book all", key="book_all", use_container_width=True, type="primary"):
         on_accept(batch)
 
 
 def render_messages(messages: list[dict]) -> None:
-    for msg in messages:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
+    for index, msg in enumerate(messages):
+        # 稳定容器键：已落库消息用 client_id，未落库的用位置兜底；
+        # 加载更早的消息后按此键滚动回原首条。
+        key = msg.get("client_id") or (f"db_{msg['id']}" if msg.get("id") else f"unsaved_{index}")
+        with st.container(key=f"chat_msg_{key}"):
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
 
 
 def append(messages: list[dict], role: str, content: str) -> None:
     messages.append({"role": role, "content": content})
+
+
+def scroll_to_message(client_id: str) -> None:
+    """滚动到指定 client_id 的消息容器（Load earlier 后保持阅读位置）。"""
+    selector = json.dumps(f".st-key-chat_msg_{client_id}")
+    components.html(
+        f"""<script>
+        const scrollToAnchor = () => {{
+            const target = window.parent.document.querySelector({selector});
+            if (target) {{
+                target.style.scrollMarginTop = "24px";
+                target.scrollIntoView({{block: "start"}});
+            }}
+        }};
+        requestAnimationFrame(scrollToAnchor);
+        setTimeout(scrollToAnchor, 200);
+        </script>""",
+        height=0,
+        width=0,
+    )
+
+
+def scroll_to_bottom() -> None:
+    components.html(
+        """<script>
+        const scrollToLatest = () => {
+            const main = window.parent.document.querySelector('main[data-testid="stMain"]');
+            if (main) main.scrollTop = main.scrollHeight;
+        };
+        requestAnimationFrame(scrollToLatest);
+        setTimeout(scrollToLatest, 200);
+        </script>""",
+        height=0,
+        width=0,
+    )

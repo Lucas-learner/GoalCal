@@ -8,7 +8,7 @@ import streamlit as st
 from goalcal import auth
 from goalcal.db import init_db
 from goalcal.logging_setup import configure_logging
-from goalcal.ui import calendar_page, chat_page, controller
+from goalcal.ui import calendar_page, chat_page, controller, theme
 from goalcal.ui.auth import clear_state, current_token, require_login
 from goalcal.auth_proxy import COOKIE_NAME, FORM_COOKIE_NAME
 
@@ -61,7 +61,9 @@ calendar_shell_css = "" if calendar_active else """
     pointer-events: none;
 }
 """
-st.html(f"<style>{calendar_shell_css}</style>")
+# 全局样式与日历壳样式合成同一个 st.html 节点，保证 Calendar iframe
+# 前的 DOM 结构在所有页面完全一致。
+theme.inject(calendar_shell_css)
 with st.container(key="calendar_shell"):
     calendar_page.render(active=calendar_active)
 

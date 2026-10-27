@@ -34,7 +34,8 @@ class LLMClient:
             self._client = OpenAI(api_key=self.api_key, base_url=self.base_url, timeout=30, max_retries=0)
         return self._client
 
-    def complete_json(self, system: str, user: str, temperature: float = 0.0) -> dict[str, Any]:
+    def _preflight(self):
+        """认证、配额与“写事务禁外部请求”保护；返回 (client, user_id)。"""
         client = self._get()
         from ..tenancy import current_session
         from ..quota import consume
@@ -56,8 +57,12 @@ class LLMClient:
             except RuntimeError:
                 telemetry.emit('llm_skipped', user_id=principal.user_id, reason='daily_quota')
                 raise
+        return client, session.info['principal'].user_id if session is not None else None
+
+    def _complete(self, system: str, user: str, temperature: float, as_json: bool):
+        client, user_id = self._preflight()
         started = time.perf_counter()
-        user_id = session.info['principal'].user_id if session is not None else None
+        kwargs = {"response_format": {"type": "json_object"}} if as_json else {}
         try:
             resp = client.chat.completions.create(
                 model=self.model,
@@ -66,10 +71,9 @@ class LLMClient:
                     {"role": "system", "content": system},
                     {"role": "user", "content": user},
                 ],
-                response_format={"type": "json_object"},
+                **kwargs,
             )
-            content = resp.choices[0].message.content or "{}"
-            data = json.loads(content)
+            content = resp.choices[0].message.content or ""
         except Exception as exc:
             telemetry.emit('llm_failed', user_id=user_id, model=self.model,
                            duration_ms=round((time.perf_counter()-started)*1000, 1),
@@ -77,4 +81,12 @@ class LLMClient:
             raise
         telemetry.emit('llm_completed', user_id=user_id, model=self.model,
                        duration_ms=round((time.perf_counter()-started)*1000, 1))
-        return data
+        return content
+
+    def complete_json(self, system: str, user: str, temperature: float = 0.0) -> dict[str, Any]:
+        content = self._complete(system, user, temperature, as_json=True)
+        return json.loads(content or "{}")
+
+    def complete_text(self, system: str, user: str, temperature: float = 0.3) -> str:
+        """纯文本补全（普通对话回复）；与 complete_json 走同一套保护与遥测。"""
+        return self._complete(system, user, temperature, as_json=False).strip()

@@ -20,6 +20,7 @@ STATE_KEYS = (
     "pending_action",
     "goal_brief",
     "goal_draft",
+    "event_draft",
     "checkin_context",
     "replan_draft",
 )
@@ -28,27 +29,38 @@ STATE_KEYS = (
 def _persist() -> None:
     if not st.session_state.get("auth_token"):
         return
+    if any(message["role"] == "user" for message in st.session_state["messages"]):
+        st.session_state["has_user_history"] = True
+        st.session_state["chat_scroll_to_bottom"] = True
+    messages = st.session_state["messages"]
+    has_new_messages = any(not message.get("client_id") for message in messages)
     state = {key: st.session_state.get(key) for key in STATE_KEYS}
     with runtime.session_scope("conversation.save") as session:
-        conversation.save_state(
-            session,
-            runtime.user_id(),
-            st.session_state["messages"],
-            state,
-        )
+        conversation.save_state(session, runtime.user_id(), messages, state)
+    if has_new_messages and len(messages) > conversation.PAGE_SIZE:
+        st.session_state["messages"] = messages[-conversation.PAGE_SIZE:]
+        st.session_state["chat_has_more"] = True
 
 
 def ensure_state() -> None:
     st.session_state.setdefault("messages", [])
+    st.session_state.setdefault("has_user_history", False)
+    st.session_state.setdefault("chat_has_more", False)
     for key in STATE_KEYS:
         st.session_state.setdefault(key, None)
     if st.session_state.get("conversation_loaded"):
         return
     with runtime.session_scope("conversation.load") as session:
-        messages, state = conversation.load_state(session, runtime.user_id())
+        page = conversation.load_page(session, runtime.user_id())
+        state = conversation.load_task_state(session, runtime.user_id())
+    messages = page["messages"]
     st.session_state["messages"] = messages or [
         {"role": "assistant", "content": "Hi — tell me a goal, or add something to your calendar."}
     ]
+    st.session_state["chat_has_more"] = page["has_more"]
+    st.session_state["has_user_history"] = page["has_user_history"]
+    # 重开对话回到底部；空会话不滚动
+    st.session_state["chat_scroll_to_bottom"] = page["has_user_history"]
     for key in STATE_KEYS:
         st.session_state[key] = state.get(key)
     st.session_state["conversation_loaded"] = True
@@ -56,10 +68,36 @@ def ensure_state() -> None:
         _persist()
 
 
+def load_earlier() -> None:
+    """向前一页 prepend 更早的消息，记录原首条为滚动锚点，不回到底部。"""
+    messages = st.session_state.get("messages") or []
+    anchor = next((message for message in messages if message.get("id")), None)
+    with runtime.session_scope("conversation.load_earlier") as session:
+        if anchor is None:
+            # 会话内截断（_persist）后内存消息只有 client_id 没有数据库 id：
+            # 先从数据库重取最新一页恢复锚点，否则按钮点击无响应
+            latest = conversation.load_page(session, runtime.user_id())
+            messages = latest["messages"]
+            if not messages:
+                st.session_state["chat_has_more"] = False
+                return
+            st.session_state["messages"] = messages
+            anchor = messages[0]
+        page = conversation.load_page(session, runtime.user_id(), before_id=anchor["id"])
+    if not page["messages"]:
+        st.session_state["chat_has_more"] = False
+        return
+    st.session_state["messages"] = page["messages"] + messages
+    st.session_state["chat_has_more"] = page["has_more"]
+    st.session_state["chat_anchor"] = anchor.get("client_id") or f"db_{anchor['id']}"
+    st.rerun()
+
+
 def _record_reply(reply) -> None:
     st.session_state["messages"].append({"role": "assistant", "content": reply.text})
     st.session_state["goal_brief"] = reply.goal_brief
     st.session_state["goal_draft"] = getattr(reply, "goal_draft", None)
+    st.session_state["event_draft"] = getattr(reply, "event_draft", None)
     st.session_state["pending_action"] = getattr(reply, "pending_action", None)
     st.session_state["last_parser"] = reply.parser
     ctx = reply.checkin_context
@@ -78,7 +116,7 @@ def _record_reply(reply) -> None:
 
 def start_checkin_if_needed() -> None:
     if any(st.session_state.get(key) is not None for key in (
-        "checkin_context", "goal_brief", "goal_draft", "pending", "pending_action"
+        "checkin_context", "goal_brief", "goal_draft", "event_draft", "pending", "pending_action"
     )):
         return
     with runtime.session_scope("start_checkin_if_needed") as session:
@@ -109,6 +147,48 @@ def cancel_goal_draft() -> None:
     st.session_state["messages"].append({"role": "assistant", "content": "Draft discarded. No goal was created."})
     _persist()
     st.rerun()
+
+
+def confirm_event_draft(approved: bool) -> None:
+    draft = st.session_state.get("event_draft")
+    if draft is None:
+        return
+    # 先清状态再写库：按钮/文字重复触发不会二次执行同一草稿
+    st.session_state["event_draft"] = None
+    with runtime.session_scope("event_draft.confirm") as session:
+        reply = agent.confirm_event_draft(
+            session, runtime.user_id(), draft, approved, runtime.now(), runtime.timezone()
+        )
+    _record_reply(reply)
+    _persist()
+    st.rerun()
+
+
+def _run_event_draft_turn(text: str) -> bool:
+    """日历预览显示中：确认/取消/新指令退出，其余回复不自动写入。"""
+    if st.session_state.get("event_draft") is None:
+        return False
+    decision = text.strip().lower().strip("。.!！")
+    if re.fullmatch(
+        r"添加|确认添加|确认|好|好的|嗯|可以|安排吧|加吧|"
+        r"yes|confirm|ok|okay|go ahead|add( them| it| all)?( to( my)? calendar)?",
+        decision,
+    ):
+        confirm_event_draft(True)
+        return True
+    if re.fullmatch(r"取消|算了|不用|先不|不要|不需要|no|nope|cancel|never mind", decision):
+        confirm_event_draft(False)
+        return True
+    if agent.looks_like_new_command(text, runtime.now()):
+        st.session_state["event_draft"] = None
+        return False
+    st.session_state["messages"].append({
+        "role": "assistant",
+        "content": "The calendar preview above isn't saved yet — "
+        'say "add to calendar" to confirm, or "cancel" to drop it.',
+    })
+    _persist()
+    return True
 
 
 _ORDINALS = {
@@ -236,7 +316,7 @@ def run_turn(text: str) -> None:
             return
         st.session_state["pending_action"] = None
 
-    if _run_goal_draft_turn(text) or _run_pending_turn(text):
+    if _run_goal_draft_turn(text) or _run_pending_turn(text) or _run_event_draft_turn(text):
         return
     brief = st.session_state.get("goal_brief")
     if brief is not None and agent.looks_like_new_command(text, runtime.now()):
@@ -257,7 +337,11 @@ def run_turn(text: str) -> None:
                     st.session_state["checkin_context"] = reply.checkin_context
             else:
                 reply = agent.handle(session, runtime.user_id(), text, runtime.now(), runtime.timezone())
-            if st.session_state.get("checkin_context") is None and reply.goal_brief is None:
+            if (
+                st.session_state.get("checkin_context") is None
+                and reply.goal_brief is None
+                and reply.event_draft is None
+            ):
                 new_ctx, question = agent.begin_checkin(session, runtime.user_id(), runtime.now(), runtime.timezone())
                 if new_ctx is not None:
                     st.session_state["checkin_context"] = new_ctx
@@ -351,6 +435,7 @@ def schedule_step(step_id: int) -> None:
     if candidates:
         st.session_state["goal_draft"] = None
         st.session_state["goal_brief"] = None
+        st.session_state["event_draft"] = None
         st.session_state["pending"] = {"candidates": candidates, "step_id": step_id, "origin": "goal"}
         message = f"Choose a time for **{title}** in Chat."
         st.session_state["messages"].append({"role": "assistant", "content": message})

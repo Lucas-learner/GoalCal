@@ -27,9 +27,13 @@ GOAL_MARKERS = re.compile(
 ADD_MARKERS = re.compile(
     r"^\s*(add|schedule|create|put|book|block|set up)\b|"
     r"\bhelp me (?:to )?(add|schedule|create|put|book|block|set up)\b|"
-    r"帮我(加|安排|建|创建)|帮忙(加|安排)|添加|安排一个|加一个",
+    r"\b(?:add|put|schedule|save|block)\b[^.。;!?]{0,40}?\b(?:to|into|in|on)\s+(?:my\s+)?calendar\b|"
+    r"帮我(加|安排|建|创建)|帮忙(加|安排)|添加|安排一个|加一个|"
+    r"(?:安排|加|写|放|排|记录|存)(?:进|入|到)(?:我的)?(?:日历|日程)",
     re.I,
 )
+# 明确要求写入日历（上文提取时间块的触发条件）：add_event 无时间时才读取少量上文
+CALENDAR_WRITE_MARKERS = re.compile(r"日历|\bcalendar\b", re.I)
 MOVE_MARKERS = re.compile(
     r"\b(move|reschedule|shift|push|postpone)\b|\bdo\b[^.?!]*\binstead\b|改到|移到|挪到|推迟|提前",
     re.I,
@@ -194,6 +198,9 @@ def _clean_title(text: str, spans: list[str]) -> str:
         flags=re.I,
     )
     cleaned = re.sub(r"找个?时间|找时间|安排(一下)?", " ", cleaned)
+    # “安排进日历/写进我的日程”这类指令残留不属于标题
+    cleaned = re.sub(r"(?:安排|加|写|放|排|记录|存)?(?:进|入|到)?(?:我的)?日历|(?:进|入|到)(?:我的)?日程", " ", cleaned)
+    cleaned = re.sub(r"\b(?:to|into|in|on)\s+(?:my\s+)?calendar\b|\bcalendar\b", " ", cleaned, flags=re.I)
     # 开头的指令词可能叠着出现（"帮我安排…"、"帮忙加个…"），循环剥到不再变化
     leading = re.compile(
         r"^\s*(?:add|schedule|create|put|book|block|set up|move|reschedule|shift|push|postpone|"
@@ -217,6 +224,9 @@ def _clean_title(text: str, spans: list[str]) -> str:
     )
     cleaned = re.sub(r"^\s*(a|an|the)\s+", "", cleaned, flags=re.I)
     cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,.'\"")
+    # “put them in my calendar” 剥完只剩代词，不算标题
+    if cleaned.casefold() in {"them", "these", "those", "it", "this", "that"}:
+        cleaned = ""
     return cleaned[:80]
 
 
@@ -329,15 +339,17 @@ def parse_with_rules(text: str, now: datetime) -> Action:
         )
 
     # 8) 加日程（显式指令，早于建目标/查询："帮我安排明天10点开会"、"help me add …"）
+    #    明确的写日历指令缺时间时也保留 add_event：由执行层从上文提取或追问，
+    #    不能降级成 chat 让模型回答“无法写入日历”。
     if ADD_MARKERS.search(raw):
         when = _attach(dates[0][1], now) if dates else None
         title = _clean_title(raw, spans)
         return Action(
-            intent="add_event" if when else "chat",
+            intent="add_event",
             title=title or "Untitled",
             start=when,
             duration_min=duration or 60,
-            confidence=0.7 if when else 0.3,
+            confidence=0.7 if when else 0.6,
             raw=raw,
         )
 

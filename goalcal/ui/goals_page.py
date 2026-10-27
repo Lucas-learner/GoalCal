@@ -28,24 +28,25 @@ def _render_detail(snapshot, blocks) -> None:
 
 
 def _render_directory(snapshots, selected_id: int, blocks) -> None:
-    st.caption("YOUR GOALS")
+    st.caption("Your goals")
     for snapshot in snapshots:
-        marker = "● " if snapshot["id"] == selected_id else ""
-        if st.button(
-            marker + snapshot["title"],
-            key=f"select_goal_{snapshot['id']}",
-            use_container_width=True,
-        ):
-            st.session_state["selected_goal_id"] = snapshot["id"]
-            st.rerun()
-        st.progress(min(1.0, snapshot["progress"]))
-        next_step = snapshot.get("next_step")
-        if next_step is not None:
-            st.caption(f"Next · {next_step.title}")
-            if block := blocks.get(next_step.id):
-                st.caption(f"Scheduled · {block['start']:%a %b %d, %H:%M}")
-        else:
-            st.caption(f"{snapshot['done']}/{snapshot['total']} steps completed")
+        with st.container(border=True):
+            if st.button(
+                snapshot["title"],
+                key=f"select_goal_{snapshot['id']}",
+                use_container_width=True,
+                type="primary" if snapshot["id"] == selected_id else "secondary",
+            ):
+                st.session_state["selected_goal_id"] = snapshot["id"]
+                st.rerun()
+            st.progress(min(1.0, snapshot["progress"]))
+            next_step = snapshot.get("next_step")
+            if next_step is not None:
+                st.caption(f"Next · {next_step.title}")
+                if block := blocks.get(next_step.id):
+                    st.caption(f"Scheduled · {block['start']:%a %b %d, %H:%M}")
+            else:
+                st.caption(f"{snapshot['done']}/{snapshot['total']} steps completed")
 
 
 def render() -> None:

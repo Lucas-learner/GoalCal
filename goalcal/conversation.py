@@ -14,6 +14,7 @@ from .models import Conversation, Message
 from .timeutil import utcnow_naive
 
 STATE_VERSION = 1
+PAGE_SIZE = 30
 
 
 def _encode(value):
@@ -56,6 +57,10 @@ def _decode(value):
 
         data["deadline"] = date.fromisoformat(data["deadline"])
         return GoalDraft(**data)
+    if kind == "EventDraft":
+        from .agent import EventDraft
+
+        return EventDraft(**data)
     if kind == "Candidate":
         if isinstance(data["start"], str):
             data["start"] = datetime.fromisoformat(data["start"])
@@ -82,6 +87,51 @@ def _conversation(session, user_id: int) -> Conversation | None:
     )
 
 
+def load_task_state(session, user_id: int) -> dict:
+    """只恢复当前任务状态（pending/goal_draft 等），与消息分页解耦。"""
+    conversation = _conversation(session, user_id)
+    if conversation is None:
+        return {}
+    try:
+        return _decode(json.loads(conversation.state_json or "{}"))
+    except (ValueError, TypeError, AttributeError, json.JSONDecodeError):
+        return {}
+
+
+def load_page(
+    session, user_id: int, before_id: int | None = None, limit: int = PAGE_SIZE
+) -> dict:
+    """按消息 ID 游标分页：默认最新一页，before_id 取更早的一页。
+
+    返回 {"messages", "has_more", "has_user_history"}；messages 为正序，
+    每条带数据库 id（供下一次 before_id 游标使用）。has_user_history 表示
+    整个对话里是否存在真实用户消息，与当前页无关。
+    """
+    conversation = _conversation(session, user_id)
+    if conversation is None:
+        return {"messages": [], "has_more": False, "has_user_history": False}
+    query = select(Message).where(Message.conversation_id == conversation.id)
+    if before_id is not None:
+        query = query.where(Message.id < before_id)
+    rows = list(session.scalars(query.order_by(Message.id.desc()).limit(limit + 1)))
+    has_more = len(rows) > limit
+    messages = [
+        {"id": message.id, "role": message.role, "content": message.content, "client_id": message.client_id}
+        for message in reversed(rows[:limit])
+    ]
+    has_user_history = session.scalar(
+        select(Message.id).where(
+            Message.conversation_id == conversation.id, Message.role == "user"
+        ).limit(1)
+    ) is not None
+    return {"messages": messages, "has_more": has_more, "has_user_history": has_user_history}
+
+
+def load_recent(session, user_id: int, limit: int = 6) -> list[dict]:
+    """普通 chat 的少量上下文：只读最近 limit 条，不加载完整历史。"""
+    return load_page(session, user_id, limit=limit)["messages"]
+
+
 def load_state(session, user_id: int) -> tuple[list[dict], dict]:
     conversation = _conversation(session, user_id)
     if conversation is None:
@@ -92,11 +142,7 @@ def load_state(session, user_id: int) -> tuple[list[dict], dict]:
             select(Message).where(Message.conversation_id == conversation.id).order_by(Message.id)
         )
     ]
-    try:
-        state = _decode(json.loads(conversation.state_json or "{}"))
-    except (ValueError, TypeError, AttributeError, json.JSONDecodeError):
-        state = {}
-    return messages, state
+    return messages, load_task_state(session, user_id)
 
 
 def save_state(session, user_id: int, messages: list[dict], state: dict) -> Conversation:
@@ -111,10 +157,17 @@ def save_state(session, user_id: int, messages: list[dict], state: dict) -> Conv
         )
     )
     existing_ids = {row.client_id for row in stored if row.client_id is not None}
+    # 内存里可能是分页后的最后一页而非完整历史：无 client_id 的消息只有在
+    # 位于任何已知 client_id 消息之前、且落在已存储范围内时，才视为旧消息跳过；
+    # 跟在已知消息之后的无 client_id 消息是本轮新追加的，必须写入。
+    first_known = next(
+        (index for index, item in enumerate(messages) if item.get("client_id")),
+        len(messages),
+    )
     for index, item in enumerate(messages):
         if item.get("client_id") in existing_ids:
             continue
-        if index < len(stored) and not item.get("client_id"):
+        if not item.get("client_id") and index < first_known and index < len(stored):
             continue
         item["client_id"] = item.get("client_id") or uuid.uuid4().hex
         session.add(

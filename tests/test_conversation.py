@@ -99,3 +99,85 @@ def test_conversation_is_scoped_to_each_user(session, user):
     other = ensure_user(session, "other")
     conversation.save_state(session, user.id, [{"role": "user", "content": "private"}], {"pending": None})
     assert conversation.load_state(session, other.id) == ([], {})
+
+
+def _seed_messages(session, user_id, count, start=0):
+    messages = [
+        {"role": "user" if i % 2 else "assistant", "content": f"msg-{i:02d}"}
+        for i in range(start, start + count)
+    ]
+    conversation.save_state(session, user_id, messages, {})
+    return messages
+
+
+def test_load_page_returns_latest_page_with_cursor_and_has_more(session, user):
+    _seed_messages(session, user.id, 35)
+
+    page = conversation.load_page(session, user.id)
+    assert [m["content"] for m in page["messages"]] == [f"msg-{i:02d}" for i in range(5, 35)]
+    assert page["has_more"] is True
+    assert page["has_user_history"] is True
+    assert all(m["id"] and m["client_id"] for m in page["messages"])
+
+    earlier = conversation.load_page(session, user.id, before_id=page["messages"][0]["id"])
+    assert [m["content"] for m in earlier["messages"]] == [f"msg-{i:02d}" for i in range(5)]
+    assert earlier["has_more"] is False
+
+    messages, _ = conversation.load_state(session, user.id)
+    assert len(messages) == 35
+
+
+def test_load_page_reports_user_history_beyond_the_current_page(session, user):
+    messages = [{"role": "user", "content": "old question"}] + [
+        {"role": "assistant", "content": f"reply-{i:02d}"} for i in range(30)
+    ]
+    conversation.save_state(session, user.id, messages, {})
+
+    page = conversation.load_page(session, user.id)
+    assert all(m["role"] == "assistant" for m in page["messages"])
+    assert page["has_user_history"] is True
+
+    from goalcal.domain.goals import ensure_user
+
+    fresh = ensure_user(session, "fresh")
+    conversation.save_state(session, fresh.id, [{"role": "assistant", "content": "welcome"}], {})
+    fresh_page = conversation.load_page(session, fresh.id)
+    assert fresh_page["has_user_history"] is False
+    assert fresh_page["has_more"] is False
+
+    empty = ensure_user(session, "empty")
+    assert conversation.load_page(session, empty.id) == {
+        "messages": [], "has_more": False, "has_user_history": False,
+    }
+
+
+def test_append_after_partial_page_load_loses_no_messages(session, user):
+    _seed_messages(session, user.id, 35)
+    page = conversation.load_page(session, user.id)
+    assert len(page["messages"]) == 30
+
+    page["messages"].append({"role": "user", "content": "appended after paged load"})
+    conversation.save_state(session, user.id, page["messages"], {})
+    conversation.save_state(session, user.id, page["messages"], {})  # 重复保存幂等
+
+    messages, _ = conversation.load_state(session, user.id)
+    contents = [m["content"] for m in messages]
+    assert contents == [f"msg-{i:02d}" for i in range(35)] + ["appended after paged load"]
+
+
+def test_load_recent_returns_only_the_latest_messages_in_order(session, user):
+    _seed_messages(session, user.id, 10)
+    recent = conversation.load_recent(session, user.id, limit=6)
+    assert [m["content"] for m in recent] == [f"msg-{i:02d}" for i in range(4, 10)]
+
+
+def test_load_task_state_restores_pending_without_messages(session, user):
+    from goalcal.agent import CheckinContext
+
+    _seed_messages(session, user.id, 40)
+    conversation.save_state(
+        session, user.id, [],
+        {"checkin_context": CheckinContext(stage="outcome", event_ids=[3])},
+    )
+    state = conversation.load_task_state(session, user.id)
+    assert state["checkin_context"] == CheckinContext(stage="outcome", event_ids=[3])

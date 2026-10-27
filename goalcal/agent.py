@@ -1,7 +1,7 @@
 """Agent 编排层：解析 → 执行 → 回复。
 
-LLM 只出现在 `parse()` 里；下面所有写库动作都是确定性代码。
-这是报告里“LLM 解析意图，代码执行日历操作”的那张图。
+LLM 出现在两处：`parse()` 里解析意图，`llm.respond` 里回复普通闲聊；
+所有写库动作和写操作的结果文案都是确定性代码。
 """
 
 from __future__ import annotations
@@ -29,24 +29,19 @@ from .domain.scheduler import (
     free_intervals,
     propose,
 )
+from .llm import event_plan, respond
 from .llm.action import Action
 from .llm.parser import parse
 from .llm.plan import generate_outline_plan, generate_plan
-from .llm.rules import NEW_COMMAND_INTENTS, parse_with_rules
+from .llm.rules import CALENDAR_WRITE_MARKERS, NEW_COMMAND_INTENTS, parse_with_rules
 from .models import Event, Goal, RescheduleLog, StateLog, Step
 from .timeutil import as_local, as_utc_naive
 
 HELP = (
-    "I can:\n"
-    "• add / move / delete events — “Add a meeting Wednesday 10am”\n"
-    "• track a goal — “I want to publish my first short video in 30 days”; "
-    "complex skills get a quick level + timeline check\n"
-    "• delete a goal — “delete “track my goal””\n"
-    "• report progress — “I finished the script today”\n"
-    "• tell me your state — “I'm tired” / “busy” / “uninspired”\n"
-    "• find time for a goal step — “Find time for my next step”\n"
-    "• pack a whole window — “Schedule everything this afternoon”\n"
-    "• see your week — “When am I free this week?”"
+    "I can add, move or delete events (“Add a meeting Wednesday 10am”), "
+    "break a goal into steps and schedule them (“I want to publish my first short video in 30 days”), "
+    "log progress (“I finished the script today”), "
+    "and adapt to your state (“I'm tired”)."
 )
 
 PARTIAL = re.compile(r"\b(half|partly|partially|some|started|almost)\b|一半|部分|开始", re.I)
@@ -56,11 +51,10 @@ HELP_MARKERS = re.compile(
     re.I,
 )
 CLARIFY = (
-    "I'm not sure what you want me to change yet. Try:\n"
+    "I'm not sure what you want to change yet. Try:\n"
     "• “Add a meeting tomorrow 10am”\n"
     "• “I finished the script today”\n"
-    "• “I'm tired”\n"
-    "Or pick a goal step on the right and press **Find time**."
+    "• “Find time for my next step”"
 )
 
 # 删除/改期这类不好撤销的操作，置信度不够就先追问，不直接执行
@@ -94,6 +88,14 @@ class GoalDraft:
 
 
 @dataclass
+class EventDraft:
+    """待确认的日历预览：结构化 add_event Action 列表，确认前不写库。"""
+
+    events: list[Action]
+    draft_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+
+
+@dataclass
 class Reply:
     text: str
     action: Action
@@ -104,6 +106,7 @@ class Reply:
     step_id: int | None = None
     goal_brief: planner.GoalBrief | None = None
     goal_draft: GoalDraft | None = None
+    event_draft: EventDraft | None = None
     checkin_context: "CheckinContext | None" = None
     pending_action: PendingAction | None = None
 
@@ -131,7 +134,14 @@ def handle(
     }.get(action.intent)
 
     if handler is None:
-        text = HELP if HELP_MARKERS.search(action.raw or "") else CLARIFY
+        if HELP_MARKERS.search(action.raw or ""):
+            return Reply(HELP, action, parser)
+        # 普通闲聊：先理解再建议（LLM），失败回退到简短的上下文相关话术
+        text = (
+            respond.chat_reply(session, user_id, action.raw or "", now, tz)
+            or respond.fallback(session, user_id, action.raw or "")
+            or CLARIFY
+        )
         return Reply(text, action, parser)
     if action.intent in RISKY_INTENTS and action.confidence < CONFIRM_THRESHOLD:
         return Reply(
@@ -176,10 +186,47 @@ def confirm_action(
 # ------------------------------------------------------------------ handlers
 
 
+def _event_keys(session, user_id: int) -> set[tuple[str, datetime]]:
+    """已有日程的 (标题小写, 开始时刻 UTC) 集合，用于预览与确认时去重。"""
+    return {
+        (ev.title.casefold(), ev.start_utc)
+        for ev in session.scalars(select(Event).where(Event.user_id == user_id))
+    }
+
+
 def _add_event(session, user_id, action, now, tz, parser) -> Reply:
     if action.start is None:
+        # 明确写日历但当前消息没时间：从上文提取助手刚提议的时间块
+        if CALENDAR_WRITE_MARKERS.search(action.raw or ""):
+            actions = event_plan.extract_events(session, user_id, action.raw or "", now, tz)
+            if actions:
+                existing = _event_keys(session, user_id)
+                fresh = [
+                    a for a in actions
+                    if ((a.title or "").casefold(), as_utc_naive(a.start, tz)) not in existing
+                ]
+                if not fresh:
+                    return Reply(
+                        "Those blocks are already on your calendar — nothing new to add.",
+                        action, parser,
+                    )
+                draft = EventDraft(events=fresh)
+                lines = [
+                    f"• {a.title} — {a.start:%a %b %d %H:%M}–{a.end:%H:%M}" for a in draft.events
+                ]
+                return Reply(
+                    f"Here's a calendar preview with {len(draft.events)} event(s):\n"
+                    + "\n".join(lines)
+                    + "\nNothing is saved yet — confirm below and I'll add them all at once.",
+                    action, parser, event_draft=draft,
+                )
+        if action.title and action.title != "Untitled":
+            return Reply(
+                f'When should I put “{action.title}”? Try “tomorrow 10am” or “Friday afternoon”.',
+                action, parser,
+            )
         return Reply(
-            f'When should I put “{action.title}”? Try “tomorrow 10am” or “Friday afternoon”.',
+            "What should I add, and when? Try “Add a meeting tomorrow 10am”.",
             action, parser,
         )
     ev = cal.create_event(
@@ -189,6 +236,51 @@ def _add_event(session, user_id, action, now, tz, parser) -> Reply:
         f"Added “{ev.title}” on {action.start:%a %b %d, %H:%M}–{action.end:%H:%M}."
         " Anything else?",
         action, parser,
+    )
+
+
+def confirm_event_draft(
+    session: Session,
+    user_id: int,
+    draft: EventDraft,
+    approved: bool,
+    now: datetime,
+    tz: str = "Asia/Shanghai",
+) -> Reply:
+    """确认/取消日历预览。确认时在同一事务内再次按标题+开始时间去重后逐个建块。
+
+    取消不写库；任一 create_event 失败抛出让外层 session_scope 整体回滚。
+    """
+    action = Action(intent="add_event", confidence=1.0, raw="event draft confirmation")
+    if not approved:
+        return Reply("Okay — nothing was added to your calendar.", action, "event_draft:cancel")
+    existing = _event_keys(session, user_id)
+    created: list[Event] = []
+    for item in draft.events:
+        if item.start is None:
+            continue
+        item.normalized(now)
+        key = ((item.title or "Untitled").casefold(), as_utc_naive(item.start, tz))
+        if key in existing:
+            continue
+        ev = cal.create_event(
+            session, user_id, item.title or "Untitled", item.start, item.end, tz=tz
+        )
+        existing.add(key)
+        created.append(ev)
+    session.flush()
+    if not created:
+        return Reply(
+            "Those blocks are already on your calendar — nothing new was added.",
+            action, "event_draft:confirm",
+        )
+    lines = [
+        f"• {ev.title} — {as_local(ev.start_utc, tz):%a %b %d %H:%M}–{as_local(ev.end_utc, tz):%H:%M}"
+        for ev in created
+    ]
+    return Reply(
+        f"Added {len(created)} event(s) to your calendar:\n" + "\n".join(lines),
+        action, "event_draft:confirm",
     )
 
 
@@ -848,9 +940,6 @@ def _set_state(session, user_id, action, now, tz, parser) -> Reply:
     session.add(StateLog(user_id=user_id, label=action.state or "", energy=energy, note=action.raw))
     session.flush()
 
-    if action.state == "busy":
-        return Reply("Got it — I'll keep this week light and only suggest short blocks.", action, parser)
-
     goals = goal_svc.active_goals(session, user_id)
     if not goals:
         return Reply("Noted. Tell me a goal and I'll keep it in mind when scheduling.", action, parser)
@@ -860,13 +949,14 @@ def _set_state(session, user_id, action, now, tz, parser) -> Reply:
     if error is not None:
         return Reply(error, action, parser)
     if not target:
-        step = _pick_step(goal, prefer_low_energy=action.state in {"tired", "uninspired"})
+        step = _pick_step(goal, prefer_low_energy=action.state in {"tired", "busy", "uninspired"})
     if step is None:
         return Reply("Noted.", action, parser)
     candidates = _propose(session, user_id, step, now, tz, goal.deadline)
     note = {
         "tired": "Let's not force a deep block. I picked a lighter step:",
         "uninspired": "When you're stuck, starting is the hard part. A small step:",
+        "busy": "For the busy days, a short step that still moves things:",
         "fresh": "Good — let's use it. Next step:",
     }.get(action.state or "", "Next step:")
     return Reply(

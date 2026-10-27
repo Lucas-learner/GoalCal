@@ -63,7 +63,7 @@ def _render_preferences() -> None:
             value=bool(values.get(memory.LEARNING_ENABLED_KEY, True)),
         )
         lunch = st.text_input("Protected lunch window", value="-".join(str(v) for v in values.get("lunch", [12, 13])))
-        saved = st.form_submit_button("Save preferences", type="primary")
+        saved = st.form_submit_button("Save preferences")
     if saved:
         try:
             if day_start >= day_end:

@@ -39,6 +39,22 @@ def user(session):
     return ensure_user(session, "test")
 
 
+@pytest.fixture(autouse=True)
+def _reset_global_login_throttle():
+    """每个测试后清掉全局登录节流计数：整套测试的登录次数远超 100 次/15 分钟的上限。
+
+    只清 'global' 键，单账号 5 次的限制仍然生效；不影响被测代码。
+    """
+    yield
+    try:
+        from goalcal import storage
+
+        with storage.connect() as con:
+            con.execute("DELETE FROM login_limits WHERE key='global'")
+    except Exception:
+        pass
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _cleanup_test_db():
     yield
