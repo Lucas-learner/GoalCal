@@ -7,44 +7,69 @@ from ..domain import planner
 from . import chat as chat_ui
 from . import controller, current, runtime
 
-STARTERS = [
-    "I want to publish my first short video in 30 days",
-    "Add a meeting tomorrow 10am",
-    "Find time for my next step",
-]
+SLOGAN = "What do you want to make time for?"
+
+ADD_EVENT_EXAMPLE = "Add a meeting tomorrow 10am"
+REVIEW_QUERY = "What's on this week?"
+HELP_QUERY = "What can you do?"
 
 
-def _render_starters() -> None:
-    st.caption("A few ways to start:")
-    for idx, text in enumerate(STARTERS):
-        if st.button(text, key=f"starter_{idx}"):
-            controller.run_turn(text)
-            st.rerun()
+def home_suggestions(status: dict) -> list[dict]:
+    """首页情境建议（纯函数）：状态直接藏进建议句，一行一条。
 
-
-def _render_home() -> None:
-    """无用户历史时的首页：真实当前状态 + 可执行建议；无数据才退到 starters。"""
-    status = current.load()
-    if not current.has_data(status):
-        _render_starters()
-        return
-    if status["goal_title"] is not None:
-        line = f"**{status['goal_title']}** · {status['progress_pct']}%"
-        if status["days_left"] is not None:
-            line += f" · {status['days_left']} days left"
-        st.markdown(line)
-    if status["next_step_title"] is not None:
-        st.caption(f"Next step: {status['next_step_title']} · {status['next_step_minutes']} min")
+    有目标/日程：选择目标并排期 → 查询本周日程 → 新目标；
+    没有任何可行动作时（空账号或目标已全部完成）：同样三层结构换成
+    Create a goal / Add an event / 产品能力，绝不出现无目标的排期按钮。
+    """
+    suggestions: list[dict] = []
+    if status["next_step_id"] is not None:
+        suggestions.append({
+            "key": "home_suggestion_goal",
+            "label": "Find time for my goal",
+            "action": "run_turn",
+            "text": "Find time for my goal",
+        })
     if status["next_event_title"] is not None:
-        st.caption(f"Next event: {status['next_event_title']} · {status['next_event_start']:%a %b %d, %H:%M}")
-    primary, secondary = st.columns(2)
-    if status["next_step_id"] is not None and primary.button(
-        "Find time for next step", key="home_find_time", type="primary", use_container_width=True
-    ):
-        controller.schedule_step(status["next_step_id"])
-    if secondary.button("Review today", key="home_review_today", use_container_width=True):
-        controller.run_turn("What's on today?")
-        st.rerun()
+        suggestions.append({
+            "key": "home_suggestion_event",
+            "label": "Review my calendar",
+            "action": "run_turn",
+            "text": REVIEW_QUERY,
+        })
+    if suggestions:
+        suggestions.append({
+            "key": "home_suggestion_new",
+            "label": "Start a new goal",
+            "action": "begin_goal",
+        })
+        return suggestions
+    return suggestions + [
+        {"key": "home_suggestion_new", "label": "Start a new goal", "action": "begin_goal"},
+        {"key": "home_suggestion_event", "label": "Add an event",
+         "action": "run_turn", "text": ADD_EVENT_EXAMPLE},
+        {"key": "home_suggestion_help", "label": "See what I can do",
+         "action": "run_turn", "text": HELP_QUERY},
+    ]
+
+
+def _render_home() -> list[dict]:
+    """空首页先渲染 slogan，建议等输入框之后再渲染。"""
+    with st.container(key="home_slogan"):
+        st.markdown(SLOGAN)
+    return home_suggestions(current.load())
+
+
+def _render_home_suggestions(suggestions: list[dict]) -> None:
+    with st.container(key="home_suggestions"):
+        for suggestion in suggestions:
+            if st.button(suggestion["label"], key=suggestion["key"]):
+                if suggestion["action"] == "schedule_step":
+                    controller.schedule_step(suggestion["step_id"])
+                elif suggestion["action"] == "begin_goal":
+                    controller.begin_goal()
+                else:
+                    controller.run_turn(suggestion["text"])
+                st.rerun()
 
 
 def _render_pending_action() -> None:
@@ -165,32 +190,40 @@ def render() -> None:
             and st.session_state.get("goal_draft") is None
             and st.session_state.get("pending") is None
             and st.session_state.get("event_draft") is None
+            and not st.session_state.get("goal_intake")
         )
-        if not st.session_state.get("has_user_history") and idle:
-            st.title("GoalCal")
-            st.caption("Tell me what you want to move forward. I’ll help with the next step.")
-            _render_home()
-        if st.session_state.get("chat_has_more"):
-            if st.button("Load earlier messages", key="load_earlier"):
-                controller.load_earlier()
-        chat_ui.render_messages(messages)
-        # 单一主任务：任意时刻只显示一个待处理面板
-        if st.session_state.get("pending_action") is not None:
-            _render_pending_action()
-        elif st.session_state.get("goal_draft") is not None:
-            _render_goal_draft()
-        elif st.session_state.get("pending") is not None:
-            _render_pending()
-        elif st.session_state.get("event_draft") is not None:
-            _render_event_draft()
-        else:
-            _render_quick_replies()
+        home = (
+            not st.session_state.get("has_user_history")
+            and idle
+            # 只有预置欢迎消息才算空首页：任何对话动作（含 Goals 页发起的
+            # 排期/预订，不产生用户消息）之后都留在消息流，首页不再回来
+            and len(messages) <= 1
+        )
+        suggestions = _render_home() if home else []
+        if not home:
+            if st.session_state.get("chat_has_more"):
+                if st.button("Load earlier messages", key="load_earlier"):
+                    controller.load_earlier()
+            chat_ui.render_messages(messages)
+            # 单一主任务：任意时刻只显示一个待处理面板
+            if st.session_state.get("pending_action") is not None:
+                _render_pending_action()
+            elif st.session_state.get("goal_draft") is not None:
+                _render_goal_draft()
+            elif st.session_state.get("pending") is not None:
+                _render_pending()
+            elif st.session_state.get("event_draft") is not None:
+                _render_event_draft()
+            else:
+                _render_quick_replies()
         prompt = st.chat_input("Tell me a goal, schedule time, or share your progress…")
+        if home:
+            _render_home_suggestions(suggestions)
         anchor = st.session_state.pop("chat_anchor", None)
         to_bottom = st.session_state.pop("chat_scroll_to_bottom", False)
-        if anchor is not None:
+        if not home and anchor is not None:
             chat_ui.scroll_to_message(anchor)
-        elif to_bottom:
+        elif not home and to_bottom:
             chat_ui.scroll_to_bottom()
     if prompt:
         controller.run_turn(prompt)

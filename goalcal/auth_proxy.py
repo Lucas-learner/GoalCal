@@ -128,6 +128,21 @@ def _secure_cookie(request: Request) -> bool:
     return request.headers.get("x-forwarded-proto", "").lower() == "https" or host not in {"127.0.0.1", "localhost", "[::1]"}
 
 
+def _logout_origin_allowed(request: Request) -> bool:
+    """Reject cross-site logout forms while allowing clients without Origin."""
+    if request.headers.get("sec-fetch-site", "").lower() == "cross-site":
+        return False
+    origin = request.headers.get("origin")
+    if not origin:
+        return True
+    parsed = urlsplit(origin)
+    hosts = {request.headers.get("host", "").lower()}
+    forwarded = request.headers.get("x-forwarded-host", "").split(",", 1)[0].strip().lower()
+    if forwarded:
+        hosts.add(forwarded)
+    return parsed.scheme in {"http", "https"} and parsed.netloc.lower() in hosts
+
+
 async def login(request: Request) -> Response:
     if not await _small_form(request):
         return PlainTextResponse("Invalid form submission", status_code=403)
@@ -166,10 +181,11 @@ async def register(request: Request) -> Response:
 
 
 async def logout(request: Request) -> Response:
-    if not await _small_form(request) or not _valid_form_token(request, await request.form()):
-        return PlainTextResponse("Invalid form submission", status_code=403)
-    token = request.cookies.get(COOKIE_NAME)
-    if token:
+    # 登出不读取表单正文或依赖 10 分钟的登录 CSRF cookie；始终清掉浏览器 session。
+    if not _logout_origin_allowed(request):
+        return PlainTextResponse("Invalid request origin", status_code=403)
+    token = _browser_token(request)
+    if token is not None:
         auth.logout(token)
     response = RedirectResponse("/", status_code=303)
     response.delete_cookie(COOKIE_NAME, path="/")

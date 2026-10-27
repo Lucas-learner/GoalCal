@@ -36,6 +36,7 @@ class Goal(Base):
     outcome: Mapped[str] = mapped_column(Text, default="")
     deadline: Mapped[date | None] = mapped_column(Date, nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="active")  # active|done|paused|archived
+    pinned: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
     template_key: Mapped[str] = mapped_column(String(40), default="generic")
     outline: Mapped[str] = mapped_column(Text, default="")  # JSON 数组：阶段大纲（滚动拆解的总骨架）

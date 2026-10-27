@@ -2,7 +2,7 @@
 from .storage import backup, connect, database_path
 from .models import Base
 
-VERSION = 3
+VERSION = 4
 
 
 def migrate(engine):
@@ -44,6 +44,8 @@ def migrate(engine):
             if 'draft_id' not in goal_columns:
                 con.exec_driver_sql('ALTER TABLE goals ADD COLUMN draft_id TEXT')
             con.exec_driver_sql('CREATE UNIQUE INDEX IF NOT EXISTS ix_goals_draft_id ON goals(draft_id)')
+            if 'pinned' not in goal_columns:
+                con.exec_driver_sql('ALTER TABLE goals ADD COLUMN pinned BOOLEAN NOT NULL DEFAULT 0')
             if con.exec_driver_sql('PRAGMA foreign_key_check').first():
                 raise RuntimeError('Database has invalid foreign keys; repair the development copy before import')
             con.exec_driver_sql(f'PRAGMA user_version={VERSION}')

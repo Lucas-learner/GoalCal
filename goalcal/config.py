@@ -19,7 +19,6 @@ def _bool(value: str | None, default: bool = False) -> bool:
 @dataclass(frozen=True)
 class Settings:
     production: bool = True
-    ai_daily_limit: int = 30
     db_url: str = f"sqlite:///{ROOT / 'var' / 'goalcal-production.db'}"
     tz: str = "Asia/Shanghai"
     llm_api_key: str = ""
@@ -39,7 +38,6 @@ def get_settings() -> Settings:
             raise ValueError("Production requires an absolute SQLite database URL")
     return Settings(
         production=_bool(os.getenv("GOALCAL_PRODUCTION"), True),
-        ai_daily_limit=int(os.getenv("GOALCAL_AI_DAILY_LIMIT", "30")),
         db_url=configured_url,
         tz=os.getenv("GOALCAL_TZ", "Asia/Shanghai"),
         llm_api_key=os.getenv("LLM_API_KEY", ""),

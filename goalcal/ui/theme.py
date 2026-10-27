@@ -53,6 +53,18 @@ div[data-testid="stVerticalBlockBorderWrapper"] {
     border-radius: var(--goalcal-radius);
     border-color: var(--goalcal-line);
 }
+form[action="/_goalcal/logout"] {
+    margin: 0;
+}
+form[action="/_goalcal/logout"] button {
+    width: 100%;
+    min-height: 2.5rem;
+    padding: 0.25rem 0.75rem;
+    border: 1px solid var(--goalcal-line);
+    border-radius: var(--goalcal-radius);
+    background: transparent;
+    cursor: pointer;
+}
 .stButton > button[kind="primary"] {
     background: var(--goalcal-primary);
     border-color: var(--goalcal-primary);
@@ -84,6 +96,46 @@ hr, div[data-testid="stDivider"] {
 
 div[data-testid="stProgressBarTrack"] > div {
     background-color: var(--goalcal-primary);
+}
+
+/* Chat 空首页（.st-key-home_* 元素仅首页存在，其他页面不匹配） */
+.stApp .st-key-home_slogan {
+    margin-top: 12vh;
+}
+.stApp .st-key-home_slogan p {
+    font-size: 1.5rem;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+}
+.stApp .st-key-home_suggestions {
+    margin-top: 1.5rem;
+}
+.stApp div[class*="st-key-home_suggestion_"] .stButton {
+    width: 100%;
+}
+.stApp div[class*="st-key-home_suggestion_"] .stButton > button {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    text-align: left;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    padding-left: 0.25rem;
+    color: var(--goalcal-primary);
+    font-size: 0.95rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.stApp div[class*="st-key-home_suggestion_"] .stButton > button p {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.stApp div[class*="st-key-home_suggestion_"] .stButton > button:hover {
+    background: #f1eee9;
+    color: var(--goalcal-primary);
 }
 """
 

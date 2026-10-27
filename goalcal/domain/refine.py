@@ -78,9 +78,12 @@ def _rule_defs(step: Step) -> list[dict[str, Any]]:
     return defs
 
 
-def refine_next_steps(session: Session, goal: Goal, step: Step) -> list[Step]:
-    """在卡住的步骤前面插入更小的下一步，返回新步骤（第一个是启动动作）。"""
-    defs = _llm_defs(goal, step) or _rule_defs(step)
+def refine_next_steps(session: Session, goal: Goal, step: Step, *, use_llm: bool = True) -> list[Step]:
+    """在卡住的步骤前面插入更小的下一步，返回新步骤（第一个是启动动作）。
+
+    use_llm=False（L1 失败后的降级路径）时只用确定性规则拆分，不构造 LLM 请求。
+    """
+    defs = (_llm_defs(goal, step) if use_llm else None) or _rule_defs(step)
     base = step.seq
     for s in goal.steps:
         if s.seq >= base:
@@ -206,13 +209,14 @@ def _next_phase(goal: Goal) -> str:
     return last_ms or "推进"
 
 
-def refine_upcoming(session: Session, goal: Goal) -> list[Step]:
+def refine_upcoming(session: Session, goal: Goal, *, use_llm: bool = True) -> list[Step]:
     """剩余步骤不足时追加下一批 2–3 步，返回新步骤（追加在末尾）。
 
     LLM 优先（大纲 + 已完成步骤及实际耗时 + 错过原因）；
     不可用且是模板目标时按模板顺序取后续；都没有则不补（返回 []）。
+    use_llm=False（L1 失败后的降级路径）时跳过 LLM，直接走模板/大纲路径。
     """
-    defs = _upcoming_llm_defs(session, goal) or _template_upcoming_defs(goal)
+    defs = (_upcoming_llm_defs(session, goal) if use_llm else None) or _template_upcoming_defs(goal)
     if not defs:
         return []
 

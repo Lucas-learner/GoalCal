@@ -77,6 +77,20 @@ def active_goals(session: Session, user_id: int) -> list[Goal]:
     )
 
 
+def priority_key(goal: Goal) -> tuple:
+    """紧急度排序键：置顶优先；其余按截止日升序（逾期自然靠前），无截止日最后；平手按创建时间。"""
+    return (not goal.pinned, goal.deadline is None, goal.deadline or date.max, goal.created_at)
+
+
+def prioritized_goals(session: Session, user_id: int) -> list[Goal]:
+    return sorted(active_goals(session, user_id), key=priority_key)
+
+
+def set_pinned(session: Session, goal: Goal, pinned: bool) -> None:
+    goal.pinned = bool(pinned)
+    session.flush()
+
+
 def find_goal(session: Session, user_id: int, hint: str) -> Goal | None:
     """按标题找目标；没有标题时，只有在唯一目标的情况下才自动选中。"""
     goals = active_goals(session, user_id)

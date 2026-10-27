@@ -34,8 +34,8 @@ class _FakeClient:
 
 
 def _enable(monkeypatch, client):
-    monkeypatch.setattr(event_plan, "settings", SimpleNamespace(llm_ready=True))
-    monkeypatch.setattr(event_plan, "LLMClient", lambda: client)
+    monkeypatch.setattr(event_plan, "settings", SimpleNamespace(llm_enabled=True))
+    monkeypatch.setattr(event_plan, "plan_client", lambda: client)
 
 
 def _payload():
@@ -184,7 +184,7 @@ def test_invalid_structure_falls_back_to_clarification(session, user, monkeypatc
     reply = agent.handle(session, user.id, "帮我安排进日历", NOW, TZ)
 
     assert reply.event_draft is None
-    assert "What should I add, and when?" in reply.text
+    assert "安排在几点" in reply.text
     assert _titles(session, user.id) == []
 
 
@@ -195,7 +195,7 @@ def test_llm_failure_falls_back_to_clarification(session, user, monkeypatch):
     reply = agent.handle(session, user.id, "帮我安排进日历", NOW, TZ)
 
     assert reply.event_draft is None
-    assert "What should I add, and when?" in reply.text
+    assert "安排在几点" in reply.text
 
 
 def test_low_confidence_and_unresolvable_items_are_dropped(session, user, monkeypatch):

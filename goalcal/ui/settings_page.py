@@ -4,11 +4,13 @@ import json
 
 import streamlit as st
 
-from .. import feedback, memory, metrics
+from .. import auth, feedback, memory, metrics
+from ..auth_proxy import COOKIE_NAME
 from ..config import settings
 from ..domain import ics_import
 from ..safe_fetch import fetch_ics
 from . import runtime
+from .auth import clear_state
 
 
 FEEDBACK_CATEGORY_LABELS = {
@@ -29,6 +31,20 @@ def _parse_window(value: str) -> list[list[int]]:
         start, end = part.strip().split("-")
         result.append([int(start), int(end)])
     return result
+
+
+def _render_account() -> None:
+    st.subheader("Account")
+    details, action = st.columns([4, 1])
+    details.markdown(f"**{st.session_state['username']}**")
+    details.caption(f"Time zone: {runtime.timezone()}")
+    token = st.context.cookies.get(COOKIE_NAME)
+    if isinstance(token, str) and token:
+        action.html('<form action="/_goalcal/logout" method="post"><button type="submit">Log out</button></form>')
+    elif action.button("Log out", key="settings_logout", use_container_width=True):
+        auth.logout(st.session_state.get("auth_token"))
+        clear_state()
+        st.rerun(scope="app")
 
 
 def _render_preferences() -> None:
@@ -126,6 +142,8 @@ def render() -> None:
     st.title("Settings")
     if flash := st.session_state.pop("flash", None):
         st.toast(flash)
+    _render_account()
+    st.divider()
     _render_preferences()
     st.divider()
     _render_calendar_import()

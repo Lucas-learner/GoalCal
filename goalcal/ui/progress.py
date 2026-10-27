@@ -117,6 +117,7 @@ def render_goal(
     on_delete_step=None,
     on_edit_step=None,
     on_archive_goal=None,
+    on_toggle_pin=None,
     on_preview_replan=None,
     on_apply_replan=None,
     on_discard_replan=None,
@@ -217,10 +218,19 @@ def render_goal(
                         else:
                             st.warning("Give the step a title first.")
 
-        if on_preview_replan is not None or on_archive_goal is not None:
+        if on_preview_replan is not None or on_archive_goal is not None or on_toggle_pin is not None:
             with st.popover(
                 "Manage goal", key=f"manage_goal_{goal['id']}", use_container_width=True
             ):
+                if on_toggle_pin is not None:
+                    st.markdown("**Pin to top**")
+                    st.caption("Pinned goals stay first in this list and on the Chat home.")
+                    if st.button(
+                        "Unpin" if goal.get("pinned") else "Pin to top",
+                        key=f"pin_goal_{goal['id']}",
+                        use_container_width=True,
+                    ):
+                        on_toggle_pin(goal["id"])
                 if on_preview_replan is not None:
                     st.markdown("**Adjust plan with AI**")
                     st.caption(

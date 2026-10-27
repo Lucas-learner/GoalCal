@@ -14,7 +14,7 @@ from typing import Any
 from pydantic import BaseModel, ValidationError, field_validator
 
 from ..config import settings
-from .client import LLMClient
+from .router import plan_client
 
 log = logging.getLogger(__name__)
 
@@ -145,13 +145,20 @@ def generate_outline_plan(
     complexity: str = "standard",
     raw: str = "",
     tz: str = "Asia/Shanghai",
+    use_llm: bool = True,
 ) -> tuple[list[str], list[dict[str, Any]]] | None:
     """建目标的滚动拆解：3–5 个阶段的大纲 + 第一阶段 2–3 个具体步骤。
 
     返回 (outline, step_defs)；未启用、失败或校验不通过时返回 None，
     由调用方回退到模板路径（模板步骤有序，天然适合滚动）。
+
+    use_llm=False 用于降级路径：本轮模型不可用时直接走模板，不再调 LLM。
+    ready 按 plan 层客户端判定：只配 LLM_API_KEY_PLAN 也可生效。
     """
-    if not settings.llm_ready:
+    if not use_llm:
+        return None
+    client = plan_client()
+    if not settings.llm_enabled or not getattr(client, "ready", True):
         return None
 
     today = today or date.today()
@@ -168,7 +175,7 @@ def generate_outline_plan(
         now=today.isoformat(), tz=tz, weekday=today.strftime("%A")
     )
     try:
-        data = LLMClient().complete_json(
+        data = client.complete_json(
             system,
             json.dumps(payload, ensure_ascii=False),
             temperature=0.0,
@@ -217,13 +224,18 @@ def generate_plan(
     tz: str = "Asia/Shanghai",
     instruction: str = "",
     current_steps: list[str] | None = None,
+    use_llm: bool = True,
 ) -> list[dict[str, Any]] | None:
     """调用 LLM 生成计划；未启用、失败或校验不通过时返回 None。
 
     instruction/current_steps 用于“有目的地修改计划”，而不是反复抽卡；
     相同输入下 temperature=0，尽量减少无意义漂移。
+    use_llm=False 用于降级路径：本轮模型不可用时直接回退，不再调 LLM。
     """
-    if not settings.llm_ready:
+    if not use_llm:
+        return None
+    client = plan_client()
+    if not settings.llm_enabled or not getattr(client, "ready", True):
         return None
 
     today = today or date.today()
@@ -243,7 +255,7 @@ def generate_plan(
         now=today.isoformat(), tz=tz, weekday=today.strftime("%A")
     )
     try:
-        data = LLMClient().complete_json(
+        data = client.complete_json(
             system,
             json.dumps(payload, ensure_ascii=False),
             temperature=0.0,

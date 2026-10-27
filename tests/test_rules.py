@@ -3,7 +3,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from goalcal.llm.rules import parse_with_rules
+from goalcal.llm.rules import calendar_write_request, parse_with_rules
 
 TZ = ZoneInfo("Asia/Shanghai")
 NOW = datetime(2026, 10, 21, 9, 0, tzinfo=TZ)  # Wednesday
@@ -14,6 +14,15 @@ def test_goal_creation_with_relative_deadline():
     assert a.intent == "create_goal"
     assert a.deadline.isoformat() == "2026-11-20"
     assert a.title == "publish my first short video"
+
+
+def test_calendar_language_distinguishes_request_question_and_negation():
+    assert parse_with_rules("晚上我可以做什么", NOW).intent == "chat"
+    assert parse_with_rules("我想跑步，但先不要安排", NOW).intent == "chat"
+    assert parse_with_rules("先不要把跑步放进日历", NOW).intent == "chat"
+    for text in ("帮我安排进日历", "今晚跑步，记到日历里", "帮我把跑步写进日程"):
+        assert calendar_write_request(text)
+        assert parse_with_rules(text, NOW).intent == "add_event"
 
 
 def test_goal_title_strips_chinese_duration():
@@ -154,6 +163,18 @@ def test_schedule_step_with_window_english():
     assert a.intent == "schedule_step"
     assert a.window is not None
     assert (a.window[0].hour, a.window[1].hour) == (18, 23)
+
+
+def test_bare_find_time_has_no_step_target():
+    a = parse_with_rules("find time", NOW)
+    assert a.intent == "schedule_step"
+    assert a.progress_target is None
+
+
+def test_find_time_for_my_goal_has_no_step_target():
+    a = parse_with_rules("Find time for my goal", NOW)
+    assert a.intent == "schedule_step"
+    assert a.progress_target is None
 
 
 def test_schedule_step_with_explicit_time_sets_start():

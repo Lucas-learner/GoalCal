@@ -75,8 +75,8 @@ def _outline_payload():
 
 
 def test_generate_outline_plan_returns_outline_and_first_batch(monkeypatch):
-    monkeypatch.setattr(plan_mod, "settings", SimpleNamespace(llm_ready=True))
-    monkeypatch.setattr(plan_mod, "LLMClient", lambda: _FakeClient(_outline_payload()))
+    monkeypatch.setattr(plan_mod, "settings", SimpleNamespace(llm_enabled=True))
+    monkeypatch.setattr(plan_mod, "plan_client", lambda: _FakeClient(_outline_payload()))
 
     plan = plan_mod.generate_outline_plan(
         "复习IBA6104", NOW.date() + timedelta(days=7), today=NOW.date()
@@ -91,9 +91,9 @@ def test_generate_outline_plan_returns_outline_and_first_batch(monkeypatch):
 
 
 def test_generate_outline_plan_rejects_short_outline(monkeypatch):
-    monkeypatch.setattr(plan_mod, "settings", SimpleNamespace(llm_ready=True))
+    monkeypatch.setattr(plan_mod, "settings", SimpleNamespace(llm_enabled=True))
     payload = {"outline": ["唯一阶段"], "steps": [{"title": "做点什么"}]}
-    monkeypatch.setattr(plan_mod, "LLMClient", lambda: _FakeClient(payload))
+    monkeypatch.setattr(plan_mod, "plan_client", lambda: _FakeClient(payload))
 
     assert plan_mod.generate_outline_plan("复习IBA6104", NOW.date(), today=NOW.date()) is None
 
@@ -101,8 +101,8 @@ def test_generate_outline_plan_rejects_short_outline(monkeypatch):
 def test_create_goal_with_llm_outline_stores_first_batch_only(session, user, monkeypatch):
     from datetime import date
 
-    monkeypatch.setattr(plan_mod, "settings", SimpleNamespace(llm_ready=True))
-    monkeypatch.setattr(plan_mod, "LLMClient", lambda: _FakeClient(_outline_payload()))
+    monkeypatch.setattr(plan_mod, "settings", SimpleNamespace(llm_enabled=True))
+    monkeypatch.setattr(plan_mod, "plan_client", lambda: _FakeClient(_outline_payload()))
 
     brief = planner.GoalBrief(
         title="复习IBA6104", raw="复习IBA6104",

@@ -46,7 +46,7 @@ def parse(
         try:
             action = _parse_with_llm(text, now)
             if action is not None:
-                action = _reconcile_dates(action, text, now)
+                action = reconcile_dates(action, text, now)
                 # 明显是“删目标”的句子不允许被 LLM 读成“新建目标”。
                 if action.intent == "create_goal":
                     guard = parse_with_rules(text, now)
@@ -60,7 +60,7 @@ def parse(
     return parse_with_rules(text, now).normalized(now), "rules:v1"
 
 
-def _reconcile_dates(action: Action, text: str, now: datetime) -> Action:
+def reconcile_dates(action: Action, text: str, now: datetime) -> Action:
     """以 natdate 的结果为准改写 start/deadline/window；规则抓不到才信 LLM 的时间。"""
     if action.intent in {"schedule_step", "schedule_all"}:
         phrase = action.when_text or text

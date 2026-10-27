@@ -29,11 +29,25 @@ ADD_MARKERS = re.compile(
     r"\bhelp me (?:to )?(add|schedule|create|put|book|block|set up)\b|"
     r"\b(?:add|put|schedule|save|block)\b[^.。;!?]{0,40}?\b(?:to|into|in|on)\s+(?:my\s+)?calendar\b|"
     r"帮我(加|安排|建|创建)|帮忙(加|安排)|添加|安排一个|加一个|"
-    r"(?:安排|加|写|放|排|记录|存)(?:进|入|到)(?:我的)?(?:日历|日程)",
+    r"(?:安排|加|写|放|排|记|记录|存)(?:进|入|到)(?:我的)?(?:日历|日程)(?:里|上)?|"
+    r"帮我[^。.;!?，,]{0,40}?(?:加|放|写|记|安排|排)[^。.;!?，,]{0,30}?(?:日历|日程)|"
+    r"(?:给|为)[^。.;!?，,]{0,30}?留(?:个|一段)?(?:日历|日程)时段",
     re.I,
 )
 # 明确要求写入日历（上文提取时间块的触发条件）：add_event 无时间时才读取少量上文
-CALENDAR_WRITE_MARKERS = re.compile(r"日历|\bcalendar\b", re.I)
+CALENDAR_WRITE_MARKERS = re.compile(r"日历|日程|\bcalendar\b", re.I)
+ADVICE_QUESTION = re.compile(r"可以做什么|能做什么|做点什么|做啥|what (?:can|should) i do", re.I)
+NO_SCHEDULE = re.compile(
+    r"先不(?:要)?安排|暂时不(?:要)?安排|不要安排|别安排|别排|"
+    r"(?:先不|不要|别|暂时不)[^。.;!?，,]{0,25}?(?:加|放|写|记|安排|排)[^。.;!?，,]{0,15}?(?:日历|日程)|"
+    r"don't schedule|do not schedule", re.I,
+)
+
+
+def calendar_write_request(text: str) -> bool:
+    """An affirmative request to change the calendar, independent of L1 wording."""
+    return bool(CALENDAR_WRITE_MARKERS.search(text) and ADD_MARKERS.search(text)
+                and not NO_SCHEDULE.search(text))
 MOVE_MARKERS = re.compile(
     r"\b(move|reschedule|shift|push|postpone)\b|\bdo\b[^.?!]*\binstead\b|改到|移到|挪到|推迟|提前",
     re.I,
@@ -105,12 +119,19 @@ NEW_COMMAND_INTENTS = {
     "move_event",
     "delete_event",
     "delete_goal",
+    "resume_goal",
     "query_events",
     "schedule_step",
     "schedule_all",
     "refine_steps",
     "create_goal",
 }
+
+RESUME_GOAL_MARKERS = re.compile(
+    r"恢复[^。.;!?，,]{0,8}(目标|计划)|(?:目标|计划)[^。.;!?，,]{0,4}恢复|"
+    r"\bresume\b[^.?!]{0,20}\b(?:goals?|plans?)\b",
+    re.I,
+)
 
 CHECKIN_OUTCOMES: tuple[tuple[re.Pattern, str], ...] = (
     (re.compile(r"\b(done|finished|completed)\b|完成了?|做完了?|搞定了|做好了", re.I), "done"),
@@ -190,6 +211,7 @@ def _clean_title(text: str, spans: list[str]) -> str:
     cleaned = re.sub(r"\b\d{1,2}:\d{2}\b", " ", cleaned)
     cleaned = re.sub(r"\bat\s+\d{1,2}\b", " ", cleaned, flags=re.I)
     cleaned = re.sub(r"(?:上午|下午|晚上|早上|中午|傍晚)?\s*\d{1,2}\s*点", " ", cleaned)
+    cleaned = re.sub(r"(?:上午|下午|晚上|早上|中午|今晚|明晚)?\s*[零一二两三四五六七八九十]{1,3}\s*点(?:半)?", " ", cleaned)
     cleaned = re.sub(
         r"\b(noon|midday|midnight|morning|afternoon|evening|night|tonight|every|each)\b|"
         r"上午|下午|晚上|中午|早上|傍晚",
@@ -199,7 +221,7 @@ def _clean_title(text: str, spans: list[str]) -> str:
     )
     cleaned = re.sub(r"找个?时间|找时间|安排(一下)?", " ", cleaned)
     # “安排进日历/写进我的日程”这类指令残留不属于标题
-    cleaned = re.sub(r"(?:安排|加|写|放|排|记录|存)?(?:进|入|到)?(?:我的)?日历|(?:进|入|到)(?:我的)?日程", " ", cleaned)
+    cleaned = re.sub(r"(?:安排|加|写|放|排|记|记录|存)?\s*(?:进|入|到)?\s*(?:的)?\s*(?:我的)?(?:日历|日程)(?:里|上)?", " ", cleaned)
     cleaned = re.sub(r"\b(?:to|into|in|on)\s+(?:my\s+)?calendar\b|\bcalendar\b", " ", cleaned, flags=re.I)
     # 开头的指令词可能叠着出现（"帮我安排…"、"帮忙加个…"），循环剥到不再变化
     leading = re.compile(
@@ -224,6 +246,7 @@ def _clean_title(text: str, spans: list[str]) -> str:
     )
     cleaned = re.sub(r"^\s*(a|an|the)\s+", "", cleaned, flags=re.I)
     cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,.'\"")
+    cleaned = re.sub(r"^(?:的\s*)+|(?:[,，]\s*)?帮我\s*$", "", cleaned).strip()
     # “put them in my calendar” 剥完只剩代词，不算标题
     if cleaned.casefold() in {"them", "these", "those", "it", "this", "that"}:
         cleaned = ""
@@ -253,6 +276,8 @@ def _goal_target(text: str) -> str:
 def parse_with_rules(text: str, now: datetime) -> Action:
     raw = text.strip()
     low = raw.lower()
+    if ADVICE_QUESTION.search(raw) or NO_SCHEDULE.search(raw):
+        return Action(intent="chat", confidence=0.2, raw=raw)
     dates = extract_dates(raw, now)
     spans = [s for s, _ in dates]
     duration = _extract_duration(raw)
@@ -320,9 +345,16 @@ def parse_with_rules(text: str, now: datetime) -> Action:
         )
 
     # 7) 给目标步骤找时间（"安排下一步" 要先于泛化的 "帮我安排…" 加日程）
-    if SCHEDULE_STEP_MARKERS.search(raw):
+    if SCHEDULE_STEP_MARKERS.search(raw) and (
+        not calendar_write_request(raw) or re.search(r"下一步|\bnext step\b", raw, re.I)
+    ):
         target = _clean_title(raw, spans)
-        if re.fullmatch(r"(下一步|next step)", target, re.I):
+        # 排程填充词剥掉后只剩泛称：视为无目标，由对话层选择 goal/step
+        normalized = re.sub(
+            r"\b(find|make)\s*time\b|\bfor\b|\bmy\b|\bthe\b|找个?时间", " ", target, flags=re.I
+        )
+        normalized = re.sub(r"\s+", " ", normalized).strip(" ,.'\"")
+        if not normalized or re.fullmatch(r"(下一步|next step|goal)", normalized, re.I):
             target = None
         window = extract_window(raw, now)
         start = None
@@ -350,6 +382,16 @@ def parse_with_rules(text: str, now: datetime) -> Action:
             start=when,
             duration_min=duration or 60,
             confidence=0.7 if when else 0.6,
+            raw=raw,
+        )
+
+    # 8.5) 恢复暂停的目标（要在建目标之前：“我想恢复目标”也含“我想”）
+    if RESUME_GOAL_MARKERS.search(raw):
+        quoted = re.search(r"[\"'“”‘’]([^\"'“”‘’]+)[\"'“”‘’]", raw)
+        return Action(
+            intent="resume_goal",
+            target=quoted.group(1).strip()[:120] if quoted else None,
+            confidence=0.7,
             raw=raw,
         )
 

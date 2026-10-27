@@ -83,6 +83,10 @@ def render_batch(batch: list[dict], on_accept, on_dismiss=None) -> None:
         on_accept(batch)
 
 
+def message_markdown(content: str) -> str:
+    return content.replace("\n", "  \n")
+
+
 def render_messages(messages: list[dict]) -> None:
     for index, msg in enumerate(messages):
         # 稳定容器键：已落库消息用 client_id，未落库的用位置兜底；
@@ -90,7 +94,7 @@ def render_messages(messages: list[dict]) -> None:
         key = msg.get("client_id") or (f"db_{msg['id']}" if msg.get("id") else f"unsaved_{index}")
         with st.container(key=f"chat_msg_{key}"):
             with st.chat_message(msg["role"]):
-                st.markdown(msg["content"])
+                st.markdown(message_markdown(msg["content"]))
 
 
 def append(messages: list[dict], role: str, content: str) -> None:

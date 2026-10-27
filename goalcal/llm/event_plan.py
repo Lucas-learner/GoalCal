@@ -18,7 +18,7 @@ from pydantic import BaseModel, field_validator
 from .. import conversation
 from ..config import settings
 from .action import Action
-from .client import LLMClient
+from .router import plan_client
 from .natdate import find_dates
 from .parser import LLM_DATE_PENALTY
 
@@ -190,10 +190,14 @@ def extract_events(
 ) -> list[Action] | None:
     """从最近对话提取要写入日历的时间块；未启用、失败、全无效时返回 None。
 
-    只读少量上文（最近 8 条），不写库。复用 LLMClient 的认证、配额、
-    遥测与写事务禁外部请求保护。
+    只读少量上文（最近 8 条），不写库。复用 plan 层客户端的认证、配额、
+    遥测与写事务禁外部请求保护。ready 按 plan 层判定：只配 LLM_API_KEY_PLAN
+    也可生效。
     """
-    if not settings.llm_ready:
+    if not settings.llm_enabled:
+        return None
+    client = client or plan_client()
+    if not getattr(client, "ready", True):
         return None
     recent = conversation.load_recent(session, user_id, limit=8)
     payload = {
@@ -207,7 +211,7 @@ def extract_events(
         now=now.strftime("%Y-%m-%d %H:%M"), tz=tz, weekday=now.strftime("%A")
     )
     try:
-        data = (client or LLMClient()).complete_json(
+        data = client.complete_json(
             system, json.dumps(payload, ensure_ascii=False), temperature=0.0
         )
         plan = EventPlan.model_validate(data)

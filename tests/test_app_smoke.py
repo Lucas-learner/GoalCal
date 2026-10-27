@@ -1,4 +1,5 @@
 from pathlib import Path
+from datetime import timedelta
 
 from sqlalchemy import func, select
 from streamlit.testing.v1 import AppTest
@@ -87,51 +88,239 @@ def _chat(at):
 
 def test_app_boots_to_chat_without_three_column_workbench():
     at = _app()
-    assert at.title[0].value == "GoalCal"
+    assert not at.title  # 主区不再显示产品名
+    assert any(m.value == "**GoalCal**" for m in at.markdown)  # 侧栏顶部产品名
     assert at.chat_input
     assert not any(b.label == "Find time" for b in at.button)
 
 
-def test_empty_state_without_data_falls_back_to_starters():
+def test_empty_home_keeps_three_layers_without_data():
     at = _empty_app()
-    assert any(b.key == "starter_0" for b in at.button)
-    assert not any(b.key == "home_find_time" for b in at.button)
+    assert not at.title
+    assert any(m.value == "What do you want to make time for?" for m in at.markdown)
+    labels = [b.label for b in at.button if (b.key or "").startswith("home_suggestion_")]
+    assert labels == ["Start a new goal", "Add an event", "See what I can do"]
+    assert not any(b.key == "home_suggestion_goal" for b in at.button)  # 无目标排期按钮
     at.chat_input[0].set_value("hmm").run()
     assert not at.exception, at.exception
-    assert not at.title
-    assert not any((b.key or "").startswith("starter_") for b in at.button)
+    # 首条消息进入消息流，三层首页消失
+    assert not any((b.key or "").startswith("home_suggestion_") for b in at.button)
     assert any(m.value for m in at.markdown)
 
 
-def test_home_shows_real_status_and_executable_suggestions():
+def test_home_shows_slogan_and_contextual_suggestions():
     at = _app()
-    assert at.title[0].value == "GoalCal"
-    assert any("Publish my first short video" in m.value for m in at.markdown)
-    captions = {c.value for c in at.caption}
-    assert any(c.startswith("Next step:") for c in captions)
-    assert any("Test appointment" in c for c in captions)
-
-    next(b for b in at.button if b.key == "home_find_time").click().run()
-    assert not at.exception, at.exception
-    assert at.session_state["pending"] is not None
-    assert any(b.label == "Book" for b in at.button)
-    # 待处理面板出现时不重复渲染首页状态区
     assert not at.title
+    assert any(m.value == "What do you want to make time for?" for m in at.markdown)
+    goal_btn = next(b for b in at.button if b.key == "home_suggestion_goal")
+    assert goal_btn.label == "Find time for my goal"
+    event_btn = next(b for b in at.button if b.key == "home_suggestion_event")
+    assert event_btn.label == "Review my calendar"
+    assert any(b.key == "home_suggestion_new" for b in at.button)
+    # 旧首页元素不再出现：Focus 切换器、进度/Next step/Next event 摘要、静态指引
+    assert not at.selectbox
+    captions = {c.value for c in at.caption}
+    assert not any(c.startswith("Next step:") for c in captions)
+    assert not any(c.startswith("Next event:") for c in captions)
+    assert not any(c.startswith("Keep going") for c in captions)
+    assert not any(c.startswith("Start something") for c in captions)
+    assert not any("days left" in c for c in captions)
+
+
+def test_home_goal_suggestion_asks_which_goal_then_schedules_the_answer():
+    from datetime import date
+    from goalcal.domain import goals as goal_svc
+    at = _app()
+    with session_scope() as s:
+        urgent = goal_svc.create_goal(s, at.session_state["user_id"], "Urgent goal", deadline=date(2026, 10, 29))
+        goal_svc.create_goal(s, at.session_state["user_id"], "Later goal", deadline=date(2027, 1, 31))
+        expected_step_id = goal_svc.next_step(urgent).id
+    at.run()
+    assert not at.exception, at.exception
+    btn = next(b for b in at.button if b.key == "home_suggestion_goal")
+    assert btn.label == "Find time for my goal"
+    btn.click().run()
+    assert not at.exception, at.exception
+    assert at.session_state["pending"] is None
+    assert at.session_state["messages"][-1]["content"] == (
+        "Which goal should I schedule? Name the goal or its next step."
+    )
+
+    at.chat_input[0].set_value("Urgent goal").run()
+    assert not at.exception, at.exception
+    pending = at.session_state["pending"]
+    assert pending is not None
+    assert pending["step_id"] == expected_step_id
+    assert any(b.label == "Book" for b in at.button)
     next(b for b in at.button if b.label == "Dismiss").click().run()
     assert not at.exception, at.exception
     assert at.session_state["pending"] is None
 
 
-def test_home_review_today_runs_a_real_query_turn():
+@pytest.mark.parametrize("answer", ["tomorrow 3pm", "明天下午3点", "改到明天下午3点"])
+def test_pending_exact_clock_books_the_current_step(answer):
     at = _app()
-    next(b for b in at.button if b.key == "home_review_today").click().run()
+    next(b for b in at.button if b.key == "home_suggestion_goal").click().run()
+    step_id = at.session_state["pending"]["step_id"]
+
+    at.chat_input[0].set_value(answer).run()
+
+    assert not at.exception, at.exception
+    assert at.session_state["pending"] is None
+    with session_scope() as s:
+        blocks = list(s.scalars(select(Event).where(Event.step_id == step_id)))
+        assert len(blocks) == 1
+        assert blocks[0].kind == "block"
+        assert not s.scalar(select(Event).where(
+            Event.user_id == at.session_state["user_id"], Event.title == "Untitled"
+        ))
+
+
+def test_pending_past_clock_keeps_candidates_and_does_not_write():
+    at = _app()
+    next(b for b in at.button if b.key == "home_suggestion_goal").click().run()
+    step_id = at.session_state["pending"]["step_id"]
+
+    at.chat_input[0].set_value("today 12:01am").run()
+
+    assert at.session_state["pending"] is not None
+    assert "already passed" in at.session_state["messages"][-1]["content"]
+    with session_scope() as s:
+        assert not s.scalar(select(Event).where(Event.step_id == step_id))
+
+
+def test_pending_explicit_new_event_is_not_captured_as_step_time():
+    at = _app()
+    next(b for b in at.button if b.key == "home_suggestion_goal").click().run()
+    step_id = at.session_state["pending"]["step_id"]
+
+    at.chat_input[0].set_value("Add a meeting tomorrow 3pm").run()
+
+    with session_scope() as s:
+        event = s.scalar(select(Event).where(
+            Event.user_id == at.session_state["user_id"], Event.title.ilike("%meeting%")
+        ))
+        assert event is not None and event.step_id is None
+        assert not s.scalar(select(Event).where(Event.step_id == step_id))
+
+
+def test_home_advances_to_the_next_unscheduled_step_after_booking():
+    at = _app()
+    next(b for b in at.button if b.key == "home_suggestion_goal").click().run()
+    first_step_id = at.session_state["pending"]["step_id"]
+    with session_scope() as s:
+        goal = s.scalar(select(Goal).where(Goal.user_id == at.session_state["user_id"]))
+        second_step_id = next(step.id for step in sorted(goal.steps, key=lambda item: item.seq)
+                              if step.status == "todo" and step.id != first_step_id)
+    next(b for b in at.button if b.label == "Book").click().run()
+    next(b for b in at.button if b.label == "New conversation").click().run()
+
+    next(b for b in at.button if b.key == "home_suggestion_goal").click().run()
+    assert at.session_state["pending"]["step_id"] == second_step_id
+
+
+def test_home_hides_find_when_every_todo_step_has_a_future_block():
+    from goalcal.domain import calendar_service as cal
+    from goalcal.timeutil import local_now
+
+    at = _app()
+    with session_scope() as s:
+        goals = list(s.scalars(select(Goal).where(Goal.user_id == at.session_state["user_id"])))
+        now = local_now("Asia/Shanghai")
+        for goal in goals:
+            for index, step in enumerate(goal.steps):
+                if step.status == "todo":
+                    start = now + timedelta(days=index + 1)
+                    cal.create_event(s, at.session_state["user_id"], "Scheduled", start,
+                                     start + timedelta(minutes=step.est_min), kind="block",
+                                     step_id=step.id, tz="Asia/Shanghai")
+    at.run()
+    assert not any(b.key == "home_suggestion_goal" for b in at.button)
+
+
+def test_pending_weekend_text_refilters_candidates():
+    at = _app()
+    next(b for b in at.button if b.key == "home_suggestion_goal").click().run()
+
+    at.chat_input[0].set_value("this weekend").run()
+
+    pending = at.session_state["pending"]
+    assert pending is not None and pending["candidates"]
+    assert all(candidate.start.weekday() >= 5 for candidate in pending["candidates"])
+    assert "Updated the suggested times" in at.session_state["messages"][-1]["content"]
+
+
+def test_home_review_suggestion_runs_a_real_upcoming_query():
+    at = _app()
+    btn = next(b for b in at.button if b.key == "home_suggestion_event")
+    assert btn.label == "Review my calendar"
+    btn.click().run()
     assert not at.exception, at.exception
     assert at.session_state["has_user_history"] is True
-    assert not at.title
+    assert not any((b.key or "").startswith("home_suggestion_") for b in at.button)
     assert any("Test appointment" in m.value for m in at.markdown)
 
 
-def test_chat_scrolls_to_latest_after_a_turn_and_when_history_reloads(monkeypatch):
+def test_home_new_goal_suggestion_asks_before_creating_anything():
+    at = _empty_app()
+    next(b for b in at.button if b.key == "home_suggestion_new").click().run()
+    assert not at.exception, at.exception
+    assert at.session_state["goal_intake"] is True
+    assert at.session_state["goal_draft"] is None
+    assert not any(m["role"] == "user" for m in at.session_state["messages"])
+    assert not any((b.key or "").startswith("home_suggestion_") for b in at.button)
+
+    at.chat_input[0].set_value("Learn guitar in 30 days").run()
+    assert not at.exception, at.exception
+    assert at.session_state["goal_intake"] is None
+    draft = at.session_state["goal_draft"]
+    assert draft is not None
+    assert draft.brief.title == "Learn guitar"
+    assert not any("short video" in m["content"] for m in at.session_state["messages"])
+
+
+def test_home_suggestions_pure_function():
+    from datetime import datetime
+    from goalcal.ui import chat_page
+
+    full = {
+        "goal_title": "Learn guitar",
+        "next_step_id": 7,
+        "next_step_minutes": 30,
+        "next_event_title": "Learn tennis",
+        "next_event_start": datetime(2026, 10, 28, 16, 0),
+    }
+    rows = chat_page.home_suggestions(full)
+    assert [r["key"] for r in rows] == ["home_suggestion_goal", "home_suggestion_event", "home_suggestion_new"]
+    assert rows[0]["action"] == "run_turn" and rows[0]["text"] == "Find time for my goal"
+    assert rows[0]["label"] == "Find time for my goal"
+    assert rows[1]["action"] == "run_turn" and rows[1]["text"] == "What's on this week?"
+    assert rows[1]["label"] == "Review my calendar"
+    assert rows[2]["action"] == "begin_goal"
+
+    # 无日程：省略日程行；无未排期步骤：绝不出现排期按钮
+    no_event = {**full, "next_event_title": None, "next_event_start": None}
+    assert [r["key"] for r in chat_page.home_suggestions(no_event)] == ["home_suggestion_goal", "home_suggestion_new"]
+    no_step = {**no_event, "next_step_id": None}
+    assert [r["key"] for r in chat_page.home_suggestions(no_step)] == ["home_suggestion_new", "home_suggestion_event", "home_suggestion_help"]
+
+    # 空账号：同样三层结构，Create a goal / Add an event / 产品能力
+    empty = {**no_step, "goal_title": None}
+    rows = chat_page.home_suggestions(empty)
+    assert [r["key"] for r in rows] == ["home_suggestion_new", "home_suggestion_event", "home_suggestion_help"]
+    assert rows[0]["action"] == "begin_goal"
+    assert rows[1]["text"] == "Add a meeting tomorrow 10am"
+    assert rows[2]["text"] == "What can you do?"
+
+
+def test_message_markdown_preserves_visible_line_breaks():
+    from goalcal.ui.chat import message_markdown
+
+    assert message_markdown("Today:\n• First\n• Second") == "Today:  \n• First  \n• Second"
+    assert message_markdown("Paragraph one\n\nParagraph two") == "Paragraph one  \n  \nParagraph two"
+
+
+def test_chat_scrolls_after_a_turn_but_reload_resets_without_scroll(monkeypatch):
     from goalcal.ui import chat as chat_ui
 
     calls = []
@@ -143,10 +332,14 @@ def test_chat_scrolls_to_latest_after_a_turn_and_when_history_reloads(monkeypatc
     assert not at.exception, at.exception
     assert calls == ["scroll"]
 
+    # 整页重进（新浏览器会话）：会话重置回指引首页，不因旧历史滚动
     at.session_state["conversation_loaded"] = False
     at.run()
     assert not at.exception, at.exception
-    assert calls == ["scroll", "scroll"]
+    assert calls == ["scroll"]
+    assert [m["content"] for m in at.session_state["messages"]] == [
+        "Hi — tell me a goal, or add something to your calendar."
+    ]
 
 
 def _seed_history(at, count):
@@ -165,49 +358,71 @@ def _history_markdowns(at):
     return [m.value for m in at.markdown if m.value.startswith("history-")]
 
 
-def test_long_history_loads_latest_page_then_earlier_keeps_anchor(monkeypatch):
+def test_reload_wipes_history_and_hides_load_earlier(monkeypatch):
+    """重开页面不再分页恢复历史：旧消息真实删除，只剩重置后的欢迎语。"""
     from goalcal.ui import chat as chat_ui
     from goalcal.models import Message
 
-    bottoms, anchors = [], []
+    bottoms = []
     monkeypatch.setattr(chat_ui, "scroll_to_bottom", lambda: bottoms.append("bottom"))
-    monkeypatch.setattr(chat_ui, "scroll_to_message", lambda cid: anchors.append(cid))
 
     at = _app()
     _seed_history(at, 31)
     at.session_state["conversation_loaded"] = False
     at.run()
     assert not at.exception, at.exception
-    # 初始只渲染最近 30 条；重开回到底部
-    assert _history_markdowns(at) == [f"history-{i:02d}" for i in range(1, 31)]
-    assert bottoms == ["bottom"] and anchors == []
-
-    with session_scope() as s:
-        anchor_cid = s.scalar(select(Message.client_id).where(Message.content == "history-01"))
-
-    next(b for b in at.button if b.key == "load_earlier").click().run()
-    assert not at.exception, at.exception
-    # Load earlier prepend 更早一页并锚定原首条，不回到底部
-    assert _history_markdowns(at) == [f"history-{i:02d}" for i in range(31)]
-    assert anchors == [anchor_cid] and bottoms == ["bottom"]
+    assert _history_markdowns(at) == []
     assert not any(b.key == "load_earlier" for b in at.button)
-
-    # 新消息追加到完整历史，但当前页面始终只保留最近 30 条并回到最新
-    at.chat_input[0].set_value("still here").run()
-    assert not at.exception, at.exception
-    assert len(at.session_state["messages"]) == 30
-    assert _history_markdowns(at) == [f"history-{i:02d}" for i in range(3, 31)]
-    assert any(m.value == "still here" for m in at.markdown)
-    assert bottoms == ["bottom", "bottom"]
+    assert bottoms == []
     with session_scope() as s:
-        total = s.scalar(
+        remaining = s.scalar(
             select(func.count(Message.id)).where(
                 Message.conversation_id == select(Conversation.id).where(
                     Conversation.user_id == at.session_state["user_id"]
                 ).scalar_subquery()
             )
         )
-    assert total == 34  # 欢迎消息 + 31 条历史 + 本轮 user/assistant 各一条
+    assert remaining == 1  # 旧历史真实删除，仅重置后的欢迎消息
+
+
+def test_new_conversation_clears_chat_state_but_keeps_goals_and_calendar():
+    from goalcal.models import Message
+    from goalcal.ui.controller import STATE_KEYS
+
+    at = _app()
+    uid = at.session_state["user_id"]
+    sidebar_items = [(node.type, getattr(node, "label", None))
+                     for node in at.sidebar.children.values()]
+    assert sidebar_items.index(("button", "New conversation")) < sidebar_items.index(
+        ("page_link", "Chat")
+    )
+    with session_scope() as s:
+        goals_before = s.scalar(select(func.count(Goal.id)).where(Goal.user_id == uid))
+        events_before = s.scalar(select(func.count(Event.id)).where(Event.user_id == uid))
+
+    at.chat_input[0].set_value("I want to learn guitar").run()
+    assert not at.exception, at.exception
+    assert at.session_state["goal_brief"] is not None
+    next(b for b in at.button if b.label == "New conversation").click().run()
+    assert not at.exception, at.exception
+    assert [m["content"] for m in at.session_state["messages"]] == [
+        "Hi — tell me a goal, or add something to your calendar."
+    ]
+    assert at.session_state["has_user_history"] is False
+    assert at.session_state["chat_has_more"] is False
+    assert all(at.session_state[key] is None for key in STATE_KEYS if key != "dialog_context")
+    assert at.session_state["dialog_context"].kind == "idle"
+    assert at.session_state["dialog_context"].offers == []
+    assert any(b.label == "New conversation" for b in at.sidebar.button)
+    assert not any(b.label in {"Clear conversation", "Keep conversation"}
+                   for b in at.sidebar.button)
+
+    with session_scope() as s:
+        conversation_id = s.scalar(select(Conversation.id).where(Conversation.user_id == uid))
+        assert s.scalar(select(func.count(Message.id)).where(
+            Message.conversation_id == conversation_id)) == 1
+        assert s.scalar(select(func.count(Goal.id)).where(Goal.user_id == uid)) == goals_before
+        assert s.scalar(select(func.count(Event.id)).where(Event.user_id == uid)) == events_before
 
 
 def test_load_earlier_after_in_session_truncation():
@@ -340,19 +555,22 @@ def test_new_goal_button_returns_to_chat_instead_of_duplicate_form():
     next(b for b in at.button if b.label == "New goal").click().run()
     assert not at.exception, at.exception
     assert at.chat_input
+    assert at.session_state["goal_intake"] is True
     assert not any(t.label == "Goal title" for t in at.text_input)
 
 
-def test_piano_goal_clarifies_then_builds_complex_plan():
+def test_piano_goal_confirms_timeline_before_draft_and_creation():
     at = _app()
     at.chat_input[0].set_value("我要学会弹钢琴").run()
     assert not at.exception, at.exception
-    assert any("complex" in m.value and "confirm" in m.value for m in at.markdown)
-    with session_scope() as s:
-        assert s.scalar(select(Goal).where(Goal.title == "学会弹钢琴")) is None
-    next(b for b in at.button if b.label == "3 months").click().run()
+    assert at.session_state["goal_brief"] is not None
+    assert at.session_state["goal_draft"] is None
+    assert any("choose a timeline" in m.value for m in at.markdown)
+    at.chat_input[0].set_value("1 month").run()
     assert not at.exception, at.exception
     assert at.session_state["goal_draft"] is not None
+    with session_scope() as s:
+        assert s.scalar(select(Goal).where(Goal.title == "学会弹钢琴")) is None
     next(b for b in at.button if b.label == "Save goal").click().run()
     assert not at.exception, at.exception
     assert any("Goal set" in m.value for m in at.markdown)
@@ -361,6 +579,30 @@ def test_piano_goal_clarifies_then_builds_complex_plan():
         goal = s.scalar(select(Goal).where(Goal.title == "学会弹钢琴"))
         assert goal is not None and goal.template_key == "piano"
         assert len(goal.steps) == 2
+        from goalcal.timeutil import local_now
+        assert goal.deadline == local_now("Asia/Shanghai").date() + timedelta(days=30)
+
+
+def test_goal_timeline_shortcuts_cancel_and_custom_duration():
+    at = _app()
+    at.chat_input[0].set_value("I want to learn guitar").run()
+    assert not at.exception, at.exception
+    quick = {"7 days", "1 month", "3 months", "Cancel"}
+    assert {b.label for b in at.button if b.label in quick} == quick
+    assert not any(b.label in {"Use 90 days", "Never mind"} for b in at.button)
+
+    next(b for b in at.button if b.label == "Cancel").click().run()
+    assert not at.exception, at.exception
+    assert at.session_state["goal_brief"] is None
+    assert at.session_state["goal_draft"] is None
+
+    at.chat_input[0].set_value("I want to learn guitar").run()
+    at.chat_input[0].set_value("12 days").run()
+    assert not at.exception, at.exception
+    from goalcal.timeutil import local_now
+    assert at.session_state["goal_draft"].deadline == (
+        local_now("Asia/Shanghai").date() + timedelta(days=12)
+    )
 
 
 def test_goal_replan_preview_is_applied_only_after_confirmation():
@@ -395,8 +637,14 @@ def test_unauthenticated_and_logout_clear_state():
     at = AppTest.from_file(APP, default_timeout=30).run()
     assert not at.chat_input
     at = _app()
+    assert not any(b.label == "Log out" for b in at.sidebar.button)
+    assert all(node.type != "divider" for node in at.sidebar.children.values())
     at.session_state["replan_draft"] = {"goal_id": -1, "plan": []}
     at.session_state["messages"] = [{"role": "user", "content": "private"}]
+    at.switch_page("routes/settings.py").run()
+    assert not at.exception, at.exception
+    assert any(h.value == "Account" for h in at.subheader)
+    assert any(c.value == "Time zone: Asia/Shanghai" for c in at.caption)
     next(b for b in at.button if b.label == "Log out").click().run()
     assert not at.exception
     assert not at.chat_input
@@ -548,7 +796,8 @@ def test_settings_save_preferences_for_scheduler():
         assert any(row.key == "day_start_hour" and row.scope == "global" and row.source == "explicit" for row in rows)
 
 
-def test_returning_user_restores_conversation():
+def test_reload_starts_a_fresh_conversation():
+    """整页重进不再恢复旧会话；日程等业务数据不受影响。"""
     title = "Persistence meeting " + uuid.uuid4().hex[:8]
     at = _app()
     at.chat_input[0].set_value(f"Add {title} tomorrow 10am").run()
@@ -556,7 +805,9 @@ def test_returning_user_restores_conversation():
 
     returning = _app()
     assert not returning.exception, returning.exception
-    assert any(title in m.value for m in returning.markdown)
+    assert not any(title in m.value for m in returning.markdown)
+    assert returning.session_state["has_user_history"] is False
+    assert title in _event_titles(returning)
 
 
 def test_calendar_dates_set_loads_the_new_visible_range(monkeypatch):
@@ -639,19 +890,16 @@ def _goal_count(at):
         return len(list(s.scalars(select(Goal).where(Goal.user_id == at.session_state["user_id"]))))
 
 
-def test_goal_preview_restores_then_cancel_writes_nothing():
+def test_goal_preview_cancel_writes_nothing():
     at = _app()
     before = _goal_count(at)
     at.chat_input[0].set_value("I want to publish my first short video in 30 days").run()
-    draft_id = at.session_state["goal_draft"].draft_id
-    returning = _app()
-    assert returning.session_state["goal_draft"].draft_id == draft_id
-    assert any(b.label == "Save goal" for b in returning.button)
-    next(b for b in returning.button if b.label == "Cancel").click().run()
-    assert not returning.exception, returning.exception
-    assert returning.session_state["goal_draft"] is None
-    assert _goal_count(returning) == before
-    assert _app().session_state["goal_draft"] is None
+    assert at.session_state["goal_draft"] is not None
+    assert any(b.label == "Save goal" for b in at.button)
+    next(b for b in at.button if b.label == "Cancel").click().run()
+    assert not at.exception, at.exception
+    assert at.session_state["goal_draft"] is None
+    assert _goal_count(at) == before
 
 
 def test_save_goal_by_text_clears_draft_and_does_not_book():
@@ -691,7 +939,7 @@ def _event_titles(at):
         )
 
 
-def test_event_draft_panel_restores_then_confirm_writes_both(monkeypatch):
+def test_event_draft_panel_confirm_writes_both(monkeypatch):
     _fake_extract_two_events(monkeypatch)
     at = _app()
     before = _event_titles(at)
@@ -703,15 +951,11 @@ def test_event_draft_panel_restores_then_confirm_writes_both(monkeypatch):
     assert not at.title  # 预览显示时不渲染首页状态区
     assert _event_titles(at) == before  # 预览不写库
 
-    returning = _app()
-    assert returning.session_state["event_draft"] is not None
-    assert "Calendar preview" in {c.value for c in returning.caption}
-    next(b for b in returning.button if b.label == "Add to calendar").click().run()
-    assert not returning.exception, returning.exception
-    assert returning.session_state["event_draft"] is None
-    assert any("Added 2 event(s)" in m.value for m in returning.markdown)
-    assert _event_titles(returning) == sorted(before + ["写脚本", "剪辑"])
-    assert _app().session_state["event_draft"] is None
+    next(b for b in at.button if b.label == "Add to calendar").click().run()
+    assert not at.exception, at.exception
+    assert at.session_state["event_draft"] is None
+    assert any("Added 2 event(s)" in m.value for m in at.markdown)
+    assert _event_titles(at) == sorted(before + ["写脚本", "剪辑"])
 
 
 def test_event_draft_cancel_writes_nothing(monkeypatch):
@@ -756,8 +1000,9 @@ def test_candidate_text_and_button_book_the_same_slot(selection):
         at.chat_input[0].set_value(selection).run()
     assert not at.exception, at.exception
     assert at.session_state["pending"] is None
-    assert sum("Booked" in item.value for item in at.markdown) == 1
-    assert not any("Booked" in item.value for item in at.toast)
+    booking_marker = "已将" if selection == "第二个" else "Booked"
+    assert sum(booking_marker in item.value for item in at.markdown) == 1
+    assert not any(booking_marker in item.value for item in at.toast)
     from goalcal.timeutil import as_utc_naive
     with session_scope() as s:
         blocks = list(s.scalars(select(Event).where(Event.step_id == step_id)))
@@ -812,16 +1057,14 @@ def test_invalid_candidate_response_and_empty_window_preserve_suggestions(monkey
     assert at.session_state["pending"] == original
 
 
-def test_batch_suggestions_restore_and_book():
+def test_batch_suggestions_book_all():
     at = _app()
     at.chat_input[0].set_value("今天下午有空，把任务都排了").run()
     pending = at.session_state["pending"]
     assert pending["batch"]
-    returning = _app()
-    assert returning.session_state["pending"] == pending
-    next(b for b in returning.button if b.label == "Book all").click().run()
-    assert not returning.exception, returning.exception
-    assert returning.session_state["pending"] is None
+    next(b for b in at.button if b.label == "Book all").click().run()
+    assert not at.exception, at.exception
+    assert at.session_state["pending"] is None
 
 
 def test_goals_directory_selects_detail_and_archive_keeps_other_goal():
@@ -831,6 +1074,9 @@ def test_goals_directory_selects_detail_and_archive_keeps_other_goal():
         second = goals.create_goal(s, at.session_state["user_id"], "Second goal")
         second_id = second.id
     at = _goals(at)
+    assert len(at.progress) >= 2
+    assert not any(c.value.startswith("Next ·") for c in at.caption)
+    assert not any("steps completed" in c.value for c in at.caption)
     next(b for b in at.button if b.key == f"select_goal_{second_id}").click().run()
     assert not at.exception, at.exception
     assert at.session_state["selected_goal_id"] == second_id
@@ -842,7 +1088,7 @@ def test_goals_directory_selects_detail_and_archive_keeps_other_goal():
     assert not any((b.key or "").startswith("select_goal_") for b in at.button)
 
 
-def test_new_event_command_leaves_candidate_context_without_refilter(monkeypatch):
+def test_new_event_command_leaves_candidate_context_and_asks_for_clock(monkeypatch):
     from goalcal import agent
     at = _goals(_app())
     next(b for b in at.button if b.label == "Find time").click().run()
@@ -854,7 +1100,8 @@ def test_new_event_command_leaves_candidate_context_without_refilter(monkeypatch
     assert not at.exception, at.exception
     assert at.session_state["pending"] is None
     with session_scope() as s:
-        assert s.scalar(select(Event).where(Event.user_id == at.session_state["user_id"], Event.title == "review meeting")) is not None
+        assert s.scalar(select(Event).where(Event.user_id == at.session_state["user_id"], Event.title == "review meeting")) is None
+    assert "When should I put" in at.session_state["messages"][-1]["content"]
 
 
 def test_goal_revision_stays_preview_and_keeps_identity(monkeypatch):
@@ -971,3 +1218,59 @@ def test_calendar_shell_gets_new_event_before_opening_calendar(monkeypatch):
     at = _calendar(at)
     assert any(title in names for names in seen)
     assert title in seen[-1]
+
+
+def test_fresh_browser_session_resets_but_page_switch_keeps_history():
+    """整页重进（新浏览器会话）清空会话回指引首页；应用内切页保留历史。"""
+    from goalcal.models import Message
+
+    username = "ui_" + uuid.uuid4().hex[:12]
+    invitation = auth.invite()
+
+    at = AppTest.from_file(APP, default_timeout=30).run()
+    next(t for t in at.text_input if t.key == "register_name").set_value(username)
+    next(t for t in at.text_input if t.label == "Password (at least 12 characters)").set_value("new-user-password-42")
+    next(t for t in at.text_input if t.label == "Invitation code").set_value(invitation)
+    next(b for b in at.button if b.label == "Register").click().run()
+    next(t for t in at.text_input if t.key == "login_name").set_value(username)
+    next(t for t in at.text_input if t.key == "login_password").set_value("new-user-password-42")
+    next(b for b in at.button if b.label == "Log in").click().run()
+    assert not at.exception, at.exception
+    assert at.chat_input
+
+    at.chat_input[0].set_value("hmm").run()
+    assert not at.exception, at.exception
+    assert at.session_state["has_user_history"] is True
+    uid = at.session_state["user_id"]
+
+    def _stored():
+        with session_scope() as s:
+            return s.scalar(
+                select(func.count(Message.id)).where(
+                    Message.conversation_id == select(Conversation.id).where(
+                        Conversation.user_id == uid
+                    ).scalar_subquery()
+                )
+            )
+
+    assert _stored() >= 3  # 欢迎 + 用户消息 + 回复
+
+    # 应用内切页（Goals → Chat）不清历史
+    at = _goals(at)
+    at = _chat(at)
+    assert not at.exception, at.exception
+    assert at.session_state["has_user_history"] is True
+    assert any(m["content"] == "hmm" for m in at.session_state["messages"])
+
+    # 整页重进（新 AppTest 实例 = 新浏览器会话）：历史消失，回到指引首页
+    fresh = AppTest.from_file(APP, default_timeout=30).run()
+    next(t for t in fresh.text_input if t.key == "login_name").set_value(username)
+    next(t for t in fresh.text_input if t.key == "login_password").set_value("new-user-password-42")
+    next(b for b in fresh.button if b.label == "Log in").click().run()
+    assert not fresh.exception, fresh.exception
+    assert fresh.session_state["has_user_history"] is False
+    assert [m["content"] for m in fresh.session_state["messages"]] == [
+        "Hi — tell me a goal, or add something to your calendar."
+    ]
+    assert any(b.key == "home_suggestion_new" for b in fresh.button)  # 空账号显示三层首页建议
+    assert _stored() == 1  # DB 里旧消息真实删除，只剩重置后的欢迎消息

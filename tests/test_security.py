@@ -117,16 +117,13 @@ def test_foreign_keys_and_delete_existing_history(accounts):
         assert not con.execute('PRAGMA foreign_key_check').fetchall()
 
 
-def test_quota_atomic(accounts):
+def test_quota_usage_is_uncapped_and_isolated(accounts):
     def request(_):
-        try:
-            quota.consume(accounts[1][0])
-            return True
-        except RuntimeError:
-            return False
+        quota.consume(accounts[1][0])
+        return True
     with ThreadPoolExecutor(max_workers=8) as pool:
         results = list(pool.map(request, range(45)))
-    assert sum(results) == 30
+    assert sum(results) == 45
     quota.consume(accounts[1][1])
 
 
@@ -178,7 +175,7 @@ def test_recurrence_scan_limit():
         ics_import._expand(component, 'Asia/Shanghai', datetime(2026, 10, 23))
 
 
-def test_llm_quota_failure_and_write_transaction_skip(accounts, monkeypatch):
+def test_llm_usage_above_former_cap_and_write_transaction_skip(accounts, monkeypatch):
     from types import SimpleNamespace
     from goalcal.llm.client import LLMClient, LLMUnavailable
     called = []
@@ -193,11 +190,11 @@ def test_llm_quota_failure_and_write_transaction_skip(accounts, monkeypatch):
         with pytest.raises(LLMUnavailable):
             client.complete_json('system', 'user')
     assert len(called) == 1
-    for _ in range(29):
+    for _ in range(45):
         quota.consume(accounts[1][0])
-    with tenancy.session_scope(accounts[2][0]), pytest.raises(RuntimeError):
+    with tenancy.session_scope(accounts[2][0]):
         client.complete_json('system', 'user')
-    assert len(called) == 1
+    assert len(called) == 2
 
 
 def test_tenant_timezone_reaches_parser(accounts, monkeypatch):

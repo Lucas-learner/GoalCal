@@ -125,11 +125,41 @@ def extract_time(text: str) -> tuple[int, int] | None:
         minute = 30 if m.group(3) == "半" else int(m.group(4) or 0)
         return hour, minute
 
+    m = re.search(r"(上午|下午|晚上|早上|中午|今晚|明晚)?\s*([零一二两三四五六七八九十]{1,3})\s*点\s*(半)?", text)
+    if m:
+        digits = {"零": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4,
+                  "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+        value = m.group(2)
+        if "十" in value:
+            left, right = value.split("十", 1)
+            hour = (digits.get(left, 1) if left else 1) * 10 + (digits.get(right, 0) if right else 0)
+        else:
+            hour = digits.get(value, -1)
+        if 0 <= hour <= 23:
+            if m.group(1) in {"下午", "晚上", "今晚", "明晚"} and hour < 12:
+                hour += 12
+            return hour, 30 if m.group(3) else 0
+
     m = re.search(r"\b(noon|midday|morning|afternoon|evening|night|tonight)\b|上午|下午|晚上|中午|早上",
                   text, re.I)
     if m:
         return PERIOD_HOURS.get(m.group(0).lower(), 9), 0
     return None
+
+
+_EXPLICIT_CLOCK = re.compile(
+    r"\b(?:at\s+)?\d{1,2}(?::\d{2})?\s*(?:am|pm)\b|"
+    r"\b\d{1,2}:[0-5]\d\b|"
+    r"\b(?:at\s+)\d{1,2}\b|"
+    r"\d{1,2}\s*点|[零一二两三四五六七八九十]{1,3}\s*点|"
+    r"\b(?:noon|midday|midnight)\b",
+    re.I,
+)
+
+
+def has_explicit_clock(text: str) -> bool:
+    """Whether the user supplied a clock time, rather than a broad period/window."""
+    return bool(_EXPLICIT_CLOCK.search(text or "")) and extract_time(text) is not None
 
 
 def _next_weekday(now: datetime, target: int, force_next: bool) -> date:

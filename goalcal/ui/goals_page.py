@@ -20,6 +20,7 @@ def _render_detail(snapshot, blocks) -> None:
         on_delete_step=controller.delete_step,
         on_edit_step=controller.edit_step,
         on_archive_goal=controller.archive_goal,
+        on_toggle_pin=controller.toggle_pin,
         on_preview_replan=controller.preview_replan,
         on_apply_replan=controller.apply_replan,
         on_discard_replan=controller.discard_replan,
@@ -27,26 +28,19 @@ def _render_detail(snapshot, blocks) -> None:
     )
 
 
-def _render_directory(snapshots, selected_id: int, blocks) -> None:
+def _render_directory(snapshots, selected_id: int) -> None:
     st.caption("Your goals")
     for snapshot in snapshots:
-        with st.container(border=True):
-            if st.button(
-                snapshot["title"],
-                key=f"select_goal_{snapshot['id']}",
-                use_container_width=True,
-                type="primary" if snapshot["id"] == selected_id else "secondary",
-            ):
-                st.session_state["selected_goal_id"] = snapshot["id"]
-                st.rerun()
-            st.progress(min(1.0, snapshot["progress"]))
-            next_step = snapshot.get("next_step")
-            if next_step is not None:
-                st.caption(f"Next · {next_step.title}")
-                if block := blocks.get(next_step.id):
-                    st.caption(f"Scheduled · {block['start']:%a %b %d, %H:%M}")
-            else:
-                st.caption(f"{snapshot['done']}/{snapshot['total']} steps completed")
+        title = f"📌 {snapshot['title']}" if snapshot.get("pinned") else snapshot["title"]
+        if st.button(
+            title,
+            key=f"select_goal_{snapshot['id']}",
+            use_container_width=True,
+            type="primary" if snapshot["id"] == selected_id else "secondary",
+        ):
+            st.session_state["selected_goal_id"] = snapshot["id"]
+            st.rerun()
+        st.progress(min(1.0, snapshot["progress"]))
 
 
 def render() -> None:
@@ -56,12 +50,16 @@ def render() -> None:
     heading, new_goal = st.columns([4, 1])
     heading.caption("A quiet view of your plans. New goals start in Chat.")
     if new_goal.button("New goal", use_container_width=True):
+        controller.begin_goal()
         st.switch_page(st.session_state["chat_page"])
     with runtime.session_scope("goals.read") as session:
-        goals = goal_svc.active_goals(session, runtime.user_id())
+        goals = goal_svc.prioritized_goals(session, runtime.user_id())
         step_ids = [step.id for goal in goals for step in goal.steps]
         blocks = controller.blocks_by_step(session, runtime.user_id(), step_ids)
+        pinned_ids = {goal.id for goal in goals if goal.pinned}
         snapshots = [goal_svc.snapshot(goal, now=runtime.now()) for goal in goals]
+        for snapshot in snapshots:
+            snapshot["pinned"] = snapshot["id"] in pinned_ids
     if not snapshots:
         st.info("No active goal yet — tell me one in Chat.")
         return
@@ -76,6 +74,6 @@ def render() -> None:
         return
     directory, detail = st.columns([1, 2], gap="large")
     with directory:
-        _render_directory(snapshots, selected_id, blocks)
+        _render_directory(snapshots, selected_id)
     with detail:
         _render_detail(snapshot, blocks)

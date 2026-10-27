@@ -37,8 +37,8 @@ def test_exam_template_is_used_as_fallback():
 
 
 def test_llm_plan_is_used_when_available(monkeypatch):
-    monkeypatch.setattr(plan_mod, "settings", SimpleNamespace(llm_ready=True))
-    monkeypatch.setattr(plan_mod, "LLMClient", lambda: _FakeClient(_exam_steps()))
+    monkeypatch.setattr(plan_mod, "settings", SimpleNamespace(llm_enabled=True))
+    monkeypatch.setattr(plan_mod, "plan_client", lambda: _FakeClient(_exam_steps()))
 
     steps = plan_mod.generate_plan(
         "复习IBA6104",
@@ -54,9 +54,9 @@ def test_llm_plan_is_used_when_available(monkeypatch):
 
 
 def test_invalid_llm_plan_falls_back(monkeypatch):
-    monkeypatch.setattr(plan_mod, "settings", SimpleNamespace(llm_ready=True))
+    monkeypatch.setattr(plan_mod, "settings", SimpleNamespace(llm_enabled=True))
     monkeypatch.setattr(
-        plan_mod, "LLMClient", lambda: _FakeClient({"steps": [{"title": ""}]})
+        plan_mod, "plan_client", lambda: _FakeClient({"steps": [{"title": ""}]})
     )
 
     assert (
@@ -68,7 +68,7 @@ def test_invalid_llm_plan_falls_back(monkeypatch):
 
 
 def test_plan_is_none_when_llm_disabled(monkeypatch):
-    monkeypatch.setattr(plan_mod, "settings", SimpleNamespace(llm_ready=False))
+    monkeypatch.setattr(plan_mod, "settings", SimpleNamespace(llm_enabled=False))
     assert (
         plan_mod.generate_plan(
             "复习IBA6104", date(2026, 10, 29), today=date(2026, 10, 22)
@@ -79,8 +79,8 @@ def test_plan_is_none_when_llm_disabled(monkeypatch):
 
 def test_too_many_steps_are_fitted_to_complexity(monkeypatch):
     payload = {"steps": _exam_steps()["steps"] * 2}
-    monkeypatch.setattr(plan_mod, "settings", SimpleNamespace(llm_ready=True))
-    monkeypatch.setattr(plan_mod, "LLMClient", lambda: _FakeClient(payload))
+    monkeypatch.setattr(plan_mod, "settings", SimpleNamespace(llm_enabled=True))
+    monkeypatch.setattr(plan_mod, "plan_client", lambda: _FakeClient(payload))
 
     steps = plan_mod.generate_plan(
         "复习IBA6104",
@@ -101,8 +101,8 @@ def test_revision_request_and_current_steps_reach_prompt(monkeypatch):
             captured["payload"] = json.loads(user)
             return _exam_steps()
 
-    monkeypatch.setattr(plan_mod, "settings", SimpleNamespace(llm_ready=True))
-    monkeypatch.setattr(plan_mod, "LLMClient", lambda: _CapturingClient())
+    monkeypatch.setattr(plan_mod, "settings", SimpleNamespace(llm_enabled=True))
+    monkeypatch.setattr(plan_mod, "plan_client", lambda: _CapturingClient())
 
     plan_mod.generate_plan(
         "复习IBA6104",

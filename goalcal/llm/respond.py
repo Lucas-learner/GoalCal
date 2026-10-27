@@ -28,14 +28,17 @@ schedule anything. The JSON payload has their message plus a small context
 snapshot (recent conversation, active goals with next steps, upcoming events).
 
 Rules:
-1. Respond to what they actually said first: answer the question or acknowledge
-   the feeling. Understand before suggesting.
-2. Offer at most ONE optional next action, only if it genuinely fits, phrased as
-   an offer ("Want me to …?"), never as a done deal.
-3. Never claim you created, moved, deleted, scheduled or logged anything — you
-   cannot act in this mode.
-4. Use only facts from the context. Do not invent events, goals or progress.
-5. One to three short sentences of plain text. Match the user's language.
+1. Structure the reply as: acknowledge (answer the question or recognize the
+   feeling — respond to what they actually said first) → anchor (tie it to
+   their words or to a real goal/event from the context) → at most ONE optional
+   offer ("Want me to …?"), only if it genuinely fits, never as a done deal.
+2. Never claim you created, moved, deleted, scheduled or logged anything in a
+   chat reply. GoalCal can write to the calendar through its action flow; never
+   claim the application cannot do that. If an action needs a clock time or
+   confirmation, ask for that detail.
+3. Use only facts from the context. Do not invent events, goals or progress.
+4. One to three short sentences. Match the user's language. Use Markdown:
+   blank lines between paragraphs and "- " lists for two or more items.
 """
 
 
@@ -51,7 +54,7 @@ def chat_reply(
     """自由对话回复；未启用、失败或返回空时给 None。"""
     if not settings.llm_ready:
         return None
-    payload = {"message": text, "context": _context(session, user_id, now, tz)}
+    payload = {"message": text, "context": context_snapshot(session, user_id, now, tz)}
     system = SYSTEM.format(
         now=now.strftime("%Y-%m-%d %H:%M"), tz=tz, weekday=now.strftime("%A")
     )
@@ -65,7 +68,8 @@ def chat_reply(
     return reply.strip() or None
 
 
-def _context(session, user_id: int, now: datetime, tz: str) -> dict:
+def context_snapshot(session, user_id: int, now: datetime, tz: str) -> dict:
+    """喂给对话模型的上下文快照：少量最近消息 + 目标/日程概览（L1 与闲聊共用）。"""
     recent = [
         f"{m['role']}: {m['content'][:120]}"
         for m in conversation.load_recent(session, user_id, limit=6)
@@ -99,15 +103,25 @@ def fallback(session, user_id: int, text: str = "") -> str | None:
     chinese = any("\u4e00" <= char <= "\u9fff" for char in text)
     if text.strip().lower().rstrip("!。！") in {"thanks", "thank you", "谢谢", "多谢"}:
         return "不客气。" if chinese else "You're welcome."
+    generic = (
+        "我在听。你可以继续说说，或告诉我现在最想推进的一件事。"
+        if chinese
+        else "I'm listening — tell me more, or what you'd like to move forward."
+    )
     for goal in goal_svc.active_goals(session, user_id):
         step = goal_svc.next_step(goal)
-        if step is not None:
-            if chinese:
-                return f"我在听。想推进「{goal.title}」时，我可以帮你为「{step.title}」找时间。"
-            return (
+        if step is None:
+            continue
+        if chinese:
+            suggestion = f"我在听。想推进「{goal.title}」时，我可以帮你为「{step.title}」找时间。"
+        else:
+            suggestion = (
                 f"I'm listening. When you want to move “{goal.title}” forward, "
                 f"I can find time for “{step.title}” ({step.est_min} min)."
             )
-    if chinese:
-        return "我在听。你可以继续说说，或告诉我现在最想推进的一件事。"
-    return None
+        # 不机械复读：上一条助手消息就是这句建议时，退到通用回应
+        recent = conversation.load_recent(session, user_id, limit=1)
+        if recent and recent[-1]["role"] == "assistant" and recent[-1]["content"] == suggestion:
+            return generic
+        return suggestion
+    return generic if chinese else None

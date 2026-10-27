@@ -5,7 +5,7 @@ import uuid
 from dataclasses import fields, is_dataclass
 from datetime import date, datetime
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from .domain.planner import GoalBrief
 from .domain.scheduler import Candidate
@@ -71,6 +71,10 @@ def _decode(value):
         from .agent import CheckinContext
 
         return CheckinContext(**data)
+    if kind == "DialogContext":
+        from .dialog import DialogContext
+
+        return DialogContext(**data)
     if kind is None:
         for key in ("start", "end"):
             if isinstance(decoded.get(key), str):
@@ -125,6 +129,20 @@ def load_page(
         ).limit(1)
     ) is not None
     return {"messages": messages, "has_more": has_more, "has_user_history": has_user_history}
+
+
+def reset_state(session, user_id: int) -> None:
+    """整页重进或手动新对话：删除当前 Conversation 的消息并清空任务状态。
+
+    Conversation 行本身保留（外键与统计口径不变）；旧消息真实删除。
+    """
+    conversation = _conversation(session, user_id)
+    if conversation is None:
+        return
+    session.execute(delete(Message).where(Message.conversation_id == conversation.id))
+    conversation.state_json = "{}"
+    conversation.updated_at = utcnow_naive()
+    session.flush()
 
 
 def load_recent(session, user_id: int, limit: int = 6) -> list[dict]:

@@ -141,25 +141,18 @@ def ready(brief: GoalBrief) -> bool:
 
 
 def clarification_text(brief: GoalBrief) -> str:
-    label = complexity_label(brief.complexity)
-
     if is_exam(brief.title):
-        return (
-            f'Let\'s confirm the exam date for "{brief.title}".\n'
-            "Reply with **7 days** / **14 days** / or a date like **2026-10-29**. "
-            "Everything else uses defaults — adjust as you go."
-        )
+        return (f'Before I make a plan for "{brief.title}", confirm the exam date or timeline. '
+                'Choose 7 days, 1 month or 3 months, or type your own date or duration.')
     return (
-        f'I\'d treat "{brief.title}" as a **{label}** goal — first, let\'s confirm the timeline:\n'
-        "How long do you want? Reply with **3 months** / **6 months** / **1 year**. "
-        "Level defaults to beginner for now; I'll calibrate with you after the first session."
+        f'Before I make a plan for "{brief.title}", choose a timeline. '
+        'Choose 7 days, 1 month or 3 months, or type your own date or duration. '
+        'I will build the plan after that.'
     )
 
 
 def quick_options(brief: GoalBrief) -> list[str]:
-    if is_exam(brief.title):
-        return ["7 days", "14 days", "1 month", "Never mind"]
-    return ["3 months", "6 months", "1 year", "Never mind"]
+    return ["7 days", "1 month", "3 months", "Cancel"]
 
 
 def cancellation_requested(text: str) -> bool:
@@ -241,6 +234,14 @@ def infer_target(text: str) -> str:
 
 
 def parse_duration_days(text: str) -> int | None:
+    english_numbers = {"a": "1", "an": "1", "one": "1", "two": "2", "three": "3",
+                       "four": "4", "five": "5", "six": "6", "seven": "7",
+                       "eight": "8", "nine": "9", "ten": "10", "twelve": "12"}
+    text = re.sub(
+        r"\b(a|an|one|two|three|four|five|six|seven|eight|nine|ten|twelve)\s+"
+        r"(?=(?:days?|weeks?|months?|years?)\b)",
+        lambda match: english_numbers[match.group(1).lower()] + " ", text or "", flags=re.I,
+    )
     if re.search(r"\d{1,2}\s*月\s*\d{1,2}\s*[日号]", text or ""):
         # “10 月 29 日”是具体日期不是时长，交给 parse_explicit_date
         return None

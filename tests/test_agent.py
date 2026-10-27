@@ -8,6 +8,8 @@ from sqlalchemy import select
 from goalcal import agent
 from goalcal.domain import calendar_service as cal
 from goalcal.domain import goals as goal_svc
+from goalcal.domain import planner
+from goalcal.llm.action import Action
 from goalcal.models import Checkin, Event, StateLog, Step
 from goalcal.timeutil import as_local, as_utc_naive
 
@@ -30,6 +32,24 @@ def test_add_event_stores_utc_and_clean_title(session, user):
     assert ev.start_utc == datetime(2026, 10, 22, 2, 0)  # 10:00 +08
     assert ev.end_utc == datetime(2026, 10, 22, 3, 0)
     assert "Added" in reply.text
+
+
+def test_add_event_rejects_past_time(session, user):
+    action = Action(intent="add_event", title="Run", when_text="today 8am",
+                    raw="Add run today 8am", start=NOW - timedelta(hours=1))
+    reply = agent.execute(session, user.id, action, "l1:test", NOW, TZ)
+    assert "already passed" in reply.text
+    assert session.scalar(select(Event)) is None
+
+
+def test_stale_calendar_preview_does_not_write_past_event(session, user):
+    draft = agent.EventDraft(events=[Action(
+        intent="add_event", title="Run", start=NOW - timedelta(minutes=30),
+        duration_min=45, raw="earlier proposal",
+    )])
+    reply = agent.confirm_event_draft(session, user.id, draft, True, NOW, TZ)
+    assert "have passed" in reply.text
+    assert session.scalar(select(Event)) is None
 
 
 def test_add_event_without_date_uses_today_or_tomorrow(session, user):
@@ -78,6 +98,22 @@ def test_query_uses_injected_now_not_wall_clock(session, user):
     assert "Team sync" not in reply.text
 
 
+def test_query_groups_upcoming_events_by_day(session, user):
+    _event(session, user, "Past sync", NOW - timedelta(hours=1))
+    _event(session, user, "Morning sync", NOW + timedelta(hours=1))
+    _event(session, user, "Design review", NOW + timedelta(hours=4))
+    _event(session, user, "Team sync", NOW + timedelta(days=1))
+
+    reply = agent.handle(session, user.id, "What's on this week?", NOW, TZ)
+
+    assert "Past sync" not in reply.text
+    assert "**Today · Wed Oct 21**" in reply.text
+    assert "**Tomorrow · Thu Oct 22**" in reply.text
+    assert "- 10:00 — Morning sync" in reply.text
+    assert "- 13:00 — Design review" in reply.text
+    assert "- 09:00 — Team sync" in reply.text
+
+
 def test_create_goal_returns_steps_and_candidates(session, user):
     reply = agent.handle(
         session, user.id, "I want to publish my first short video in 30 days", NOW, TZ
@@ -92,22 +128,34 @@ def test_create_goal_returns_steps_and_candidates(session, user):
     assert all(c.reasons for c in reply.candidates)
 
 
-def test_piano_goal_asks_before_creating(session, user):
+def test_piano_goal_waits_for_timeline_before_generating_plan(session, user, monkeypatch):
+    """期限未定时只保留 brief；确认默认期限后才生成计划草稿。"""
+    original = agent.generate_outline_plan
+    calls = []
+
+    def track(*args, **kwargs):
+        calls.append(1)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(agent, "generate_outline_plan", track)
     reply = agent.handle(session, user.id, "我要学会弹钢琴", NOW, TZ)
 
     assert reply.action.intent == "create_goal"
     assert reply.goal_brief is not None
-    assert "confirm" in reply.text
+    assert reply.goal_draft is None
+    assert "choose a timeline" in reply.text
+    assert calls == []
+    reply = agent.continue_goal(session, user.id, reply.goal_brief, "use 90 days", NOW, TZ)
+    assert reply.goal_draft is not None
+    assert calls == [1]
+    assert reply.goal_draft.deadline == NOW.date() + timedelta(days=90)
     assert goal_svc.active_goals(session, user.id) == []
 
 
-def test_piano_goal_is_created_after_clarification(session, user):
+def test_piano_goal_deadline_can_be_added_after_preview(session, user):
     first = agent.handle(session, user.id, "我要学会弹钢琴", NOW, TZ)
-    reply = agent.continue_goal(
-        session, user.id, first.goal_brief,
-        "零基础，3 个月，能弹一首简单曲子", NOW, TZ,
-    )
-    reply = agent.confirm_goal_draft(session, user.id, reply.goal_draft, True, NOW, TZ)
+    draft = agent.continue_goal(session, user.id, first.goal_brief, "6个月", NOW, TZ).goal_draft
+    reply = agent.confirm_goal_draft(session, user.id, draft, True, NOW, TZ)
 
     assert reply.goal_brief is None
     assert "Goal set" in reply.text
@@ -115,8 +163,84 @@ def test_piano_goal_is_created_after_clarification(session, user):
     assert goal.template_key == "piano"
     assert len(goal.steps) == 2
     assert goal_svc.outline_phases(goal) == ["Setup & baseline", "Posture & scales", "Reading & rhythm", "First piece", "Consolidation"]
-    assert goal.deadline == NOW.date() + timedelta(days=90)
+    assert goal.deadline == NOW.date() + timedelta(days=180)
     assert 1 <= len(reply.candidates) <= 6
+
+
+def test_revise_goal_draft_bare_deadline_is_deterministic(session, user, monkeypatch):
+    """裸期限修改（"3个月" / "到6月1日"）只换期限，use_llm=False 也不触发 L2。"""
+    def no_llm(*args, **kwargs):
+        raise AssertionError("裸期限修改不得触发 L2")
+
+    first = agent.handle(session, user.id, "我要学会弹钢琴", NOW, TZ, use_llm=False)
+    draft = agent.continue_goal(session, user.id, first.goal_brief, "use 90 days", NOW, TZ,
+                                use_llm=False).goal_draft
+    monkeypatch.setattr(agent, "generate_plan", no_llm)
+
+    revised = agent.revise_goal_draft(draft, "3个月", NOW, TZ, use_llm=False)
+    assert revised is not None
+    assert revised.deadline == NOW.date() + timedelta(days=90)
+    assert revised.draft_id == draft.draft_id
+
+    revised2 = agent.revise_goal_draft(draft, "到6月1日", NOW, TZ, use_llm=False)
+    assert revised2.deadline == date(2027, 6, 1)  # 已过的月日滚到明年
+
+
+def test_revise_goal_draft_rebuilds_plan_for_new_timeline(session, user, monkeypatch):
+    first = agent.handle(session, user.id, "我要学会弹钢琴", NOW, TZ, use_llm=False)
+    draft = agent.continue_goal(session, user.id, first.goal_brief, "use 90 days", NOW, TZ,
+                                use_llm=False).goal_draft
+    seen = []
+
+    def fake_outline(title, deadline, **kwargs):
+        seen.append(deadline)
+        return ["One-month piano plan"], [{"seq": 0, "title": "First month action",
+                                            "est_min": 20, "energy": 1, "kind": "mental"}]
+
+    monkeypatch.setattr(agent, "generate_outline_plan", fake_outline)
+    revised = agent.revise_goal_draft(draft, "deadline is one month", NOW, TZ)
+
+    assert seen == [NOW.date() + timedelta(days=30)]
+    assert revised.deadline == seen[0]
+    assert revised.step_defs[0]["title"] == "First month action"
+    assert revised.draft_id == draft.draft_id
+
+
+def test_revise_goal_draft_mixed_instruction_not_silently_dropped(session, user, monkeypatch):
+    """混合指令（期限+结构调整）不得静默只改期限：无 LLM 时诚实返回 None，有 LLM 时走 L2。"""
+    mixed = ["拆成两段，3个月", "把第一步改成3个月", "6个月，每周三次"]
+
+    first = agent.handle(session, user.id, "我要学会弹钢琴", NOW, TZ, use_llm=False)
+    draft = agent.continue_goal(session, user.id, first.goal_brief, "use 90 days", NOW, TZ,
+                                use_llm=False).goal_draft
+
+    for instruction in mixed:
+        assert agent.revise_goal_draft(draft, instruction, NOW, TZ, use_llm=False) is None
+
+    captured = {}
+
+    def fake_generate(*args, **kwargs):
+        captured.update(kwargs)
+        return [
+            {
+                "seq": i + 1,
+                "milestone": f"阶段{i // 4 + 1}",
+                "title": f"步骤{i + 1}",
+                "outcome": "",
+                "est_min": 30,
+                "energy": 1,
+                "kind": "deep",
+            }
+            for i in range(8)  # piano 是 complex，校验要求 ≥7 步
+        ]
+
+    monkeypatch.setattr(agent, "generate_plan", fake_generate)
+
+    revised = agent.revise_goal_draft(draft, "拆成两段，3个月", NOW, TZ)
+
+    assert revised is not None and revised.source == "llm"
+    assert captured["instruction"] == "拆成两段，3个月"
+    assert captured["current_steps"]
 
 
 def test_llm_generated_plan_is_stored_for_custom_goal(session, user, monkeypatch):
@@ -221,10 +345,15 @@ def test_propose_goal_plan_is_preview_only_and_passes_feedback(
     assert [step.title for step in goal.steps] == original
 
 
-def test_piano_goal_defaults_when_answer_is_vague(session, user):
-    first = agent.handle(session, user.id, "我要学会弹钢琴", NOW, TZ)
-    reply = agent.continue_goal(session, user.id, first.goal_brief, "随便", NOW, TZ)
+def test_goal_brief_keeps_waiting_when_answer_is_vague(session, user):
+    """模糊回答不能无声采用默认期限并开始生成计划。"""
+    brief = planner.assess("学会弹钢琴", None, "我要学会弹钢琴", today=NOW.date())
+    assert not planner.ready(brief)
+    reply = agent.continue_goal(session, user.id, brief, "随便", NOW, TZ)
 
+    assert reply.goal_draft is None
+    assert reply.goal_brief is not None
+    reply = agent.continue_goal(session, user.id, reply.goal_brief, "use 90 days", NOW, TZ)
     assert reply.goal_draft.brief.assumptions
     reply = agent.confirm_goal_draft(session, user.id, reply.goal_draft, True, NOW, TZ)
     goal = goal_svc.active_goals(session, user.id)[0]
@@ -232,9 +361,9 @@ def test_piano_goal_defaults_when_answer_is_vague(session, user):
     assert goal.deadline == NOW.date() + timedelta(days=90)
 
 
-def test_goal_clarification_can_be_cancelled(session, user):
-    first = agent.handle(session, user.id, "我要学会弹钢琴", NOW, TZ)
-    reply = agent.continue_goal(session, user.id, first.goal_brief, "先不建了", NOW, TZ)
+def test_legacy_goal_clarification_can_be_cancelled(session, user):
+    brief = planner.assess("学会弹钢琴", None, "我要学会弹钢琴", today=NOW.date())
+    reply = agent.continue_goal(session, user.id, brief, "先不建了", NOW, TZ)
 
     assert "no goal created" in reply.text
     assert goal_svc.active_goals(session, user.id) == []
@@ -409,7 +538,7 @@ def test_chat_can_schedule_the_next_goal_step(session, user):
     assert reply.action.intent == "schedule_step"
     assert reply.step_id is not None
     assert 1 <= len(reply.candidates) <= 6
-    assert "slots" in reply.text.lower()
+    assert "时段" in reply.text
 
 
 def test_delete_goal_by_title(session, user):
@@ -579,7 +708,7 @@ def test_schedule_step_with_explicit_time_books_directly(session, user):
 
     assert reply.action.intent == "schedule_step"
     assert reply.candidates == []
-    assert "Booked" in reply.text
+    assert "已将" in reply.text and "写入日历" in reply.text
     ev = session.scalar(select(Event).where(Event.kind == "block"))
     assert ev is not None and ev.source == "proposal"
     local = as_local(ev.start_utc, TZ)
@@ -639,6 +768,24 @@ def test_schedule_all_packs_across_goals_in_seq_order(session, user):
     assert reply.batch is not None
     assert [b["title"] for b in reply.batch] == ["G1 first", "G1 second", "G2 first"]
     assert all(b["start"].date() == NOW.date() + timedelta(days=1) for b in reply.batch)
+
+
+def test_resolve_step_without_target_prefers_urgent_then_pinned(session, user):
+    g1 = _goal_with_sized_steps(session, user, [("G1 step", 30)], "Goal one")
+    g2 = _goal_with_sized_steps(session, user, [("G2 step", 30)], "Goal two")
+    g2.created_at = g1.created_at + timedelta(seconds=1)
+    g2.deadline = NOW.date() - timedelta(days=1)  # 逾期 → 紧急度最高
+    session.flush()
+
+    goal, step, error = agent._resolve_step(goal_svc.active_goals(session, user.id), None)
+    assert error is None
+    assert goal.id == g2.id and step.title == "G2 step"
+
+    goal_svc.set_pinned(session, g1, True)
+    session.flush()
+    goal, step, error = agent._resolve_step(goal_svc.active_goals(session, user.id), None)
+    assert error is None
+    assert goal.id == g1.id and step.title == "G1 step"
 
 
 def test_schedule_all_skips_already_scheduled_steps(session, user):

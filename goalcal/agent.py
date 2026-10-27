@@ -31,6 +31,7 @@ from .domain.scheduler import (
 )
 from .llm import event_plan, respond
 from .llm.action import Action
+from .llm.natdate import has_explicit_clock
 from .llm.parser import parse
 from .llm.plan import generate_outline_plan, generate_plan
 from .llm.rules import CALENDAR_WRITE_MARKERS, NEW_COMMAND_INTENTS, parse_with_rules
@@ -57,9 +58,36 @@ CLARIFY = (
     "• “Find time for my next step”"
 )
 
+# clarify 第三轮仍不明：停止追问，明确"我先不猜"，不循环
+CLARIFY_STOP = (
+    "I'm not following, so I'll stop guessing rather than keep asking. "
+    "Whenever you're ready, tell me in a few words what you want — "
+    "e.g. “Add a meeting tomorrow 10am” or “Find time for my next step”."
+)
+
+
+def clarify_options(session: Session, user_id: int) -> str:
+    """clarify 第二轮：确定性的 2-3 个可执行选项；有进行中的目标时带上具体下一步。"""
+    options = ["“Add a meeting tomorrow 10am” — put something on your calendar"]
+    for goal in goal_svc.prioritized_goals(session, user_id):
+        step = goal_svc.next_step(goal)
+        if step is not None:
+            options.append(
+                f"“Find time for my next step” — schedule “{step.title}” for {goal.title}"
+            )
+            break
+    options.append("“I finished the script today” — log progress on a step")
+    return "Here's what I can do — pick one, or describe your own:\n" + "\n".join(
+        f"• {option}" for option in options
+    )
+
 # 删除/改期这类不好撤销的操作，置信度不够就先追问，不直接执行
 RISKY_INTENTS = {"delete_event", "delete_goal", "move_event"}
 CONFIRM_THRESHOLD = 0.5
+
+# 这些 handler 内部有 LLM 入口（event_plan 提取 / plan 拆解 / refine 细化），
+# execute 会把本轮的 use_llm 预算传下去；False 时整轮走确定性路径。
+_USE_LLM_HANDLERS = {"add_event", "create_goal", "refine_steps", "log_progress", "schedule_step"}
 
 
 def _confirm_text(action: Action) -> str:
@@ -117,8 +145,30 @@ def handle(
     text: str,
     now: datetime,
     tz: str = "Asia/Shanghai",
+    *,
+    use_llm: bool | None = None,
 ) -> Reply:
-    action, parser = parse(text, now)
+    action, parser = parse(text, now, use_llm=use_llm)
+    # use_llm=False 时整轮不再调任何 LLM（解析与规划都走确定性路径）
+    return execute(session, user_id, action, parser, now, tz, use_llm=use_llm is not False)
+
+
+def execute(
+    session: Session,
+    user_id: int,
+    action: Action,
+    parser: str,
+    now: datetime,
+    tz: str = "Asia/Shanghai",
+    *,
+    chat_text: str | None = None,
+    use_llm: bool = True,
+) -> Reply:
+    """执行一个已解析的 Action：白名单校验后的唯一执行入口。
+
+    chat_text 是 L1 轮引擎已经生成的闲聊回复：给了就直接用，
+    本轮不再调 respond.chat_reply（每轮最多一次模型调用）。
+    """
     handler = {
         "add_event": _add_event,
         "move_event": _move_event,
@@ -126,29 +176,35 @@ def handle(
         "query_events": _query,
         "create_goal": _create_goal,
         "delete_goal": _delete_goal,
+        "resume_goal": _resume_goal,
         "schedule_step": _schedule_step,
         "schedule_all": _schedule_all,
         "refine_steps": _refine_steps,
         "log_progress": _log_progress,
         "set_state": _set_state,
     }.get(action.intent)
-
     if handler is None:
         if HELP_MARKERS.search(action.raw or ""):
             return Reply(HELP, action, parser)
         # 普通闲聊：先理解再建议（LLM），失败回退到简短的上下文相关话术
-        text = (
-            respond.chat_reply(session, user_id, action.raw or "", now, tz)
-            or respond.fallback(session, user_id, action.raw or "")
-            or CLARIFY
-        )
+        if chat_text is not None:
+            text = chat_text or respond.fallback(session, user_id, action.raw or "") or CLARIFY
+        else:
+            text = (
+                (respond.chat_reply(session, user_id, action.raw or "", now, tz) if use_llm else None)
+                or respond.fallback(session, user_id, action.raw or "")
+                or CLARIFY
+            )
         return Reply(text, action, parser)
     if action.intent in RISKY_INTENTS and action.confidence < CONFIRM_THRESHOLD:
         return Reply(
             _confirm_text(action), action, parser,
             pending_action=PendingAction(action=action, parser=parser),
         )
-    reply = handler(session, user_id, action, now, tz, parser)
+    if action.intent in _USE_LLM_HANDLERS:
+        reply = handler(session, user_id, action, now, tz, parser, use_llm=use_llm)
+    else:
+        reply = handler(session, user_id, action, now, tz, parser)
     metrics.record(
         session, user_id, metrics.PARSE, now,
         payload={"parser": parser, "intent": action.intent},
@@ -194,10 +250,22 @@ def _event_keys(session, user_id: int) -> set[tuple[str, datetime]]:
     }
 
 
-def _add_event(session, user_id, action, now, tz, parser) -> Reply:
+def _add_event(session, user_id, action, now, tz, parser, *, use_llm: bool = True) -> Reply:
+    chinese = bool(re.search(r"[\u4e00-\u9fff]", action.raw or ""))
+    if parser.startswith("rules:") and not has_explicit_clock(action.raw):
+        # The rules benchmark still recognizes broad periods as event intents,
+        # but execution must not silently turn "tonight" into 09:00.
+        action.start = action.end = None
+    if action.start is not None and action.start <= now:
+        return Reply(
+            ("这个时间已经过去了。告诉我一个晚一点的时间，我再写进日历。" if chinese else
+             "That time has already passed. Give me a later time and I'll add it."),
+            action, parser,
+        )
     if action.start is None:
         # 明确写日历但当前消息没时间：从上文提取助手刚提议的时间块
-        if CALENDAR_WRITE_MARKERS.search(action.raw or ""):
+        # use_llm=False（L1 失败后的降级轮）跳过提取，直接追问时间
+        if use_llm and CALENDAR_WRITE_MARKERS.search(action.raw or ""):
             actions = event_plan.extract_events(session, user_id, action.raw or "", now, tz)
             if actions:
                 existing = _event_keys(session, user_id)
@@ -222,19 +290,23 @@ def _add_event(session, user_id, action, now, tz, parser) -> Reply:
                 )
         if action.title and action.title != "Untitled":
             return Reply(
-                f'When should I put “{action.title}”? Try “tomorrow 10am” or “Friday afternoon”.',
+                (f"想把「{action.title}」安排在几点？比如“明晚七点”。" if chinese else
+                 f'When should I put “{action.title}”? Try “tomorrow 10am” or “Friday afternoon”.'),
                 action, parser,
             )
         return Reply(
-            "What should I add, and when? Try “Add a meeting tomorrow 10am”.",
+            ("想把什么事安排在几点？比如“明晚七点跑步”。" if chinese else
+             "What should I add, and when? Try “Add a meeting tomorrow 10am”."),
             action, parser,
         )
     ev = cal.create_event(
         session, user_id, action.title or "Untitled", action.start, action.end, tz=tz
     )
     return Reply(
-        f"Added “{ev.title}” on {action.start:%a %b %d, %H:%M}–{action.end:%H:%M}."
-        " Anything else?",
+        (f"已把「{ev.title}」安排到 {action.start:%m月%d日 %H:%M}–{action.end:%H:%M}。"
+         if chinese else
+         f"Added “{ev.title}” on {action.start:%a %b %d, %H:%M}–{action.end:%H:%M}."
+         " Anything else?"),
         action, parser,
     )
 
@@ -256,10 +328,14 @@ def confirm_event_draft(
         return Reply("Okay — nothing was added to your calendar.", action, "event_draft:cancel")
     existing = _event_keys(session, user_id)
     created: list[Event] = []
+    past_count = 0
     for item in draft.events:
         if item.start is None:
             continue
         item.normalized(now)
+        if item.start <= now:
+            past_count += 1
+            continue
         key = ((item.title or "Untitled").casefold(), as_utc_naive(item.start, tz))
         if key in existing:
             continue
@@ -271,7 +347,8 @@ def confirm_event_draft(
     session.flush()
     if not created:
         return Reply(
-            "Those blocks are already on your calendar — nothing new was added.",
+            ("Those proposed times have passed — nothing was added. Tell me a later time."
+             if past_count else "Those blocks are already on your calendar — nothing new was added."),
             action, "event_draft:confirm",
         )
     lines = [
@@ -325,15 +402,24 @@ def _delete_event(session, user_id, action, now, tz, parser) -> Reply:
 
 def _query(session, user_id, action, now, tz, parser) -> Reply:
     # 以用户当前（可被时间机器快进的）时刻为基准，而不是墙钟时间
-    start_utc = as_utc_naive(now, tz) - timedelta(days=1)
+    start_utc = as_utc_naive(now, tz)
     events = cal.events_between(session, user_id, start_utc, start_utc + timedelta(days=8))
     if not events:
         return Reply(
             "Your week is empty. Want to add something, or should I find time for a goal step?",
             action, parser,
         )
-    lines = [f"• {cal.as_local(e.start_utc, tz):%a %b %d %H:%M} — {e.title}" for e in events[:12]]
-    return Reply("Here's what's coming up:\n" + "\n".join(lines), action, parser)
+    lines = ["Here's what's coming up:"]
+    last_day = None
+    for event in events[:12]:
+        start = cal.as_local(event.start_utc, tz)
+        if start.date() != last_day:
+            last_day = start.date()
+            name = {0: "Today", 1: "Tomorrow"}.get((last_day - now.date()).days)
+            heading = f"{name} · {start:%a %b %d}" if name else f"{start:%a %b %d}"
+            lines.extend(["", f"**{heading}**"])
+        lines.append(f"- {start:%H:%M} — {event.title}")
+    return Reply("\n".join(lines), action, parser)
 
 
 def _step_title(value: str) -> str:
@@ -372,7 +458,11 @@ def _resolve_step(goals: list[Goal], target: str | None) -> tuple[Goal | None, S
             names = ", ".join(f'"{step.goal.title}: {step.title}"' for step in matches[:4])
             return None, None, f'"{target}" matches more than one step: {names}. Which one did you mean?'
         return matches[0].goal, matches[0], None
-    goal = next((goal for goal in goals if _pick_step(goal) is not None), goals[0])
+    # 无目标时按紧急度（置顶 > 最近截止日）选 goal，与 Chat 首页 featured goal 一致
+    ordered = sorted(goals, key=goal_svc.priority_key)
+    goal = next((g for g in ordered if _pick_step(g) is not None), ordered[0] if ordered else None)
+    if goal is None:
+        return None, None, None
     return goal, _pick_step(goal), None
 
 
@@ -391,6 +481,24 @@ def _pick_step(goal, prefer_low_energy: bool = False, target: str | None = None)
     return pending[0] if pending else None
 
 
+def next_unscheduled_step(
+    session: Session, user_id: int, goal: Goal, now: datetime, tz: str,
+) -> Step | None:
+    scheduled = set(session.scalars(
+        select(Event.step_id).where(
+            Event.user_id == user_id,
+            Event.step_id.in_([step.id for step in goal.steps] or [-1]),
+            Event.kind == "block",
+            Event.start_utc >= as_utc_naive(now, tz),
+        )
+    ))
+    return next(
+        (step for step in sorted(goal.steps, key=lambda item: item.seq)
+         if step.status == "todo" and step.id not in scheduled),
+        None,
+    )
+
+
 def looks_like_new_command(text: str, now: datetime) -> bool:
     """等待回答（目标澄清/签到）时，判断这句是不是明确的新指令。
 
@@ -406,7 +514,7 @@ def looks_like_new_command(text: str, now: datetime) -> bool:
 
 
 def auto_refine_if_low(
-    session: Session, user_id: int, goal: Goal, now: datetime
+    session: Session, user_id: int, goal: Goal, now: datetime, *, use_llm: bool = True
 ) -> str:
     """剩余 todo 步骤少于 2 个时，按阶段大纲自动补下一批；返回一句告知（没补则 ""）。"""
     if goal.status != "active":
@@ -414,7 +522,7 @@ def auto_refine_if_low(
     pending = [s for s in goal.steps if s.status == "todo"]
     if len(pending) >= 2:
         return ""
-    created = refine.refine_upcoming(session, goal)
+    created = refine.refine_upcoming(session, goal, use_llm=use_llm)
     if not created:
         return ""
     metrics.record(
@@ -426,7 +534,7 @@ def auto_refine_if_low(
     return f"You're almost out of steps, so I added {len(created)} more from the phase outline: {titles}."
 
 
-def _create_goal(session, user_id, action, now, tz, parser) -> Reply:
+def _create_goal(session, user_id, action, now, tz, parser, *, use_llm: bool = True) -> Reply:
     brief = planner.assess(
         action.title or "New goal",
         action.deadline,
@@ -434,13 +542,10 @@ def _create_goal(session, user_id, action, now, tz, parser) -> Reply:
         today=now.date(),
     )
     if not planner.ready(brief):
-        return Reply(
-            planner.clarification_text(brief),
-            action,
-            parser,
-            goal_brief=brief,
-        )
-    return _preview_goal_now(session, user_id, brief, action, now, tz, parser)
+        # 先确认期限，避免按默认 90 天生成计划后又只改日期。
+        return Reply(planner.clarification_text(brief), action, parser, goal_brief=brief)
+    return _preview_goal_now(session, user_id, brief, action, now, tz, parser,
+                             use_llm=use_llm)
 
 
 def continue_goal(
@@ -450,6 +555,8 @@ def continue_goal(
     text: str,
     now: datetime,
     tz: str = "Asia/Shanghai",
+    *,
+    use_llm: bool = True,
 ) -> Reply:
     """处理目标澄清的下一句；只追问一轮，之后按默认值给出可调整的计划。"""
     action = Action(intent="create_goal", title=brief.title, raw=text, confidence=0.8)
@@ -464,8 +571,10 @@ def continue_goal(
 
     updated = planner.apply_answer(brief, text, today=now.date())
     if not planner.ready(updated):
-        updated = planner.fill_defaults(updated, today=now.date())
-    return _preview_goal_now(session, user_id, updated, action, now, tz, "goal:clarify")
+        return Reply(planner.clarification_text(updated), action, "goal:clarify",
+                     goal_brief=updated)
+    return _preview_goal_now(session, user_id, updated, action, now, tz, "goal:clarify",
+                             use_llm=use_llm)
 
 
 def prepare_goal_draft(
@@ -474,6 +583,8 @@ def prepare_goal_draft(
     brief: planner.GoalBrief,
     now: datetime,
     tz: str = "Asia/Shanghai",
+    *,
+    use_llm: bool = True,
 ) -> GoalDraft:
     brief = planner.fill_defaults(brief, today=now.date())
     deadline = brief.deadline or (now.date() + timedelta(days=90))
@@ -486,6 +597,7 @@ def prepare_goal_draft(
         complexity=brief.complexity,
         raw=brief.raw,
         tz=tz,
+        use_llm=use_llm,
     )
     if plan:
         outline, step_defs = plan
@@ -525,20 +637,51 @@ def create_goal_from_brief(
     return goal, "llm" if draft.source == "llm" else "template"
 
 
+_DATE_TEXT = re.compile(r"\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}\s*月\s*\d{1,2}\s*[日号]")
+# 抽掉时间表达后允许剩下的连接/虚词；还有其它内容残留即视为实质调整
+_TIMELINE_FILLER = re.compile(
+    r"\b(make|the|a|an|it|is|my|and|to|in|by|for|of|within|until|due|deadline|timeline|date)\b|"
+    r"把|将|改成|改为|调整为?|定为?|定在|到|为|是|期限|截止",
+    re.I,
+)
+
+
+def _timeline_only_edit(instruction: str) -> bool:
+    """纯期限/日期修改判断：能解析出时间表达，且抽掉它和连接词后没有实质内容残留。
+
+    克制的启发式（不是 NLP）：判断失败一律落到 L2/诚实拒绝，不会静默只改期限。
+    """
+    if (
+        planner.parse_explicit_date(instruction) is None
+        and planner.parse_duration_days(instruction) is None
+    ):
+        return False
+    rest = _DATE_TEXT.sub("", instruction)
+    rest = planner.DURATION.sub("", rest)
+    rest = re.sub(
+        r"\b(?:a|an|one|two|three|four|five|six|seven|eight|nine|ten|twelve)\s+"
+        r"(?:days?|weeks?|months?|years?)\b", "", rest, flags=re.I,
+    )
+    rest = _TIMELINE_FILLER.sub("", rest)
+    return not re.sub(r"[\s，,。.、;；：:！!？?'\"'“”]+", "", rest)
+
+
 def revise_goal_draft(
     draft: GoalDraft,
     instruction: str,
     now: datetime,
     tz: str = "Asia/Shanghai",
+    *,
+    use_llm: bool = True,
 ) -> GoalDraft | None:
     brief = planner.apply_answer(draft.brief, instruction, today=now.date())
     deadline = brief.deadline or draft.deadline
-    if deadline != draft.deadline and re.search(
-        r"\b(deadline|due date|due in|in \d+ (?:days?|weeks?|months?))\b|截止|期限",
-        instruction,
-        re.I,
-    ) and not re.search(r"\b(step|plan|outline|title|milestone)\b|步骤|计划|标题|阶段", instruction, re.I):
-        return replace(draft, brief=brief, deadline=deadline)
+    if _timeline_only_edit(instruction):
+        # 草稿期限变更后重建计划；沿用 draft_id，确认时不会重复建目标。
+        if deadline == draft.deadline:
+            return replace(draft, brief=brief)
+        refreshed = prepare_goal_draft(None, None, brief, now, tz, use_llm=use_llm)
+        return replace(refreshed, draft_id=draft.draft_id)
     plan = generate_plan(
         brief.title,
         deadline,
@@ -550,6 +693,7 @@ def revise_goal_draft(
         tz=tz,
         instruction=instruction,
         current_steps=[item["title"] for item in draft.step_defs],
+        use_llm=use_llm,
     )
     if not plan:
         return None
@@ -588,8 +732,8 @@ def confirm_goal_draft(
     )
 
 
-def _preview_goal_now(session, user_id, brief, action, now, tz, parser) -> Reply:
-    draft = prepare_goal_draft(session, user_id, brief, now, tz)
+def _preview_goal_now(session, user_id, brief, action, now, tz, parser, *, use_llm: bool = True) -> Reply:
+    draft = prepare_goal_draft(session, user_id, brief, now, tz, use_llm=use_llm)
     return Reply(
         f"Goal draft ready for **{draft.brief.title}**. Review it below, or tell me what to adjust.",
         action,
@@ -684,20 +828,69 @@ def _delete_goal(session, user_id, action, now, tz, parser) -> Reply:
     return Reply(f"Deleted goal “{title}”.{extra}", action, parser)
 
 
-def _schedule_step(session, user_id, action, now, tz, parser) -> Reply:
+def _resume_goal(session, user_id, action, now, tz, parser) -> Reply:
+    """恢复暂停的目标；目标只能按标题从暂停列表里解析，模型不提供 ID。"""
+    target = (action.target or action.title or "").strip().strip("\"'“”")
+    paused = [
+        goal for goal in session.scalars(
+            select(Goal).where(Goal.user_id == user_id, Goal.status == "paused")
+        )
+    ]
+    if not paused:
+        return Reply("You don't have a paused goal to resume.", action, parser)
+    goal = None
+    if target:
+        needle = target.casefold()
+        matches = [
+            goal for goal in paused
+            if needle in goal.title.casefold() or goal.title.casefold() in needle
+        ]
+        if len(matches) > 1:
+            names = ", ".join(f"“{match.title}”" for match in matches[:4])
+            return Reply(f"Which paused goal should I resume: {names}?", action, parser)
+        if matches:
+            goal = matches[0]
+    elif len(paused) == 1:
+        goal = paused[0]
+    if goal is None:
+        names = ", ".join(f"“{g.title}”" for g in paused[:3])
+        return Reply(f"Which goal do you want to resume? Paused: {names}.", action, parser)
+    goal_svc.resume_goal(session, goal)
+    step = _pick_step(goal)
+    text = f"Welcome back — “{goal.title}” is active again."
+    candidates = _propose(session, user_id, step, now, tz, goal.deadline) if step else []
+    if step is not None and candidates:
+        text += f" Next step: “{step.title}” ({step.est_min}m) — pick a time to restart?"
+    elif step is not None:
+        text += f' Next step: “{step.title}”. Say "find time" whenever you\'re ready.'
+    return Reply(
+        text, action, parser, candidates=candidates,
+        goal_id=goal.id, step_id=step.id if step is not None else None,
+    )
+
+
+def _schedule_step(session, user_id, action, now, tz, parser, *, use_llm: bool = True) -> Reply:
+    chinese = any("\u4e00" <= char <= "\u9fff" for char in action.raw)
     goals = goal_svc.active_goals(session, user_id)
     if not goals:
         return Reply(
             "You don't have an active goal yet. Tell me one and I'll break it down.",
             action, parser,
         )
-    goal, step, error = _resolve_step(goals, action.progress_target or action.title)
+    target = action.progress_target or action.title
+    goal, step, error = _resolve_step(goals, target)
     if error is not None:
         return Reply(error, action, parser)
+    if not target:
+        for candidate_goal in sorted(goals, key=goal_svc.priority_key):
+            unscheduled = next_unscheduled_step(session, user_id, candidate_goal, now, tz)
+            if unscheduled is not None:
+                goal, step = candidate_goal, unscheduled
+                break
     note = ""
     if step is None:
         # 没有待办步骤不一定是目标完成：滚动拆解下可能只是下一批还没补
-        note = auto_refine_if_low(session, user_id, goal, now)
+        note = auto_refine_if_low(session, user_id, goal, now, use_llm=use_llm)
         step = _pick_step(goal)
     if step is None:
         return Reply(f"“{goal.title}” is already complete. 🎉", action, parser)
@@ -710,7 +903,7 @@ def _schedule_step(session, user_id, action, now, tz, parser) -> Reply:
             score=1.0,
             reasons=["You picked this exact time."],
         )
-        message = accept(session, user_id, step.id, candidate, now, tz)
+        message = accept(session, user_id, step.id, candidate, now, tz, chinese=chinese)
         return Reply(message, action, parser, goal_id=goal.id, step_id=step.id)
 
     window = action.window
@@ -726,9 +919,11 @@ def _schedule_step(session, user_id, action, now, tz, parser) -> Reply:
             "Try a shorter step or move the deadline.",
             action, parser,
         )
+    candidate_text = (f"为「{step.title}」找到了 {len(candidates)} 个时段（每次 {step.est_min} 分钟）。"
+                      "选一个我就写进日历。" if chinese else
+                      f"Here are {len(candidates)} slots for “{step.title}” ({step.est_min}m). Pick one and I'll book it.")
     return Reply(
-        (note + "\n" if note else "")
-        + f"Here are {len(candidates)} slots for “{step.title}” ({step.est_min}m). Pick one and I'll book it.",
+        (note + "\n" if note else "") + candidate_text,
         action, parser, candidates=candidates, goal_id=goal.id, step_id=step.id,
     )
 
@@ -860,7 +1055,7 @@ def _schedule_all(session, user_id, action, now, tz, parser) -> Reply:
     return Reply(text, action, parser, batch=planned)
 
 
-def _refine_steps(session, user_id, action, now, tz, parser) -> Reply:
+def _refine_steps(session, user_id, action, now, tz, parser, *, use_llm: bool = True) -> Reply:
     """用户主动要求“下一步拆细一点”：把当前步骤拆成更小的动作（同卡住了的细化）。"""
     goals = goal_svc.active_goals(session, user_id)
     if not goals:
@@ -874,7 +1069,7 @@ def _refine_steps(session, user_id, action, now, tz, parser) -> Reply:
     if step is None:
         return Reply(f'"{goal.title}" has no steps left to break down.', action, parser)
 
-    created = refine.refine_next_steps(session, goal, step)
+    created = refine.refine_next_steps(session, goal, step, use_llm=use_llm)
     metrics.record(
         session, user_id, metrics.PLAN_REFINED, now,
         goal_id=goal.id, step_id=step.id,
@@ -895,7 +1090,7 @@ def _refine_steps(session, user_id, action, now, tz, parser) -> Reply:
     )
 
 
-def _log_progress(session, user_id, action, now, tz, parser) -> Reply:
+def _log_progress(session, user_id, action, now, tz, parser, *, use_llm: bool = True) -> Reply:
     goals = goal_svc.active_goals(session, user_id)
     if not goals:
         return Reply("You don't have an active goal yet. Tell me one and I'll break it down.", action, parser)
@@ -914,7 +1109,7 @@ def _log_progress(session, user_id, action, now, tz, parser) -> Reply:
         # 步骤已完成：已开始的块标 done 留作完成记录，未来块照常取消
         cal.resolve_due_blocks_done(session, step.id, as_utc_naive(now, tz))
         cal.cancel_future_blocks(session, step.id, as_utc_naive(now, tz))
-    note = auto_refine_if_low(session, user_id, goal, now)
+    note = auto_refine_if_low(session, user_id, goal, now, use_llm=use_llm)
     pct = int(goal_svc.progress(goal) * 100)
     nxt = _pick_step(goal)
     if partial:
@@ -1017,7 +1212,7 @@ def propose_for_step(
 
 def accept(
     session: Session, user_id: int, step_id: int, candidate: Candidate,
-    now: datetime, tz: str,
+    now: datetime, tz: str, *, chinese: bool = False,
 ) -> str:
     step = session.get(Step, step_id)
     if step is None or step.goal.user_id != user_id:
@@ -1043,6 +1238,9 @@ def accept(
         payload={"recovery": False},
     )
     session.flush()
+    if chinese:
+        return (f"已将「{step.title}」安排到 {candidate.start:%m月%d日 %H:%M}–"
+                f"{candidate.end:%H:%M}，并写入日历。")
     return f"Booked “{step.title}” on {candidate.start:%a %b %d, %H:%M}–{candidate.end:%H:%M}."
 
 
@@ -1195,6 +1393,8 @@ def suggest_recovery(
     now: datetime,
     tz: str = "Asia/Shanghai",
     days: int = 3,
+    *,
+    use_llm: bool = True,
 ) -> tuple[list[Candidate], Step | None]:
     """按原因生成恢复方案；候选优先 72 小时内，找不到再放宽到 7 天。
 
@@ -1202,6 +1402,7 @@ def suggest_recovery(
     no_time  → 同一步骤只排一个 15 分钟的“启动版”块；
     stuck    → 先把当前步骤细化出更小的下一步，再排第一个（5 分钟启动动作）；
     unwilling→ 不出时段候选，由对话层给延后/暂停/归档选项（见 _offer_recovery）。
+    use_llm=False（L1 失败后的降级轮）时 stuck 细化走确定性规则，不调 LLM。
     """
     step = session.get(Step, event.step_id) if event.step_id is not None else None
     if step is None or step.status != "todo" or step.goal.status != "active":
@@ -1221,7 +1422,7 @@ def suggest_recovery(
         est_min = 15
         scheme = "starter_15"
     elif reason == "stuck":
-        refined = refine.refine_next_steps(session, step.goal, step)
+        refined = refine.refine_next_steps(session, step.goal, step, use_llm=use_llm)
         if refined:
             metrics.record(
                 session, user_id, metrics.PLAN_REFINED, now,
@@ -1261,7 +1462,8 @@ def _recovery_why(reason: str | None, step: Step, ev: Event, candidates: list[Ca
 
 
 def _prepare_current(
-    session: Session, user_id: int, ctx: CheckinContext, now: datetime, tz: str
+    session: Session, user_id: int, ctx: CheckinContext, now: datetime, tz: str,
+    *, use_llm: bool = True,
 ) -> Reply | None:
     """为队列第一个块准备该问的话/该给的候选；队列空返回 None。"""
     chat_action = Action(intent="chat", raw="", confidence=0.5)
@@ -1277,7 +1479,8 @@ def _prepare_current(
                 _checkin_question(session, ev, now, tz), chat_action, "checkin",
                 checkin_context=ctx,
             )
-        candidates, step = suggest_recovery(session, user_id, ev, ctx.reason, now, tz)
+        candidates, step = suggest_recovery(session, user_id, ev, ctx.reason, now, tz,
+                                            use_llm=use_llm)
         if not candidates:
             ctx.event_ids.pop(0)
             continue
@@ -1295,13 +1498,14 @@ def _prepare_current(
 
 
 def _advance(
-    session: Session, user_id: int, ctx: CheckinContext, now: datetime, tz: str
+    session: Session, user_id: int, ctx: CheckinContext, now: datetime, tz: str,
+    *, use_llm: bool = True,
 ) -> Reply | None:
     """当前块处理完，进入队列里的下一个块。"""
     if ctx.event_ids:
         ctx.event_ids.pop(0)
     ctx.candidates = []
-    return _prepare_current(session, user_id, ctx, now, tz)
+    return _prepare_current(session, user_id, ctx, now, tz, use_llm=use_llm)
 
 
 def _offer_recovery(
@@ -1313,6 +1517,8 @@ def _offer_recovery(
     tz: str,
     parser: str,
     intro: str = "",
+    *,
+    use_llm: bool = True,
 ) -> Reply:
     step = session.get(Step, ev.step_id) if ev.step_id is not None else None
     if ctx.reason == "unwilling" and step is not None:
@@ -1330,7 +1536,8 @@ def _offer_recovery(
             checkin_context=ctx,
         )
 
-    candidates, step = suggest_recovery(session, user_id, ev, ctx.reason, now, tz)
+    candidates, step = suggest_recovery(session, user_id, ev, ctx.reason, now, tz,
+                                        use_llm=use_llm)
     if candidates:
         ctx.stage = "recovery"
         ctx.step_id = step.id
@@ -1348,7 +1555,7 @@ def _offer_recovery(
         + "There's really no free slot in the next few days — the step stays on your list; "
         "tell me to \"find time for the next step\" whenever you want."
     )
-    nxt = _advance(session, user_id, ctx, now, tz)
+    nxt = _advance(session, user_id, ctx, now, tz, use_llm=use_llm)
     if nxt is None:
         return Reply(text, Action(intent="chat", raw="", confidence=0.5), parser,
                      checkin_context=None)
@@ -1363,6 +1570,8 @@ def continue_checkin(
     text: str,
     now: datetime,
     tz: str = "Asia/Shanghai",
+    *,
+    use_llm: bool | None = None,
 ) -> Reply | None:
     """处理签到流程里的下一句；返回 None 表示这是明确的新指令，交给 handle 并保留 ctx。"""
     if looks_like_new_command(text, now) and not (
@@ -1371,7 +1580,7 @@ def continue_checkin(
         ctx.stage == "batch" and (_BATCH_YES.search(text) or _BATCH_NO.search(text))
     ):
         return None
-    action, parser = parse(text, now, context={"expecting": "checkin"})
+    action, parser = parse(text, now, use_llm=use_llm, context={"expecting": "checkin"})
     handler = {
         "batch": _checkin_batch,
         "outcome": _checkin_outcome,
@@ -1379,10 +1588,13 @@ def continue_checkin(
         "recovery": _checkin_recovery,
         "goal_options": _checkin_goal_options,
     }[ctx.stage]
-    return handler(session, user_id, ctx, action, text.strip(), now, tz, parser)
+    # use_llm=False（L1 失败后的降级轮）沿 stage handler 传到底：
+    # 恢复细化/自动续批都走确定性路径，不触达任何 LLM 入口
+    return handler(session, user_id, ctx, action, text.strip(), now, tz, parser,
+                   use_llm=use_llm is not False)
 
 
-def _checkin_batch(session, user_id, ctx, action, text, now, tz, parser) -> Reply:
+def _checkin_batch(session, user_id, ctx, action, text, now, tz, parser, *, use_llm: bool = True) -> Reply:
     now_utc = as_utc_naive(now, tz)
 
     def resolve_all(outcome: str, reason: str | None) -> None:
@@ -1406,7 +1618,7 @@ def _checkin_batch(session, user_id, ctx, action, text, now, tz, parser) -> Repl
         outcome = "missed" if outcome in (None, "none") else outcome
         resolve_all(outcome, _reason_from(action, text))
         label = {"done": "done", "partial": "partially done", "missed": "missed"}[outcome]
-        nxt = _prepare_current(session, user_id, ctx, now, tz)
+        nxt = _prepare_current(session, user_id, ctx, now, tz, use_llm=use_llm)
         if nxt is None:
             return Reply(f"All marked as {label}.", action, parser, checkin_context=None)
         nxt.text = f"OK, all marked as {label}. Let's go block by block:\n" + nxt.text
@@ -1417,10 +1629,10 @@ def _checkin_batch(session, user_id, ctx, action, text, now, tz, parser) -> Repl
     )
 
 
-def _checkin_outcome(session, user_id, ctx, action, text, now, tz, parser) -> Reply:
+def _checkin_outcome(session, user_id, ctx, action, text, now, tz, parser, *, use_llm: bool = True) -> Reply:
     ev = session.get(Event, ctx.event_ids[0]) if ctx.event_ids else None
     if ev is None:
-        nxt = _advance(session, user_id, ctx, now, tz)
+        nxt = _advance(session, user_id, ctx, now, tz, use_llm=use_llm)
         return nxt or Reply("All set — everything's handled.", action, parser, checkin_context=None)
 
     outcome = action.checkin_outcome
@@ -1449,7 +1661,7 @@ def _checkin_outcome(session, user_id, ctx, action, text, now, tz, parser) -> Re
         goal = step.goal if step is not None else None
         refine_note = ""
         if goal is not None and goal.status == "active":
-            refine_note = auto_refine_if_low(session, user_id, goal, now)
+            refine_note = auto_refine_if_low(session, user_id, goal, now, use_llm=use_llm)
         pct = int(goal_svc.progress(goal) * 100) if goal is not None else 0
         text_out = f"Nice — \"{_block_title(session, ev)}\" marked done! Goal progress is at {pct}%."
         if goal is not None and sum(1 for s in goal.steps if s.status == "done") == 1:
@@ -1463,7 +1675,7 @@ def _checkin_outcome(session, user_id, ctx, action, text, now, tz, parser) -> Re
             cands = _propose(session, user_id, nxt_step, now, tz, goal.deadline)
             if cands:
                 text_out += f"\nNext up: \"{nxt_step.title}\" ({nxt_step.est_min} min) — do any of these times work?"
-        nxt = _advance(session, user_id, ctx, now, tz)
+        nxt = _advance(session, user_id, ctx, now, tz, use_llm=use_llm)
         if nxt is None:
             return Reply(
                 text_out, action, parser, candidates=cands,
@@ -1481,25 +1693,25 @@ def _checkin_outcome(session, user_id, ctx, action, text, now, tz, parser) -> Re
     if reason is not None:
         ctx.reason = reason
         recovery.attach_reason(session, ev.id, reason)
-        return _offer_recovery(session, user_id, ctx, ev, now, tz, parser)
+        return _offer_recovery(session, user_id, ctx, ev, now, tz, parser, use_llm=use_llm)
     ctx.stage = "reason"
     gentle = "Partial progress still counts." if outcome == "partial" else "No worries, it happens."
     return Reply(f"{gentle} What got in the way?", action, parser, checkin_context=ctx)
 
 
-def _checkin_reason(session, user_id, ctx, action, text, now, tz, parser) -> Reply:
+def _checkin_reason(session, user_id, ctx, action, text, now, tz, parser, *, use_llm: bool = True) -> Reply:
     ev = session.get(Event, ctx.event_ids[0]) if ctx.event_ids else None
     if ev is None:
-        nxt = _advance(session, user_id, ctx, now, tz)
+        nxt = _advance(session, user_id, ctx, now, tz, use_llm=use_llm)
         return nxt or Reply("All set — everything's handled.", action, parser, checkin_context=None)
     reason = _reason_from(action, text)
     if reason is None:
         # 不想说或没听懂：不追问到底，按通用恢复处理
         return _offer_recovery(session, user_id, ctx, ev, now, tz, parser,
-                               intro="OK, let's not dwell on the reason. ")
+                               intro="OK, let's not dwell on the reason. ", use_llm=use_llm)
     ctx.reason = reason
     recovery.attach_reason(session, ev.id, reason)
-    return _offer_recovery(session, user_id, ctx, ev, now, tz, parser)
+    return _offer_recovery(session, user_id, ctx, ev, now, tz, parser, use_llm=use_llm)
 
 
 _ORDINAL = re.compile(
@@ -1514,14 +1726,15 @@ _ORDINAL_INDEX = {
 }
 
 
-def _checkin_recovery(session, user_id, ctx, action, text, now, tz, parser) -> Reply:
+def _checkin_recovery(session, user_id, ctx, action, text, now, tz, parser, *, use_llm: bool = True) -> Reply:
     if _DECLINE.search(text):
-        return decline_recovery(session, user_id, ctx, now, tz)
+        return decline_recovery(session, user_id, ctx, now, tz, use_llm=use_llm)
     m = _ORDINAL.match(text)
     if m:
         idx = _ORDINAL_INDEX[m.group(1).lower()]
         if idx < len(ctx.candidates):
-            return accept_recovery(session, user_id, ctx, ctx.candidates[idx], now, tz)
+            return accept_recovery(session, user_id, ctx, ctx.candidates[idx], now, tz,
+                                   use_llm=use_llm)
         return Reply(
             f"There are only {len(ctx.candidates)} candidates — pick number 1 to {len(ctx.candidates)}.",
             action, parser, checkin_context=ctx,
@@ -1550,7 +1763,7 @@ def _match_goal_option(text: str) -> str | None:
     return None
 
 
-def _checkin_goal_options(session, user_id, ctx, action, text, now, tz, parser) -> Reply:
+def _checkin_goal_options(session, user_id, ctx, action, text, now, tz, parser, *, use_llm: bool = True) -> Reply:
     goal = session.get(Goal, ctx.goal_id) if ctx.goal_id is not None else None
     choice = _match_goal_option(text)
     if goal is None or choice == "decline":
@@ -1578,10 +1791,35 @@ def _checkin_goal_options(session, user_id, ctx, action, text, now, tz, parser) 
         event_id=ctx.event_ids[0] if ctx.event_ids else None,
         payload={"reason": "unwilling", "choice": choice},
     )
-    nxt = _advance(session, user_id, ctx, now, tz)
+    nxt = _advance(session, user_id, ctx, now, tz, use_llm=use_llm)
     if nxt is None:
         return Reply(text_out, action, parser, checkin_context=None)
     nxt.text = text_out + "\n" + nxt.text
+    return nxt
+
+
+def decline_goal_options(
+    session: Session,
+    user_id: int,
+    ctx: CheckinContext,
+    now: datetime,
+    tz: str = "Asia/Shanghai",
+    *,
+    use_llm: bool = True,
+) -> Reply:
+    """goal_options 阶段的明确拒绝（"算了/先不"）：目标保持原样，进入队列下一个块。"""
+    metrics.record(
+        session, user_id, metrics.RECOVERY_ACTION, now,
+        goal_id=ctx.goal_id, step_id=ctx.step_id,
+        event_id=ctx.event_ids[0] if ctx.event_ids else None,
+        payload={"reason": "unwilling", "choice": "decline"},
+    )
+    text = "OK — the goal stays as is. Tell me whenever you want to adjust it."
+    nxt = _advance(session, user_id, ctx, now, tz, use_llm=use_llm)
+    if nxt is None:
+        return Reply(text, Action(intent="chat", raw="", confidence=0.5), "checkin",
+                     checkin_context=None)
+    nxt.text = text + "\n" + nxt.text
     return nxt
 
 
@@ -1592,6 +1830,8 @@ def accept_recovery(
     candidate: Candidate,
     now: datetime,
     tz: str = "Asia/Shanghai",
+    *,
+    use_llm: bool = True,
 ) -> Reply:
     """用户选定恢复候选：创建新块并写 RescheduleLog（旧块保留，供恢复率统计）。"""
     ev = session.get(Event, ctx.event_ids[0]) if ctx.event_ids else None
@@ -1621,7 +1861,7 @@ def accept_recovery(
     )
     session.flush()
     text = f"OK — \"{step.title}\" moved to {candidate.start:%a %b %d %H:%M}."
-    nxt = _advance(session, user_id, ctx, now, tz)
+    nxt = _advance(session, user_id, ctx, now, tz, use_llm=use_llm)
     if nxt is None:
         return Reply(text + " Take it one block at a time.",
                      Action(intent="chat", raw="", confidence=0.5), "checkin",
@@ -1636,9 +1876,11 @@ def decline_recovery(
     ctx: CheckinContext,
     now: datetime,
     tz: str = "Asia/Shanghai",
+    *,
+    use_llm: bool = True,
 ) -> Reply:
     """用户拒绝恢复候选：步骤保持 todo，进入下一个块。"""
-    nxt = _advance(session, user_id, ctx, now, tz)
+    nxt = _advance(session, user_id, ctx, now, tz, use_llm=use_llm)
     text = "OK — I'll leave that block unscheduled; the step stays on your list."
     if nxt is None:
         return Reply(text, Action(intent="chat", raw="", confidence=0.5), "checkin",

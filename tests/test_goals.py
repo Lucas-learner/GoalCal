@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from sqlalchemy import select
 
@@ -38,6 +38,39 @@ def test_complete_step_uses_injected_now(session):
     step = sorted(g.steps, key=lambda s: s.seq)[0]
     svc.complete_step(session, step, now=datetime(2026, 10, 22, 1, 0))
     assert step.completed_at == datetime(2026, 10, 22, 1, 0)
+
+
+def test_prioritized_goals_orders_by_deadline_then_created(session):
+    u = _user(session)
+    today = date.today()
+    older = svc.create_goal(session, u.id, "Older same deadline", deadline=today + timedelta(days=10))
+    newer = svc.create_goal(session, u.id, "Newer same deadline", deadline=today + timedelta(days=10))
+    newer.created_at = older.created_at + timedelta(seconds=1)
+    overdue = svc.create_goal(session, u.id, "Overdue", deadline=today - timedelta(days=1))
+    floating = svc.create_goal(session, u.id, "Floating", deadline=today + timedelta(days=20))
+    floating.deadline = None
+    session.flush()
+
+    # 逾期最先；同截止日按创建时间；无截止日最后
+    assert [g.title for g in svc.prioritized_goals(session, u.id)] == [
+        "Overdue", "Older same deadline", "Newer same deadline", "Floating",
+    ]
+
+
+def test_prioritized_goals_puts_pinned_first(session):
+    u = _user(session)
+    today = date.today()
+    plain = svc.create_goal(session, u.id, "Plain", deadline=today - timedelta(days=2))
+    pinned = svc.create_goal(session, u.id, "Pinned", deadline=today + timedelta(days=90))
+    svc.set_pinned(session, pinned, True)
+    session.flush()
+
+    ordered = svc.prioritized_goals(session, u.id)
+    assert [g.title for g in ordered] == ["Pinned", "Plain"]
+
+    svc.set_pinned(session, pinned, False)
+    session.flush()
+    assert [g.title for g in svc.prioritized_goals(session, u.id)] == ["Plain", "Pinned"]
 
 
 def test_step_display_status_derives_scheduled(session):

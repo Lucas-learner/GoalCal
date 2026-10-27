@@ -97,8 +97,8 @@ def test_login_cookie_survives_new_client_and_is_revoked_on_logout():
             assert auth.authenticate(token).username == name
 
             logout = await client.post(
-                "/_goalcal/logout", data={"csrf": csrf},
-                follow_redirects=False,
+                "/_goalcal/logout", content=b"unneeded-body" * 400,
+                headers={"Origin": "https://goalcal.example"}, follow_redirects=False,
             )
             assert logout.status_code == 303
             assert "Max-Age=0" in logout.headers["set-cookie"]
@@ -151,5 +151,62 @@ def test_invitation_registration_remains_available():
             )
             assert "Account created. Please log in." in registered.text
             assert auth.login(name, "test-password-long")
+
+    asyncio.run(scenario())
+
+
+def test_logout_ignores_expired_form_cookie_and_clears_stale_session():
+    name = _account()
+
+    async def scenario():
+        transport = httpx2.ASGITransport(app=app)
+        async with httpx2.AsyncClient(transport=transport, base_url="https://goalcal.example") as client:
+            page = await client.get("/", headers={"Accept": "text/html"})
+            login = await client.post(
+                "/_goalcal/login", data={"username": name, "password": "test-password-long", "csrf": _csrf(page)},
+                follow_redirects=False,
+            )
+            assert login.status_code == 303
+            token = client.cookies.get(COOKIE_NAME)
+
+            # form csrf cookie 只有 10 分钟：过期/缺失时 Log out 仍应成功
+            client.cookies.delete(auth_proxy.FORM_COOKIE_NAME)
+            logout = await client.post(
+                "/_goalcal/logout", data={}, follow_redirects=False
+            )
+            assert logout.status_code == 303
+            assert "Max-Age=0" in logout.headers["set-cookie"]
+            with pytest.raises(auth.AuthError):
+                auth.authenticate(token)
+
+            # session 已撤销/伪造时也清 cookie 并回登录页，不留在错误页。
+            stale = await client.post("/_goalcal/logout", data={}, follow_redirects=False)
+            assert stale.status_code == 303
+
+            client.cookies.set(COOKIE_NAME, "garbage-token")
+            stale = await client.post("/_goalcal/logout", data={}, follow_redirects=False)
+            assert stale.status_code == 303
+            page = await client.get("/", headers={"Accept": "text/html"})
+            assert "action=\"/_goalcal/login\"" in page.text
+
+    asyncio.run(scenario())
+
+
+def test_logout_rejects_cross_site_post_without_revoking_session():
+    name = _account()
+
+    async def scenario():
+        transport = httpx2.ASGITransport(app=app)
+        async with httpx2.AsyncClient(transport=transport, base_url="https://goalcal.example") as client:
+            page = await client.get("/", headers={"Accept": "text/html"})
+            await client.post("/_goalcal/login", data={
+                "username": name, "password": "test-password-long", "csrf": _csrf(page),
+            })
+            token = client.cookies.get(COOKIE_NAME)
+            rejected = await client.post("/_goalcal/logout", data={}, headers={
+                "Origin": "https://attacker.example", "Sec-Fetch-Site": "cross-site",
+            }, follow_redirects=False)
+            assert rejected.status_code == 403
+            assert auth.authenticate(token).username == name
 
     asyncio.run(scenario())

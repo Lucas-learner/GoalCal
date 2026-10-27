@@ -1,16 +1,13 @@
 from __future__ import annotations
 
 import logging
-import html
 
 import streamlit as st
 
-from goalcal import auth
 from goalcal.db import init_db
 from goalcal.logging_setup import configure_logging
 from goalcal.ui import calendar_page, chat_page, controller, theme
-from goalcal.ui.auth import clear_state, current_token, require_login
-from goalcal.auth_proxy import COOKIE_NAME, FORM_COOKIE_NAME
+from goalcal.ui.auth import require_login
 
 st.set_page_config(page_title="GoalCal", page_icon="📆", layout="wide")
 configure_logging()
@@ -27,29 +24,23 @@ calendar = st.Page("routes/calendar.py", title="Calendar")
 settings = st.Page("routes/settings.py", title="Settings")
 st.session_state["chat_page"] = chat
 
-try:
-    auth.authenticate(current_token())
-    navigation_position = "sidebar"
-except auth.AuthError:
-    navigation_position = "hidden"
-
-page = st.navigation([chat, goals, calendar, settings], position=navigation_position)
+page = st.navigation([chat, goals, calendar, settings], position="hidden")
 
 principal = require_login()
 st.session_state["tz"] = principal.tz
+st.session_state["username"] = principal.username
 controller.ensure_state()
 controller.start_checkin_if_needed()
 
 
 with st.sidebar:
-    st.caption(f"{principal.username} · {principal.tz}")
-    if isinstance(st.context.cookies.get(COOKIE_NAME), str) and st.context.cookies.get(COOKIE_NAME):
-        form_token = html.escape(st.context.cookies.get(FORM_COOKIE_NAME, ""), quote=True)
-        st.html(f'<form action="/_goalcal/logout" method="post"><input type="hidden" name="csrf" value="{form_token}"><button type="submit">Log out</button></form>')
-    elif st.button("Log out"):
-        auth.logout(st.session_state.get("auth_token"))
-        clear_state()
-        st.rerun(scope="app")
+    st.markdown("**GoalCal**")
+    if st.button("New conversation", key="sidebar_new_conversation_action", use_container_width=True):
+        controller.new_conversation(open_chat=True)
+    st.page_link(chat, label="Chat", use_container_width=True)
+    st.page_link(goals, label="Goals", use_container_width=True)
+    st.page_link(calendar, label="Calendar", use_container_width=True)
+    st.page_link(settings, label="Settings", use_container_width=True)
 
 calendar_active = page.title == "Calendar"
 calendar_shell_css = "" if calendar_active else """
