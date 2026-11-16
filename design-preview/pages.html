@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GoalCal 主要页面视觉预览</title>
+<style>
+  * { box-sizing: border-box; }
+  :root {
+    --bg: #fafaf8; --surface: #fffefd; --surface-soft: #f4f4f1;
+    --sidebar: rgba(244,244,241,.86); --ink: #1d1d1f; --muted: #6e6e73;
+    --faint: #a1a1a6; --line: rgba(29,29,31,.08); --accent: #303638;
+    --accent-soft: #eceeef; --blue: #6b7f89; --blue-soft: #edf0f1;
+    --radius: 13px; --control: 9px;
+    --shadow: 0 1px 2px rgba(20,22,24,.02), 0 8px 24px rgba(20,22,24,.025);
+  }
+  html, body { margin: 0; min-height: 100%; }
+  body { background: var(--bg); color: var(--ink); font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", "Helvetica Neue", Arial, sans-serif; -webkit-font-smoothing: antialiased; letter-spacing: -.01em; }
+  a { color: inherit; text-decoration: none; }
+  button, input { font: inherit; }
+  .app { min-height: 100vh; display: grid; grid-template-columns: 218px minmax(0,1fr); }
+  .app.assistant-mode { grid-template-columns: 218px minmax(560px,1fr) 400px; }
+  .sidebar { background: var(--sidebar); border-right: 1px solid var(--line); padding: 30px 18px 22px; display: flex; flex-direction: column; -webkit-backdrop-filter: blur(24px) saturate(120%); backdrop-filter: blur(24px) saturate(120%); }
+  .brand { display: flex; align-items: center; gap: 10px; padding: 0 12px; font-size: 20px; font-weight: 720; letter-spacing: -.04em; }
+  .brand-mark { width: 27px; height: 27px; border-radius: 9px; background: var(--accent); position: relative; }
+  .brand-mark:before { content: ""; position: absolute; width: 9px; height: 9px; border: 2px solid var(--surface); border-radius: 50%; left: 7px; top: 7px; }
+  .nav { margin-top: 42px; display: grid; gap: 7px; }
+  .nav-item { display: flex; align-items: center; gap: 12px; height: 43px; padding: 0 13px; border-radius: var(--control); color: var(--muted); font-size: 14px; font-weight: 520; }
+  .nav-item.active { color: var(--ink); background: #eaeae6; }
+  .icon { width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; }
+  .icon svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+  .new-goal { margin: 27px 4px 0; height: 40px; display: flex; align-items: center; justify-content: center; gap: 8px; border: 1px solid var(--line); border-radius: var(--control); font-size: 13px; font-weight: 600; }
+  .sidebar-bottom { margin-top: auto; border-top: 1px solid var(--line); padding: 19px 7px 0; }
+  .profile { display: flex; align-items: center; gap: 11px; }
+  .avatar { width: 32px; height: 32px; border-radius: 50%; background: var(--accent-soft); display: grid; place-items: center; font-size: 12px; font-weight: 700; }
+  .profile-name { font-size: 13px; font-weight: 600; }
+  .profile-meta { color: var(--muted); font-size: 11px; margin-top: 3px; }
+  .main { min-width: 0; padding: 34px 38px; }
+  .page { display: none; }
+  body[data-page="goals"] .page-goals, body[data-page="calendar"] .page-calendar,
+  body[data-page="assistant"] .page-assistant, body[data-page="settings"] .page-settings,
+  body[data-page="new-goal"] .page-new-goal { display: block; }
+  .topbar { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+  .eyebrow { font-size: 12px; color: var(--muted); letter-spacing: .05em; margin-bottom: 7px; }
+  h1 { font-size: 30px; line-height: 1.2; margin: 0; letter-spacing: -.045em; font-weight: 700; }
+  .subtitle { color: var(--muted); font-size: 13px; margin: 11px 0 25px; }
+  .btn { height: 36px; border-radius: var(--control); padding: 0 14px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); font-size: 12px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; gap: 7px; white-space: nowrap; }
+  .btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .btn.small { height: 31px; padding: 0 11px; font-size: 11px; }
+  .assistant-btn .icon { color: var(--blue); }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
+  .section-label { color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: .07em; }
+  .muted { color: var(--muted); }
+  .progress { height: 5px; border-radius: 99px; background: var(--surface-soft); overflow: hidden; }
+  .progress span { display: block; height: 100%; border-radius: inherit; background: var(--blue); }
+  .chip { display: inline-flex; align-items: center; border-radius: 999px; padding: 5px 9px; background: var(--surface-soft); color: var(--muted); font-size: 11px; font-weight: 550; }
+
+  /* Goals */
+  .goals-layout { display: grid; grid-template-columns: 290px minmax(480px, 1fr); gap: 24px; max-width: 1120px; }
+  .goal-list { padding: 9px; align-self: start; }
+  .goal-list-label { padding: 9px 10px 11px; color: var(--muted); font-size: 11px; }
+  .goal-row { padding: 15px 14px; border-radius: 10px; border: 1px solid transparent; margin-bottom: 4px; }
+  .goal-row.active { background: var(--surface-soft); border-color: var(--line); }
+  .goal-row-title { font-size: 13px; font-weight: 650; line-height: 1.45; }
+  .goal-row-meta { color: var(--muted); font-size: 10px; margin: 6px 0 11px; }
+  .goal-row-foot { display: flex; justify-content: space-between; color: var(--muted); font-size: 10px; margin-top: 7px; }
+  .goal-detail { padding: 24px; }
+  .goal-detail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+  .goal-detail h2 { margin: 0 0 8px; font-size: 22px; letter-spacing: -.035em; }
+  .goal-meta { color: var(--muted); font-size: 11px; }
+  .goal-progress { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 12px; margin: 20px 0 24px; }
+  .goal-progress-text { color: var(--muted); font-size: 11px; }
+  .next-box { border: 1px solid var(--line); border-radius: 11px; padding: 17px; background: var(--surface-soft); }
+  .next-title { font-size: 16px; font-weight: 660; margin: 9px 0 6px; }
+  .next-meta { color: var(--muted); font-size: 11px; }
+  .next-actions { display: flex; gap: 8px; margin-top: 15px; }
+  .phase-section { margin-top: 26px; }
+  .section-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 13px; }
+  .section-title { font-size: 13px; font-weight: 680; }
+  .section-link { color: var(--blue); font-size: 11px; }
+  .phase { display: grid; grid-template-columns: 23px 1fr auto; gap: 10px; align-items: center; min-height: 42px; border-bottom: 1px solid var(--line); font-size: 12px; }
+  .phase:last-child { border: 0; }
+  .phase-dot { width: 17px; height: 17px; border: 1px solid var(--line); border-radius: 50%; display: grid; place-items: center; color: var(--muted); font-size: 9px; }
+  .phase.done .phase-dot { background: var(--accent); color: white; border-color: var(--accent); }
+  .phase.current { font-weight: 650; }
+  .phase.current .phase-dot { border: 5px solid var(--blue); }
+  .phase-meta { color: var(--muted); font-size: 10px; }
+  .steps { margin-top: 24px; }
+  .step { display: grid; grid-template-columns: 20px 1fr auto; gap: 10px; align-items: center; padding: 13px 0; border-bottom: 1px solid var(--line); }
+  .step:last-child { border: 0; }
+  .step-check { width: 16px; height: 16px; border: 1.4px solid #c6c7c4; border-radius: 50%; display: grid; place-items: center; font-size: 9px; }
+  .step.done .step-check { background: var(--accent); border-color: var(--accent); color: white; }
+  .step-title { font-size: 12px; font-weight: 570; }
+  .step.done .step-title { color: var(--muted); text-decoration: line-through; }
+  .step-meta { color: var(--muted); font-size: 10px; margin-top: 4px; }
+  .step-action { color: var(--blue); font-size: 11px; }
+
+  /* Calendar */
+  .calendar-page { max-width: 1180px; }
+  .calendar-controls { display: flex; align-items: center; gap: 7px; }
+  .date-nav { display: flex; align-items: center; gap: 11px; font-size: 12px; }
+  .date-nav strong { font-size: 14px; }
+  .calendar-layout { display: grid; grid-template-columns: minmax(650px,1fr) 226px; gap: 20px; }
+  .calendar-card { overflow: hidden; box-shadow: none; }
+  .calendar-head { display: grid; grid-template-columns: 50px repeat(7,1fr); border-bottom: 1px solid var(--line); height: 57px; }
+  .calendar-head > div { border-left: 1px solid var(--line); text-align: center; padding-top: 10px; color: var(--muted); font-size: 10px; }
+  .calendar-head > div:first-child { border-left: 0; }
+  .calendar-head b { display: block; color: var(--ink); font-size: 13px; margin-top: 5px; font-weight: 600; }
+  .calendar-head .today b { width: 25px; height: 25px; line-height: 25px; border-radius: 50%; background: var(--accent); color: white; margin: 2px auto 0; }
+  .calendar-body { display: grid; grid-template-columns: 50px repeat(7,1fr); height: 624px; }
+  .time-axis { position: relative; height: 624px; }
+  .time-axis span { display: block; height: 48px; text-align: center; color: var(--faint); font-size: 9px; transform: translateY(-5px); font-variant-numeric: tabular-nums; }
+  .day-column { height: 624px; position: relative; border-left: 1px solid var(--line); background-image: repeating-linear-gradient(to bottom, transparent 0, transparent 47px, var(--line) 47px, var(--line) 48px); }
+  .cal-event { position: absolute; left: 5px; right: 5px; border-radius: 6px; padding: 7px 6px; overflow: hidden; font-size: 9px; line-height: 1.35; background: var(--fixed-soft, #eef0f1); color: #596168; border-left: 2px solid #939b9f; }
+  .cal-event b { display: block; font-size: 10px; font-weight: 620; margin-bottom: 3px; }
+  .cal-event.goal { background: var(--blue-soft); color: #52646d; border-left-color: var(--blue); }
+  .cal-event.done { opacity: .58; }
+  .backlog { align-self: start; padding: 16px; box-shadow: none; }
+  .backlog-title { font-size: 12px; font-weight: 660; }
+  .backlog-copy { color: var(--muted); font-size: 10px; line-height: 1.5; margin: 6px 0 14px; }
+  .backlog-item { padding: 12px; border: 1px solid var(--line); border-radius: 9px; margin-top: 9px; }
+  .backlog-item-title { font-size: 11px; font-weight: 620; }
+  .backlog-item-meta { color: var(--muted); font-size: 9px; margin: 5px 0 9px; }
+  .legend { display: flex; gap: 15px; color: var(--muted); font-size: 10px; margin-top: 12px; }
+  .legend span { display: flex; align-items: center; gap: 6px; }
+  .legend i { width: 7px; height: 7px; border-radius: 2px; background: #a0a6a8; }
+  .legend .goal i { background: var(--blue); }
+
+  /* New goal */
+  .new-goal-wrap { max-width: 720px; margin: 0 auto; padding-top: 22px; }
+  .new-goal-wrap h1 { font-size: 32px; }
+  .goal-form { padding: 25px; margin-top: 29px; }
+  .field-label { display: block; font-size: 12px; font-weight: 650; margin-bottom: 11px; }
+  .goal-input { min-height: 105px; padding: 15px; border: 1px solid var(--line); border-radius: 10px; color: var(--ink); background: var(--bg); font-size: 14px; line-height: 1.7; }
+  .field-help { color: var(--muted); font-size: 10px; line-height: 1.6; margin: 8px 0 23px; }
+  .deadline-options { display: flex; gap: 8px; flex-wrap: wrap; }
+  .deadline-option { padding: 9px 13px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); font-size: 11px; }
+  .deadline-option.selected { background: var(--accent-soft); color: var(--ink); border-color: transparent; }
+  .goal-form-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 27px; padding-top: 19px; border-top: 1px solid var(--line); }
+  .goal-form-note { color: var(--muted); font-size: 10px; line-height: 1.6; max-width: 340px; }
+  .goal-form-buttons { display: flex; gap: 8px; }
+
+  /* Assistant */
+  .assistant-main { max-width: 780px; }
+  .focus-card { padding: 23px; }
+  .focus-title { font-size: 22px; font-weight: 680; margin: 12px 0 8px; letter-spacing: -.035em; }
+  .focus-meta { color: var(--muted); font-size: 12px; }
+  .focus-actions { display: flex; gap: 8px; margin-top: 20px; }
+  .mini-timeline { margin-top: 24px; overflow: hidden; box-shadow: none; }
+  .mini-event { display: grid; grid-template-columns: 55px 1fr auto; padding: 16px; gap: 12px; border-bottom: 1px solid var(--line); font-size: 11px; }
+  .mini-event:last-child { border: 0; }
+  .mini-event .time { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .mini-event small { display: block; color: var(--muted); margin-top: 5px; }
+  .assistant-panel { display: none; background: var(--surface); border-left: 1px solid var(--line); min-width: 0; height: 100vh; flex-direction: column; }
+  .assistant-mode .assistant-panel { display: flex; }
+  .assistant-header { display: flex; align-items: center; justify-content: space-between; padding: 24px 22px 18px; border-bottom: 1px solid var(--line); }
+  .assistant-title { display: flex; align-items: center; gap: 9px; font-size: 14px; font-weight: 670; }
+  .assistant-title .icon { color: var(--blue); }
+  .close { color: var(--muted); font-size: 20px; font-weight: 300; }
+  .context { margin: 16px 20px 0; padding: 9px 11px; background: var(--surface-soft); border-radius: 8px; color: var(--muted); font-size: 10px; }
+  .messages { flex: 1; padding: 23px 20px; overflow: hidden; }
+  .message-user { max-width: 82%; margin-left: auto; padding: 10px 13px; background: var(--surface-soft); border-radius: 14px 14px 4px 14px; font-size: 12px; line-height: 1.5; }
+  .message-ai { margin-top: 22px; font-size: 12px; line-height: 1.7; }
+  .message-ai p { margin: 0 0 13px; }
+  .slot { display: grid; grid-template-columns: 17px 1fr; gap: 10px; padding: 13px; border: 1px solid var(--line); border-radius: 10px; margin-top: 9px; }
+  .slot.selected { border-color: #a9b2b5; background: #f6f7f6; }
+  .radio { width: 15px; height: 15px; border: 1px solid #b8bab8; border-radius: 50%; margin-top: 2px; }
+  .slot.selected .radio { border: 4px solid var(--accent); }
+  .slot-time { font-size: 12px; font-weight: 640; }
+  .slot-reason { color: var(--muted); font-size: 10px; margin-top: 5px; line-height: 1.5; }
+  .slot-confirm { width: 100%; margin-top: 15px; }
+  .composer { margin: 0 18px 20px; border: 1px solid var(--line); border-radius: 13px; padding: 12px 13px; color: var(--faint); font-size: 11px; display: flex; justify-content: space-between; align-items: center; }
+  .send { width: 25px; height: 25px; border-radius: 50%; background: var(--accent); color: white; display: grid; place-items: center; font-size: 13px; }
+
+  /* Settings */
+  .settings-wrap { max-width: 910px; }
+  .settings-layout { display: grid; grid-template-columns: 175px minmax(480px,1fr); gap: 30px; }
+  .settings-nav { display: grid; gap: 5px; align-self: start; }
+  .settings-nav a { padding: 10px 12px; border-radius: 8px; color: var(--muted); font-size: 12px; }
+  .settings-nav a.active { background: #eaeae6; color: var(--ink); font-weight: 620; }
+  .settings-section { margin-bottom: 25px; }
+  .settings-section-title { font-size: 14px; font-weight: 670; margin-bottom: 4px; }
+  .settings-section-copy { color: var(--muted); font-size: 11px; line-height: 1.6; margin-bottom: 13px; }
+  .settings-card { overflow: hidden; box-shadow: none; }
+  .setting-row { display: grid; grid-template-columns: 1fr auto; gap: 18px; align-items: center; min-height: 64px; padding: 13px 17px; border-bottom: 1px solid var(--line); }
+  .setting-row:last-child { border: 0; }
+  .setting-name { font-size: 12px; font-weight: 590; }
+  .setting-desc { color: var(--muted); font-size: 10px; margin-top: 5px; }
+  .setting-value { min-width: 140px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); font-size: 11px; display: flex; justify-content: space-between; }
+  .toggle { width: 34px; height: 20px; border-radius: 99px; background: var(--accent); position: relative; }
+  .toggle:after { content: ""; position: absolute; right: 3px; top: 3px; width: 14px; height: 14px; border-radius: 50%; background: white; }
+  .availability { padding: 17px; }
+  .day-setting { display: grid; grid-template-columns: 70px 1fr; align-items: center; gap: 12px; margin-top: 13px; }
+  .day-setting:first-of-type { margin-top: 0; }
+  .day-name { font-size: 11px; color: var(--muted); }
+  .window-chips { display: flex; gap: 7px; flex-wrap: wrap; }
+  .window { border: 1px solid var(--line); border-radius: 7px; padding: 7px 10px; font-size: 10px; color: var(--muted); }
+  .window.selected { background: var(--accent-soft); color: var(--ink); border-color: transparent; }
+  .save-row { display: flex; justify-content: flex-end; margin-top: 16px; }
+</style>
+</head>
+<body data-page="goals">
+<div class="app">
+  <aside class="sidebar">
+    <a class="brand" href="index.html?style=quiet"><span class="brand-mark"></span>GoalCal</a>
+    <nav class="nav">
+      <a class="nav-item nav-today" href="index.html?style=quiet"><span class="icon"><svg viewBox="0 0 24 24"><path d="M4 10.5 12 4l8 6.5v8a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 18.5z"/><path d="M9 20v-6h6v6"/></svg></span>今天</a>
+      <a class="nav-item nav-goals" href="pages.html?page=goals"><span class="icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="m14.5 9.5 5-5"/></svg></span>目标</a>
+      <a class="nav-item nav-calendar" href="pages.html?page=calendar"><span class="icon"><svg viewBox="0 0 24 24"><rect x="4" y="5.5" width="16" height="14" rx="2"/><path d="M8 3v5M16 3v5M4 10h16"/></svg></span>日历</a>
+    </nav>
+    <a class="new-goal" href="pages.html?page=new-goal"><span style="font-size:18px;font-weight:400;line-height:0">+</span> 新目标</a>
+    <div class="sidebar-bottom"><a class="profile nav-settings" href="pages.html?page=settings"><div class="avatar">YL</div><div><div class="profile-name">Yan Li</div><div class="profile-meta">设置与偏好</div></div></a></div>
+  </aside>
+
+  <main class="main">
+    <section class="page page-goals">
+      <div class="topbar"><div><div class="eyebrow">你的长期方向</div><h1>目标</h1></div><a class="btn primary" href="pages.html?page=new-goal">+ 新目标</a></div>
+      <p class="subtitle">不必一次看清全部，只需要知道每个目标的下一步。</p>
+      <div class="goals-layout">
+        <div class="card goal-list">
+          <div class="goal-list-label">进行中 · 3</div>
+          <div class="goal-row active"><div class="goal-row-title">发布第一条短视频</div><div class="goal-row-meta">准备内容 · 还剩 14 天</div><div class="progress"><span style="width:58%"></span></div><div class="goal-row-foot"><span>7 / 12 步</span><span>58%</span></div></div>
+          <div class="goal-row"><div class="goal-row-title">完成第一次半程马拉松</div><div class="goal-row-meta">基础耐力 · 还剩 68 天</div><div class="progress"><span style="width:32%"></span></div><div class="goal-row-foot"><span>4 / 15 步</span><span>1 项待处理</span></div></div>
+          <div class="goal-row"><div class="goal-row-title">学会弹奏一首钢琴曲</div><div class="goal-row-meta">熟悉节奏 · 没有期限</div><div class="progress"><span style="width:21%"></span></div><div class="goal-row-foot"><span>3 / 14 步</span><span>21%</span></div></div>
+        </div>
+        <div class="card goal-detail">
+          <div class="goal-detail-head"><div><h2>发布第一条短视频</h2><div class="goal-meta">截止 11 月 30 日 · 当前阶段：准备内容</div></div><button class="btn small">调整计划</button></div>
+          <div class="goal-progress"><div class="progress"><span style="width:58%"></span></div><div class="goal-progress-text">7 / 12 步</div></div>
+          <div class="next-box"><div class="section-label">下一步</div><div class="next-title">完成脚本第一版</div><div class="next-meta">25 分钟 · 已安排今天 19:30</div><div class="next-actions"><button class="btn primary">完成</button><button class="btn">调整时间</button></div></div>
+          <div class="phase-section"><div class="section-head"><span class="section-title">阶段</span><span class="section-link">4 个阶段</span></div>
+            <div class="phase done"><span class="phase-dot">✓</span><span>明确主题</span><span class="phase-meta">已完成</span></div>
+            <div class="phase current"><span class="phase-dot"></span><span>准备内容</span><span class="phase-meta">2 / 4 步</span></div>
+            <div class="phase"><span class="phase-dot"></span><span>拍摄与剪辑</span><span class="phase-meta">到达后细化</span></div>
+            <div class="phase"><span class="phase-dot"></span><span>发布与复盘</span><span class="phase-meta">未开始</span></div>
+          </div>
+          <div class="steps"><div class="section-head"><span class="section-title">当前阶段步骤</span><span class="section-link">+ 添加步骤</span></div>
+            <div class="step done"><span class="step-check">✓</span><div><div class="step-title">确定视频主题</div><div class="step-meta">已完成 11 月 12 日</div></div><span></span></div>
+            <div class="step done"><span class="step-check">✓</span><div><div class="step-title">收集 3 个参考案例</div><div class="step-meta">已完成 11 月 14 日</div></div><span></span></div>
+            <div class="step"><span class="step-check"></span><div><div class="step-title">完成脚本第一版</div><div class="step-meta">25 分钟 · 今天 19:30</div></div><span class="step-action">调整</span></div>
+            <div class="step"><span class="step-check"></span><div><div class="step-title">整理拍摄清单</div><div class="step-meta">15 分钟 · 尚未安排</div></div><span class="step-action">找时间</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="page page-calendar calendar-page">
+      <div class="topbar"><div><div class="eyebrow">11 月 16 日 – 22 日</div><h1>日历</h1></div><div class="calendar-controls"><button class="btn">今天</button><button class="btn primary">+ 新日程</button></div></div>
+      <p class="subtitle">固定日程与目标时间块放在一起，但保留不同的调整自由度。</p>
+      <div class="calendar-layout">
+        <div><div class="card calendar-card">
+          <div class="calendar-head"><div></div><div class="today">周一<b>16</b></div><div>周二<b>17</b></div><div>周三<b>18</b></div><div>周四<b>19</b></div><div>周五<b>20</b></div><div>周六<b>21</b></div><div>周日<b>22</b></div></div>
+          <div class="calendar-body">
+            <div class="time-axis"><span>08:00</span><span>09:00</span><span>10:00</span><span>11:00</span><span>12:00</span><span>13:00</span><span>14:00</span><span>15:00</span><span>16:00</span><span>17:00</span><span>18:00</span><span>19:00</span><span>20:00</span></div>
+            <div class="day-column"><div class="cal-event" style="top:72px;height:38px"><b>产品周会</b>09:30 · 45m</div><div class="cal-event goal" style="top:552px;height:44px"><b>脚本第一版</b>19:30 · 25m</div></div>
+            <div class="day-column"><div class="cal-event goal" style="top:96px;height:44px"><b>整理拍摄清单</b>10:00 · 15m</div><div class="cal-event" style="top:480px;height:46px"><b>晚餐</b>18:00 · 45m</div></div>
+            <div class="day-column"><div class="cal-event" style="top:144px;height:48px"><b>设计评审</b>11:00 · 60m</div><div class="cal-event goal" style="top:528px;height:44px"><b>轻松跑 5 km</b>19:00 · 40m</div></div>
+            <div class="day-column"><div class="cal-event goal" style="top:192px;height:48px"><b>钢琴练习</b>12:00 · 30m</div></div>
+            <div class="day-column"><div class="cal-event" style="top:72px;height:38px"><b>产品周会</b>09:30 · 45m</div><div class="cal-event goal" style="top:336px;height:48px"><b>录制素材</b>15:00 · 45m</div></div>
+            <div class="day-column"><div class="cal-event goal" style="top:48px;height:55px"><b>长跑训练</b>09:00 · 60m</div><div class="cal-event" style="top:288px;height:48px"><b>和朋友午餐</b>14:00 · 60m</div></div>
+            <div class="day-column"><div class="cal-event goal" style="top:240px;height:48px"><b>本周回顾</b>13:00 · 20m</div></div>
+          </div>
+        </div><div class="legend"><span class="goal"><i></i>目标时间块</span><span><i></i>固定日程</span><span>拖动人块即可调整</span></div></div>
+        <aside class="card backlog"><div class="backlog-title">尚未安排</div><div class="backlog-copy">拖到日历中，或让 GoalCal 找时间。</div>
+          <div class="backlog-item"><div class="backlog-item-title">整理拍摄清单</div><div class="backlog-item-meta">15 分钟 · 短视频</div><span class="section-link">找时间 →</span></div>
+          <div class="backlog-item"><div class="backlog-item-title">复习节奏练习</div><div class="backlog-item-meta">20 分钟 · 钢琴</div><span class="section-link">找时间 →</span></div>
+          <div class="backlog-item"><div class="backlog-item-title">准备跑鞋与装备</div><div class="backlog-item-meta">10 分钟 · 半马</div><span class="section-link">找时间 →</span></div>
+        </aside>
+      </div>
+    </section>
+
+    <section class="page page-new-goal">
+      <div class="new-goal-wrap">
+        <div class="eyebrow">新目标</div><h1>你想实现什么？</h1>
+        <p class="subtitle">先描述结果和大致期限。计划生成后，你仍然可以逐步修改。</p>
+        <div class="card goal-form">
+          <label class="field-label">目标</label>
+          <div class="goal-input">我希望在 30 天内发布第一条关于个人知识管理的短视频。</div>
+          <div class="field-help">尽量描述你希望看到的结果，不需要自己拆解步骤。</div>
+          <label class="field-label">期限</label>
+          <div class="deadline-options"><span class="deadline-option">7 天</span><span class="deadline-option selected">1 个月</span><span class="deadline-option">3 个月</span><span class="deadline-option">选择日期</span><span class="deadline-option">没有明确期限</span></div>
+          <div class="goal-form-actions"><div class="goal-form-note">下一步会先生成可编辑的计划草稿，不会立即创建目标或写入日历。</div><div class="goal-form-buttons"><a class="btn" href="pages.html?page=goals">取消</a><button class="btn primary">生成计划草稿</button></div></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="page page-assistant">
+      <div class="assistant-main"><div class="topbar"><div><div class="eyebrow">11 月 16 日 · 周一</div><h1>今天</h1></div></div><p class="subtitle">两件值得推进的事，已经为你留出时间。</p>
+        <div class="card focus-card"><div class="section-label">接下来</div><div class="chip" style="margin-top:13px">发布第一条短视频</div><div class="focus-title">完成脚本第一版</div><div class="focus-meta">25 分钟 · 已安排 19:30</div><div class="focus-actions"><button class="btn primary">开始</button><button class="btn">完成</button><button class="btn">调整时间</button></div></div>
+        <div class="section-head" style="margin-top:25px"><span class="section-title">今日安排</span><span class="section-link">查看日历</span></div>
+        <div class="card mini-timeline"><div class="mini-event"><span class="time">09:30</span><span>产品周会<small>45 分钟 · 线上会议</small></span><span class="chip">日程</span></div><div class="mini-event"><span class="time">19:30</span><span>完成脚本第一版<small>25 分钟 · 发布第一条短视频</small></span><span class="chip">目标</span></div><div class="mini-event"><span class="time">20:30</span><span>和 Mum 通话<small>30 分钟</small></span><span class="chip">日程</span></div></div>
+      </div>
+    </section>
+
+    <section class="page page-settings settings-wrap">
+      <div class="topbar"><div><div class="eyebrow">账号与个人偏好</div><h1>设置</h1></div></div><p class="subtitle">让计划适应你的生活节奏，而不是要求你适应系统。</p>
+      <div class="settings-layout"><nav class="settings-nav"><a class="active" href="#">通用</a><a href="#">日历与导入</a><a href="#">计划与可用时间</a><a href="#">AI、学习与隐私</a></nav>
+        <div>
+          <section class="settings-section"><div class="settings-section-title">通用</div><div class="settings-section-copy">界面语言和日期时间会应用于所有页面。</div><div class="card settings-card">
+            <div class="setting-row"><div><div class="setting-name">界面语言</div><div class="setting-desc">可随时切换，不影响你的内容</div></div><div class="setting-value">简体中文<span>⌄</span></div></div>
+            <div class="setting-row"><div><div class="setting-name">时区</div><div class="setting-desc">用于排期、签到和提醒</div></div><div class="setting-value">Asia/Shanghai<span>⌄</span></div></div>
+            <div class="setting-row"><div><div class="setting-name">每周开始于</div></div><div class="setting-value">周一<span>⌄</span></div></div>
+          </div></section>
+          <section class="settings-section"><div class="settings-section-title">可用时间</div><div class="settings-section-copy">只设置通常可用的时间。临时变化可以直接在日历中调整。</div><div class="card availability">
+            <div class="day-setting"><span class="day-name">工作日</span><div class="window-chips"><span class="window selected">上午 09–12</span><span class="window selected">下午 14–18</span><span class="window">晚上 20–22</span></div></div>
+            <div class="day-setting"><span class="day-name">周末</span><div class="window-chips"><span class="window">上午 09–12</span><span class="window selected">下午 14–18</span><span class="window selected">晚上 20–22</span></div></div>
+            <div class="day-setting"><span class="day-name">保护时段</span><div class="window-chips"><span class="window selected">午餐 12–13</span><span class="window">+ 添加时段</span></div></div>
+          </div></section>
+          <section class="settings-section"><div class="settings-section-title">计划偏好</div><div class="card settings-card">
+            <div class="setting-row"><div><div class="setting-name">每天最多投入目标</div><div class="setting-desc">GoalCal 不会把全部空档都排满</div></div><div class="setting-value">2 小时<span>⌄</span></div></div>
+            <div class="setting-row"><div><div class="setting-name">根据完成历史学习</div><div class="setting-desc">显式偏好始终优先，可随时关闭</div></div><div class="toggle"></div></div>
+          </div><div class="save-row"><button class="btn primary">保存更改</button></div></section>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <aside class="assistant-panel">
+    <div class="assistant-header"><div class="assistant-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="m12 3 1.7 5.3L19 10l-5.3 1.7L12 17l-1.7-5.3L5 10l5.3-1.7z"/><path d="m19 16 .8 2.2L22 19l-2.2.8L19 22l-.8-2.2L16 19l2.2-.8z"/></svg></span>GoalCal 助手</div><a class="close" href="index.html?style=quiet">×</a></div>
+    <div class="context">当前上下文：今天 / 发布第一条短视频</div>
+    <div class="messages"><div class="message-user">帮我安排“整理拍摄清单”，最好是在明天。</div><div class="message-ai"><p>这一步大约需要 15 分钟。我找到两个不会打断现有安排的时间：</p>
+      <div class="slot selected"><span class="radio"></span><div><div class="slot-time">明天 10:00–10:15</div><div class="slot-reason">位于你常用的上午时段，前后都留有缓冲。</div></div></div>
+      <div class="slot"><span class="radio"></span><div><div class="slot-time">明天 16:30–16:45</div><div class="slot-reason">紧接一段完整工作块，适合处理轻量任务。</div></div></div>
+      <button class="btn primary slot-confirm">安排所选时间</button><p style="color:var(--muted);font-size:10px;margin-top:10px">确认后才会写入日历。</p>
+    </div></div>
+    <div class="composer"><span>继续告诉 GoalCal…</span><span class="send">↑</span></div>
+  </aside>
+</div>
+<script>
+  const page = new URLSearchParams(location.search).get('page') || 'goals';
+  document.body.dataset.page = page;
+  document.querySelector('.app').classList.toggle('assistant-mode', page === 'assistant');
+  document.querySelectorAll('.nav-item').forEach(item => item.classList.remove('active'));
+  const active = document.querySelector(`.nav-${page}`);
+  if (active) active.classList.add('active');
+  if (page === 'new-goal') document.querySelector('.nav-goals').classList.add('active');
+  if (page === 'settings') document.querySelector('.nav-settings').classList.add('active');
+</script>
+</body>
+</html>

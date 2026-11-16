@@ -1,0 +1,50 @@
+name: GoalCalendar
+options:
+  bundleIdPrefix: com.goalcalendar
+  deploymentTarget:
+    iOS: "18.0"
+  xcodeVersion: "27.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    # Simulator-only for now: no signing identity is configured yet.
+    CODE_SIGNING_REQUIRED: "NO"
+    CODE_SIGNING_ALLOWED: "NO"
+    ENABLE_USER_SCRIPT_SANDBOXING: "NO"
+
+targets:
+  GoalCalendar:
+    type: application
+    platform: iOS
+    # The logic layer is compiled straight into the app rather than linked as a
+    # SwiftPM dependency. Xcode's package resolver insists on writing to
+    # ~/Library/Caches/org.swift.swiftpm, which this sandbox denies. The same
+    # source files back `swift test` in GoalCalendarKit/, so behaviour is
+    # identical in both places and nothing is duplicated.
+    sources:
+      - path: GoalCalendarApp
+      - path: GoalCalendarKit/Sources/GoalCalendarKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.goalcalendar.app
+        PRODUCT_NAME: GoalCalendar
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        GENERATE_INFOPLIST_FILE: YES
+        TARGETED_DEVICE_FAMILY: "1"
+        INFOPLIST_KEY_CFBundleDisplayName: "目标日历"
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+        INFOPLIST_KEY_UIUserInterfaceStyle: Automatic
+        INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription: "读取你的系统日历，把已有安排一起纳入排程。"
+
+schemes:
+  GoalCalendar:
+    build:
+      targets:
+        GoalCalendar: all
+    run:
+      config: Debug

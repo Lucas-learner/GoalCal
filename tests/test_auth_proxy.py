@@ -1,0 +1,259 @@
+"""The public login gateway keeps browser credentials out of URLs and scripts."""
+
+import asyncio
+import re
+from types import SimpleNamespace
+import uuid
+
+import httpx2
+import pytest
+
+from goalcal import auth, db, storage
+from goalcal import auth_proxy
+from goalcal.auth_proxy import COOKIE_NAME, app
+
+
+@pytest.fixture(autouse=True)
+def _isolated_auth_db(tmp_path, monkeypatch):
+    path = tmp_path / "auth.db"
+    db.init_db(f"sqlite:///{path}")
+    monkeypatch.setattr(storage, "database_path", lambda url=None: path)
+    yield
+    db.get_engine()
+
+
+def _account():
+    name = "cookie_" + uuid.uuid4().hex[:12]
+    auth.create_user(name, "test-password-long", admin=True)
+    return name
+
+
+def _csrf(page):
+    return re.search(r'name="csrf" value="([^"]+)"', page.text).group(1)
+
+
+def test_websocket_accepts_public_origin_and_uses_internal_origin(monkeypatch):
+    public = "https://goalcal.example"
+
+    class BrowserSocket:
+        headers = {"origin": public, "host": "goalcal.example"}
+        cookies = {COOKIE_NAME: "valid-test-token"}
+        url = SimpleNamespace(path="/_stcore/stream", query="")
+        scope = {"headers": [(b"host", b"goalcal.example"), (b"origin", public.encode())], "subprotocols": []}
+
+        async def close(self, code):
+            self.close_code = code
+
+    browser = BrowserSocket()
+    assert auth_proxy._browser_websocket_origin(browser)
+    browser.headers = {"origin": "https://attacker.example", "host": "goalcal.example"}
+    assert not auth_proxy._browser_websocket_origin(browser)
+    browser.headers = {"origin": public, "host": "goalcal.example"}
+    monkeypatch.setattr(auth_proxy.auth, "authenticate", lambda token: object())
+    forwarded = {}
+
+    def fake_connect(uri, **kwargs):
+        forwarded["uri"] = uri
+        forwarded["origin"] = kwargs["origin"]
+        raise OSError("end test before network access")
+
+    monkeypatch.setattr(auth_proxy.websockets, "connect", fake_connect)
+    asyncio.run(auth_proxy.proxy_websocket(browser))
+    assert forwarded == {
+        "uri": auth_proxy.UPSTREAM_WS + "/_stcore/stream",
+        "origin": auth_proxy.UPSTREAM_HTTP,
+    }
+    assert browser.close_code == 1011
+
+
+def test_login_cookie_survives_new_client_and_is_revoked_on_logout():
+    name = _account()
+
+    async def scenario():
+        transport = httpx2.ASGITransport(app=app)
+        async with httpx2.AsyncClient(transport=transport, base_url="https://goalcal.example") as client:
+            page = await client.get("/", headers={"Accept": "text/html"})
+            assert "action=\"/_goalcal/login\"" in page.text
+            assert '<html lang="en">' in page.text
+            assert "Username" in page.text and "Log in" in page.text
+            assert "no-store" == page.headers["cache-control"]
+            csrf = _csrf(page)
+
+            rejected = await client.post(
+                "/_goalcal/login", data={"username": name, "password": "test-password-long", "csrf": "wrong"},
+                headers={"Origin": "https://another.example"},
+            )
+            assert rejected.status_code == 403
+
+            login = await client.post(
+                "/_goalcal/login", data={"username": name, "password": "test-password-long", "csrf": csrf},
+                follow_redirects=False,
+            )
+            assert login.status_code == 303
+            cookie = login.headers["set-cookie"]
+            assert all(flag in cookie for flag in ("HttpOnly", "Secure", "SameSite=lax", "Max-Age=43200"))
+            token = client.cookies.get(COOKIE_NAME)
+            assert token and token not in login.headers["location"] and token not in page.text
+            assert auth.authenticate(token).username == name
+
+            logout = await client.post(
+                "/_goalcal/logout", content=b"unneeded-body" * 400,
+                headers={"Origin": "https://goalcal.example"}, follow_redirects=False,
+            )
+            assert logout.status_code == 303
+            assert "Max-Age=0" in logout.headers["set-cookie"]
+            with pytest.raises(auth.AuthError):
+                auth.authenticate(token)
+            page = await client.get("/", headers={"Accept": "text/html"})
+            assert "action=\"/_goalcal/login\"" in page.text
+
+    asyncio.run(scenario())
+
+
+def test_account_disable_invalidates_existing_cookie():
+    name = _account()
+
+    async def scenario():
+        transport = httpx2.ASGITransport(app=app)
+        async with httpx2.AsyncClient(transport=transport, base_url="http://127.0.0.1:8512") as client:
+            page = await client.get("/", headers={"Accept": "text/html"})
+            login = await client.post(
+                "/_goalcal/login", data={"username": name, "password": "test-password-long", "csrf": _csrf(page)},
+                follow_redirects=False,
+            )
+            assert login.status_code == 303
+            assert "Secure" not in login.headers["set-cookie"]
+            token = client.cookies.get(COOKIE_NAME)
+            auth.manage(name, disabled=True)
+            with pytest.raises(auth.AuthError):
+                auth.authenticate(token)
+            page = await client.get("/", headers={"Accept": "text/html"})
+            assert "action=\"/_goalcal/login\"" in page.text
+            post = await client.post("/_stcore/upload_file", headers={"Origin": "http://127.0.0.1:8512"})
+            assert post.status_code == 401
+
+    asyncio.run(scenario())
+
+
+def test_invitation_registration_remains_available():
+    invitation = auth.invite()
+    name = "invite_" + uuid.uuid4().hex[:12]
+
+    async def scenario():
+        transport = httpx2.ASGITransport(app=app)
+        async with httpx2.AsyncClient(transport=transport, base_url="http://127.0.0.1:8512") as client:
+            page = await client.get("/_goalcal/register")
+            assert "Invitation code" in page.text
+            registered = await client.post(
+                "/_goalcal/register",
+                data={"username": name, "password": "test-password-long",
+                      "invitation": invitation, "tz": "Asia/Shanghai", "csrf": _csrf(page)},
+            )
+            assert "Account created. Please log in." in registered.text
+            assert auth.login(name, "test-password-long")
+
+    asyncio.run(scenario())
+
+
+def test_logout_ignores_expired_form_cookie_and_clears_stale_session():
+    name = _account()
+
+    async def scenario():
+        transport = httpx2.ASGITransport(app=app)
+        async with httpx2.AsyncClient(transport=transport, base_url="https://goalcal.example") as client:
+            page = await client.get("/", headers={"Accept": "text/html"})
+            login = await client.post(
+                "/_goalcal/login", data={"username": name, "password": "test-password-long", "csrf": _csrf(page)},
+                follow_redirects=False,
+            )
+            assert login.status_code == 303
+            token = client.cookies.get(COOKIE_NAME)
+
+            # form csrf cookie 只有 10 分钟：过期/缺失时 Log out 仍应成功
+            client.cookies.delete(auth_proxy.FORM_COOKIE_NAME)
+            logout = await client.post(
+                "/_goalcal/logout", data={}, follow_redirects=False
+            )
+            assert logout.status_code == 303
+            assert "Max-Age=0" in logout.headers["set-cookie"]
+            with pytest.raises(auth.AuthError):
+                auth.authenticate(token)
+
+            # session 已撤销/伪造时也清 cookie 并回登录页，不留在错误页。
+            stale = await client.post("/_goalcal/logout", data={}, follow_redirects=False)
+            assert stale.status_code == 303
+
+            client.cookies.set(COOKIE_NAME, "garbage-token")
+            stale = await client.post("/_goalcal/logout", data={}, follow_redirects=False)
+            assert stale.status_code == 303
+            page = await client.get("/", headers={"Accept": "text/html"})
+            assert "action=\"/_goalcal/login\"" in page.text
+
+    asyncio.run(scenario())
+
+
+def test_login_page_matches_app_shell_style():
+    async def scenario():
+        transport = httpx2.ASGITransport(app=app)
+        async with httpx2.AsyncClient(transport=transport, base_url="https://goalcal.example") as client:
+            page = await client.get("/", headers={"Accept": "text/html"})
+            assert "📅 GoalCal" in page.text
+            assert 'aria-current="page">Log in' in page.text
+            assert 'href="/_goalcal/register"' in page.text
+            register = await client.get("/_goalcal/register")
+            assert 'aria-current="page">Create account' in register.text
+            assert 'action="/_goalcal/register"' in register.text
+
+    asyncio.run(scenario())
+
+
+def test_logout_rejects_cross_site_post_without_revoking_session():
+    name = _account()
+
+    async def scenario():
+        transport = httpx2.ASGITransport(app=app)
+        async with httpx2.AsyncClient(transport=transport, base_url="https://goalcal.example") as client:
+            page = await client.get("/", headers={"Accept": "text/html"})
+            await client.post("/_goalcal/login", data={
+                "username": name, "password": "test-password-long", "csrf": _csrf(page),
+            })
+            token = client.cookies.get(COOKIE_NAME)
+            rejected = await client.post("/_goalcal/logout", data={}, headers={
+                "Origin": "https://attacker.example", "Sec-Fetch-Site": "cross-site",
+            }, follow_redirects=False)
+            assert rejected.status_code == 403
+            assert auth.authenticate(token).username == name
+
+    asyncio.run(scenario())
+
+
+def test_register_page_timezone_select_and_nonce_csp():
+    import zoneinfo
+    all_timezones = sorted(zoneinfo.available_timezones())
+
+    async def scenario():
+        transport = httpx2.ASGITransport(app=app)
+        async with httpx2.AsyncClient(transport=transport, base_url="https://goalcal.example") as client:
+            register = await client.get("/_goalcal/register")
+            csp = register.headers.get("content-security-policy", "")
+            match = re.search(r"script-src 'nonce-([^']+)'", csp)
+            assert match, f"Expected nonce in CSP: {csp}"
+            nonce = match.group(1)
+            assert f'<script nonce="{nonce}">' in register.text
+            assert "Intl.DateTimeFormat().resolvedOptions().timeZone" in register.text
+            assert '<select name="tz" required>' in register.text
+            assert '<option value="Asia/Shanghai" selected>Asia/Shanghai</option>' in register.text
+            for tz in all_timezones[::50]:
+                assert f'<option value="{tz}"' in register.text
+
+            # Login page also has nonce in CSP, but no register script or select
+            login = await client.get("/", headers={"Accept": "text/html"})
+            login_csp = login.headers.get("content-security-policy", "")
+            login_match = re.search(r"script-src 'nonce-([^']+)'", login_csp)
+            assert login_match
+            login_nonce = login_match.group(1)
+            assert login_nonce != nonce  # Per-page unique nonce
+            assert '<select name="tz"' not in login.text
+            assert '<script nonce=' not in login.text
+
+    asyncio.run(scenario())

@@ -1,0 +1,17 @@
+streamlit>=1.66
+streamlit-calendar>=1.4.0
+sqlalchemy>=2.0
+pydantic>=2.7
+python-dotenv>=1.0
+python-dateutil>=2.9
+dateparser>=1.2
+openai>=1.40
+icalendar>=6.0
+pytest>=8.0
+argon2-cffi>=23.1
+dnspython>=2.6
+httpx2>=2.16
+python-multipart>=0.0.32
+starlette>=1.9
+uvicorn>=0.54
+websockets>=17.3

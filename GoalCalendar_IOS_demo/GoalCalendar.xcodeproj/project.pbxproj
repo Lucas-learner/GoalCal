@@ -1,0 +1,552 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		078965F7DFAE7A7B898B044D /* PromptBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9148021D9DA6A9AC9F15A0ED /* PromptBuilder.swift */; };
+		12AD8841E24E47D86E0F3864 /* Goal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58282159BC0E3167F730103E /* Goal.swift */; };
+		14B9BE8A1C4FABE839B0CDA8 /* GoalBreakdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53148E2B80E7DDB4A9B82168 /* GoalBreakdown.swift */; };
+		1BA6553192D16C26CA2E2F0F /* CalendarViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8A6495C5B07971BBC83A2A4 /* CalendarViewModel.swift */; };
+		2010830FDE27BA6C10F68ED0 /* User.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58D46565040C5F0E740F4C23 /* User.swift */; };
+		2576B2C751B0B0CE54863E91 /* ChatOrchestrator.swift in Sources */ = {isa = PBXBuildFile; fileRef = E69BE7A67DB95F6F7CC70DCA /* ChatOrchestrator.swift */; };
+		2646573802DBE9B94D6E8A72 /* TimeResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA41BF9E8501C31BB028FEE7 /* TimeResolver.swift */; };
+		32C89B804E2BB8C3A26BB7B0 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18769DA9C5F469DF18F7CBA4 /* SettingsView.swift */; };
+		3C350C683140B1FF07844E13 /* EventColorStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A6784E9C782FD8AD364A75D /* EventColorStyle.swift */; };
+		5252D613238A2343662E28F5 /* MonthGrid.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3447371676F7ED0DA815A832 /* MonthGrid.swift */; };
+		54B977A0BCBFEC09C097EC0F /* GoalCalendarApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBC2B693D9BC10EB719C7174 /* GoalCalendarApp.swift */; };
+		56A656B65810D825CDCAB160 /* SQLite.swift in Sources */ = {isa = PBXBuildFile; fileRef = 004C5C6E40042A162CFE3634 /* SQLite.swift */; };
+		63EFB1F8B5D5FE31E65CB8AD /* SettingsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E45A67546F64CC2A12E0A9 /* SettingsViewModel.swift */; };
+		6557730D18D188E1B8902E64 /* Step.swift in Sources */ = {isa = PBXBuildFile; fileRef = F86E39A3802F6CAFCC1952DC /* Step.swift */; };
+		6AB9AE03533EDFE940FFDAEC /* SeriesMatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED902CDE74B8833C8B11D28 /* SeriesMatcher.swift */; };
+		7455EFED3B5F51C6FA335E54 /* TimelineLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D73413F2CEF7E4C0B9B616A /* TimelineLayout.swift */; };
+		748DDC564263E136884E2962 /* Scheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73649747A6E415846D64F8CA /* Scheduler.swift */; };
+		78E3EF6AD4CC41FC7D53A9B9 /* ChatViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B7C8F647B70092CC7460AEF /* ChatViewModel.swift */; };
+		7A5DCF9F2A07BA42D93D1D2A /* CalendarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1854C99CE6167CA4DF601E1 /* CalendarView.swift */; };
+		7AA503DA7D47BA657A702EB0 /* IntentParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 964EBE8F3CC8D00A2389F146 /* IntentParser.swift */; };
+		83474DB4984D8F0C18D7BE8A /* GoalListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22DFD57000F34170A4E25AC4 /* GoalListView.swift */; };
+		88F682F4756F9961C09250B9 /* WeekGrid.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BA882085BC4FFB02F99B679 /* WeekGrid.swift */; };
+		8992B27B7618BA59387E7CEF /* FreeTime.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D2E9BA17264F74CD5D0E810 /* FreeTime.swift */; };
+		943920BD92B4D27ABFE87E78 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFE5244DC5B59ECA1766E04A /* RootView.swift */; };
+		9A82A06C3ACE697AE5DD6458 /* CalendarEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE69012014DEBC09B1B71EF7 /* CalendarEvent.swift */; };
+		A116BEE7C721373B7D8E2D5E /* RecurrenceInference.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72FE2D11DCD09FB3B61B5C7E /* RecurrenceInference.swift */; };
+		A3CAEB9DD5B6C48AF9582A9B /* SeriesScope.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC31673889351FB78A95E1A1 /* SeriesScope.swift */; };
+		A4CCF43717BDF7F19987EA47 /* GoalDetailViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D216881FE1351FFEAD6CDF69 /* GoalDetailViewModel.swift */; };
+		A55A19A9CD2C21EA0FEC18CB /* AppDateFormat.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D2743014F9345C6B24D9FF4 /* AppDateFormat.swift */; };
+		AFB17A545C0DF8E1E4F8FE6D /* StateLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4DCAC232584A40FCF6DC926 /* StateLog.swift */; };
+		B2127F9A021674A29388C89B /* TimeSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04A7E83EA5610704EF2FD7AF /* TimeSupport.swift */; };
+		BCA0FF4C891A51EADEBDE337 /* IntentModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2203667B8F6F6060EE03516 /* IntentModels.swift */; };
+		C15AE0C8654A856461065FD0 /* Schema.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB321EAFFC9BAF4FDB315B6A /* Schema.swift */; };
+		C173FE1C68FE46887A155E2D /* NotificationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C5E2D976F1DC5B9027416DB /* NotificationManager.swift */; };
+		CA9F1E44B5C7DE7A4AD11392 /* LLMClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2FCF71F87FECBEAFE5D69066 /* LLMClient.swift */; };
+		D149E4733FE86C9B4C0F3107 /* GoalPlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EA7EA2237806A4C7D70E64A /* GoalPlanner.swift */; };
+		D683B38E540DA9F0B909D0E7 /* Database.swift in Sources */ = {isa = PBXBuildFile; fileRef = 051BA7A9FB55255B2FD9F83A /* Database.swift */; };
+		D7BEC03C70DBF058AC1F0282 /* NotificationPlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07BCAD987D9084359FE186AA /* NotificationPlanner.swift */; };
+		E0CD74DE8EAEC08161B24045 /* CalendarImportService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 084383602165B45E584293C7 /* CalendarImportService.swift */; };
+		E7438D0714D0451E1209F7A4 /* RuleBasedIntentParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 983CEB39AC3AB12EAB727479 /* RuleBasedIntentParser.swift */; };
+		E78C914E735E79C5C400DF1D /* GoalDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6ECECACA60D75550642F15E /* GoalDetailView.swift */; };
+		EB2D20B6053324DA82A34E0F /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFE55444CC40A43892960AB7 /* AppModel.swift */; };
+		F032325A797716D0E43CE55F /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4907E92F6797913146BD0A4E /* ChatView.swift */; };
+		F518011B1332660D1EFDFF67 /* SeriesEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11AE9A99CF5C0AE35DF4870 /* SeriesEditor.swift */; };
+		FDF2717CDC20F1FB1C0237CB /* EventSeries.swift in Sources */ = {isa = PBXBuildFile; fileRef = A780DAF810744EA3DF4435ED /* EventSeries.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		004C5C6E40042A162CFE3634 /* SQLite.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SQLite.swift; sourceTree = "<group>"; };
+		04A7E83EA5610704EF2FD7AF /* TimeSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimeSupport.swift; sourceTree = "<group>"; };
+		051BA7A9FB55255B2FD9F83A /* Database.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Database.swift; sourceTree = "<group>"; };
+		07BCAD987D9084359FE186AA /* NotificationPlanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationPlanner.swift; sourceTree = "<group>"; };
+		084383602165B45E584293C7 /* CalendarImportService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarImportService.swift; sourceTree = "<group>"; };
+		0BA882085BC4FFB02F99B679 /* WeekGrid.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WeekGrid.swift; sourceTree = "<group>"; };
+		0D73413F2CEF7E4C0B9B616A /* TimelineLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimelineLayout.swift; sourceTree = "<group>"; };
+		18769DA9C5F469DF18F7CBA4 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		1A6784E9C782FD8AD364A75D /* EventColorStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventColorStyle.swift; sourceTree = "<group>"; };
+		22DFD57000F34170A4E25AC4 /* GoalListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoalListView.swift; sourceTree = "<group>"; };
+		2FCF71F87FECBEAFE5D69066 /* LLMClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMClient.swift; sourceTree = "<group>"; };
+		3447371676F7ED0DA815A832 /* MonthGrid.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonthGrid.swift; sourceTree = "<group>"; };
+		4907E92F6797913146BD0A4E /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
+		4B7C8F647B70092CC7460AEF /* ChatViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatViewModel.swift; sourceTree = "<group>"; };
+		53148E2B80E7DDB4A9B82168 /* GoalBreakdown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoalBreakdown.swift; sourceTree = "<group>"; };
+		58282159BC0E3167F730103E /* Goal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Goal.swift; sourceTree = "<group>"; };
+		58D46565040C5F0E740F4C23 /* User.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = User.swift; sourceTree = "<group>"; };
+		5EA7EA2237806A4C7D70E64A /* GoalPlanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoalPlanner.swift; sourceTree = "<group>"; };
+		72FE2D11DCD09FB3B61B5C7E /* RecurrenceInference.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecurrenceInference.swift; sourceTree = "<group>"; };
+		73649747A6E415846D64F8CA /* Scheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Scheduler.swift; sourceTree = "<group>"; };
+		8D2E9BA17264F74CD5D0E810 /* FreeTime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FreeTime.swift; sourceTree = "<group>"; };
+		9148021D9DA6A9AC9F15A0ED /* PromptBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptBuilder.swift; sourceTree = "<group>"; };
+		964EBE8F3CC8D00A2389F146 /* IntentParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntentParser.swift; sourceTree = "<group>"; };
+		983CEB39AC3AB12EAB727479 /* RuleBasedIntentParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuleBasedIntentParser.swift; sourceTree = "<group>"; };
+		9C5E2D976F1DC5B9027416DB /* NotificationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationManager.swift; sourceTree = "<group>"; };
+		9D2743014F9345C6B24D9FF4 /* AppDateFormat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDateFormat.swift; sourceTree = "<group>"; };
+		A0E45A67546F64CC2A12E0A9 /* SettingsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsViewModel.swift; sourceTree = "<group>"; };
+		A11AE9A99CF5C0AE35DF4870 /* SeriesEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeriesEditor.swift; sourceTree = "<group>"; };
+		A1854C99CE6167CA4DF601E1 /* CalendarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarView.swift; sourceTree = "<group>"; };
+		A2203667B8F6F6060EE03516 /* IntentModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntentModels.swift; sourceTree = "<group>"; };
+		A780DAF810744EA3DF4435ED /* EventSeries.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventSeries.swift; sourceTree = "<group>"; };
+		AC31673889351FB78A95E1A1 /* SeriesScope.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeriesScope.swift; sourceTree = "<group>"; };
+		AFE55444CC40A43892960AB7 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
+		B8A6495C5B07971BBC83A2A4 /* CalendarViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarViewModel.swift; sourceTree = "<group>"; };
+		BA41BF9E8501C31BB028FEE7 /* TimeResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimeResolver.swift; sourceTree = "<group>"; };
+		BBC2B693D9BC10EB719C7174 /* GoalCalendarApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoalCalendarApp.swift; sourceTree = "<group>"; };
+		BFE5244DC5B59ECA1766E04A /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		CB321EAFFC9BAF4FDB315B6A /* Schema.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Schema.swift; sourceTree = "<group>"; };
+		CED902CDE74B8833C8B11D28 /* SeriesMatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeriesMatcher.swift; sourceTree = "<group>"; };
+		D216881FE1351FFEAD6CDF69 /* GoalDetailViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoalDetailViewModel.swift; sourceTree = "<group>"; };
+		DE69012014DEBC09B1B71EF7 /* CalendarEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarEvent.swift; sourceTree = "<group>"; };
+		E0FEF4FA50ECF95AB817BAAE /* GoalCalendar.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = GoalCalendar.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		E4DCAC232584A40FCF6DC926 /* StateLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StateLog.swift; sourceTree = "<group>"; };
+		E69BE7A67DB95F6F7CC70DCA /* ChatOrchestrator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatOrchestrator.swift; sourceTree = "<group>"; };
+		E6ECECACA60D75550642F15E /* GoalDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoalDetailView.swift; sourceTree = "<group>"; };
+		F86E39A3802F6CAFCC1952DC /* Step.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Step.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		4B57563AF66214AE9718A830 /* GoalCalendarKit */ = {
+			isa = PBXGroup;
+			children = (
+				92C61BA85B8AD6A6646FE617 /* LLM */,
+				A4883F3307AA84050FDA04C5 /* Models */,
+				51B6423CC65E585D43857CA4 /* Scheduling */,
+				C7A48902CE26227F893D3F0A /* Services */,
+				B8306FEB67E0DB90AAB65F94 /* Storage */,
+			);
+			path = GoalCalendarKit;
+			sourceTree = "<group>";
+		};
+		4C176E428A14C7ADDA05CB83 = {
+			isa = PBXGroup;
+			children = (
+				8A28800142AF8175DBFDDA33 /* GoalCalendarApp */,
+				C7B77B9DFDE7C4F8A1A6E87E /* GoalCalendarKit */,
+				6EAFD5ED16B85E3E39EA257C /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		51B6423CC65E585D43857CA4 /* Scheduling */ = {
+			isa = PBXGroup;
+			children = (
+				8D2E9BA17264F74CD5D0E810 /* FreeTime.swift */,
+				73649747A6E415846D64F8CA /* Scheduler.swift */,
+			);
+			path = Scheduling;
+			sourceTree = "<group>";
+		};
+		6EAFD5ED16B85E3E39EA257C /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				E0FEF4FA50ECF95AB817BAAE /* GoalCalendar.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		8A28800142AF8175DBFDDA33 /* GoalCalendarApp */ = {
+			isa = PBXGroup;
+			children = (
+				AFE55444CC40A43892960AB7 /* AppModel.swift */,
+				084383602165B45E584293C7 /* CalendarImportService.swift */,
+				B8A6495C5B07971BBC83A2A4 /* CalendarViewModel.swift */,
+				4B7C8F647B70092CC7460AEF /* ChatViewModel.swift */,
+				BBC2B693D9BC10EB719C7174 /* GoalCalendarApp.swift */,
+				D216881FE1351FFEAD6CDF69 /* GoalDetailViewModel.swift */,
+				9C5E2D976F1DC5B9027416DB /* NotificationManager.swift */,
+				A0E45A67546F64CC2A12E0A9 /* SettingsViewModel.swift */,
+				F0B2A90D2A9865B2C46DC016 /* Views */,
+			);
+			path = GoalCalendarApp;
+			sourceTree = "<group>";
+		};
+		92C61BA85B8AD6A6646FE617 /* LLM */ = {
+			isa = PBXGroup;
+			children = (
+				53148E2B80E7DDB4A9B82168 /* GoalBreakdown.swift */,
+				A2203667B8F6F6060EE03516 /* IntentModels.swift */,
+				964EBE8F3CC8D00A2389F146 /* IntentParser.swift */,
+				2FCF71F87FECBEAFE5D69066 /* LLMClient.swift */,
+				9148021D9DA6A9AC9F15A0ED /* PromptBuilder.swift */,
+				72FE2D11DCD09FB3B61B5C7E /* RecurrenceInference.swift */,
+				983CEB39AC3AB12EAB727479 /* RuleBasedIntentParser.swift */,
+				BA41BF9E8501C31BB028FEE7 /* TimeResolver.swift */,
+			);
+			path = LLM;
+			sourceTree = "<group>";
+		};
+		A4883F3307AA84050FDA04C5 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				DE69012014DEBC09B1B71EF7 /* CalendarEvent.swift */,
+				A780DAF810744EA3DF4435ED /* EventSeries.swift */,
+				58282159BC0E3167F730103E /* Goal.swift */,
+				3447371676F7ED0DA815A832 /* MonthGrid.swift */,
+				A11AE9A99CF5C0AE35DF4870 /* SeriesEditor.swift */,
+				CED902CDE74B8833C8B11D28 /* SeriesMatcher.swift */,
+				AC31673889351FB78A95E1A1 /* SeriesScope.swift */,
+				E4DCAC232584A40FCF6DC926 /* StateLog.swift */,
+				F86E39A3802F6CAFCC1952DC /* Step.swift */,
+				0D73413F2CEF7E4C0B9B616A /* TimelineLayout.swift */,
+				58D46565040C5F0E740F4C23 /* User.swift */,
+				0BA882085BC4FFB02F99B679 /* WeekGrid.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		B8306FEB67E0DB90AAB65F94 /* Storage */ = {
+			isa = PBXGroup;
+			children = (
+				051BA7A9FB55255B2FD9F83A /* Database.swift */,
+				CB321EAFFC9BAF4FDB315B6A /* Schema.swift */,
+				004C5C6E40042A162CFE3634 /* SQLite.swift */,
+				04A7E83EA5610704EF2FD7AF /* TimeSupport.swift */,
+			);
+			path = Storage;
+			sourceTree = "<group>";
+		};
+		C7A48902CE26227F893D3F0A /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				E69BE7A67DB95F6F7CC70DCA /* ChatOrchestrator.swift */,
+				5EA7EA2237806A4C7D70E64A /* GoalPlanner.swift */,
+				07BCAD987D9084359FE186AA /* NotificationPlanner.swift */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
+		C7B77B9DFDE7C4F8A1A6E87E /* GoalCalendarKit */ = {
+			isa = PBXGroup;
+			children = (
+				CAE793A5C5745FAA3A3C1241 /* Sources */,
+			);
+			path = GoalCalendarKit;
+			sourceTree = "<group>";
+		};
+		CAE793A5C5745FAA3A3C1241 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				4B57563AF66214AE9718A830 /* GoalCalendarKit */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		F0B2A90D2A9865B2C46DC016 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				9D2743014F9345C6B24D9FF4 /* AppDateFormat.swift */,
+				A1854C99CE6167CA4DF601E1 /* CalendarView.swift */,
+				4907E92F6797913146BD0A4E /* ChatView.swift */,
+				1A6784E9C782FD8AD364A75D /* EventColorStyle.swift */,
+				E6ECECACA60D75550642F15E /* GoalDetailView.swift */,
+				22DFD57000F34170A4E25AC4 /* GoalListView.swift */,
+				BFE5244DC5B59ECA1766E04A /* RootView.swift */,
+				18769DA9C5F469DF18F7CBA4 /* SettingsView.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		68A103E006E490C0A063BD61 /* GoalCalendar */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 40C925D270EC007C8F9788AF /* Build configuration list for PBXNativeTarget "GoalCalendar" */;
+			buildPhases = (
+				A4DB5D74F7E4D8B7F0D67BDA /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = GoalCalendar;
+			packageProductDependencies = (
+			);
+			productName = GoalCalendar;
+			productReference = E0FEF4FA50ECF95AB817BAAE /* GoalCalendar.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		20390A3D9F86DB71CFBC04D9 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 2700;
+				TargetAttributes = {
+				};
+			};
+			buildConfigurationList = F26D640C702076870BF69E90 /* Build configuration list for PBXProject "GoalCalendar" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 4C176E428A14C7ADDA05CB83;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 6EAFD5ED16B85E3E39EA257C /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				68A103E006E490C0A063BD61 /* GoalCalendar */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A4DB5D74F7E4D8B7F0D67BDA /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A55A19A9CD2C21EA0FEC18CB /* AppDateFormat.swift in Sources */,
+				EB2D20B6053324DA82A34E0F /* AppModel.swift in Sources */,
+				9A82A06C3ACE697AE5DD6458 /* CalendarEvent.swift in Sources */,
+				E0CD74DE8EAEC08161B24045 /* CalendarImportService.swift in Sources */,
+				7A5DCF9F2A07BA42D93D1D2A /* CalendarView.swift in Sources */,
+				1BA6553192D16C26CA2E2F0F /* CalendarViewModel.swift in Sources */,
+				2576B2C751B0B0CE54863E91 /* ChatOrchestrator.swift in Sources */,
+				F032325A797716D0E43CE55F /* ChatView.swift in Sources */,
+				78E3EF6AD4CC41FC7D53A9B9 /* ChatViewModel.swift in Sources */,
+				D683B38E540DA9F0B909D0E7 /* Database.swift in Sources */,
+				3C350C683140B1FF07844E13 /* EventColorStyle.swift in Sources */,
+				FDF2717CDC20F1FB1C0237CB /* EventSeries.swift in Sources */,
+				8992B27B7618BA59387E7CEF /* FreeTime.swift in Sources */,
+				12AD8841E24E47D86E0F3864 /* Goal.swift in Sources */,
+				14B9BE8A1C4FABE839B0CDA8 /* GoalBreakdown.swift in Sources */,
+				54B977A0BCBFEC09C097EC0F /* GoalCalendarApp.swift in Sources */,
+				E78C914E735E79C5C400DF1D /* GoalDetailView.swift in Sources */,
+				A4CCF43717BDF7F19987EA47 /* GoalDetailViewModel.swift in Sources */,
+				83474DB4984D8F0C18D7BE8A /* GoalListView.swift in Sources */,
+				D149E4733FE86C9B4C0F3107 /* GoalPlanner.swift in Sources */,
+				BCA0FF4C891A51EADEBDE337 /* IntentModels.swift in Sources */,
+				7AA503DA7D47BA657A702EB0 /* IntentParser.swift in Sources */,
+				CA9F1E44B5C7DE7A4AD11392 /* LLMClient.swift in Sources */,
+				5252D613238A2343662E28F5 /* MonthGrid.swift in Sources */,
+				C173FE1C68FE46887A155E2D /* NotificationManager.swift in Sources */,
+				D7BEC03C70DBF058AC1F0282 /* NotificationPlanner.swift in Sources */,
+				078965F7DFAE7A7B898B044D /* PromptBuilder.swift in Sources */,
+				A116BEE7C721373B7D8E2D5E /* RecurrenceInference.swift in Sources */,
+				943920BD92B4D27ABFE87E78 /* RootView.swift in Sources */,
+				E7438D0714D0451E1209F7A4 /* RuleBasedIntentParser.swift in Sources */,
+				56A656B65810D825CDCAB160 /* SQLite.swift in Sources */,
+				748DDC564263E136884E2962 /* Scheduler.swift in Sources */,
+				C15AE0C8654A856461065FD0 /* Schema.swift in Sources */,
+				F518011B1332660D1EFDFF67 /* SeriesEditor.swift in Sources */,
+				6AB9AE03533EDFE940FFDAEC /* SeriesMatcher.swift in Sources */,
+				A3CAEB9DD5B6C48AF9582A9B /* SeriesScope.swift in Sources */,
+				32C89B804E2BB8C3A26BB7B0 /* SettingsView.swift in Sources */,
+				63EFB1F8B5D5FE31E65CB8AD /* SettingsViewModel.swift in Sources */,
+				AFB17A545C0DF8E1E4F8FE6D /* StateLog.swift in Sources */,
+				6557730D18D188E1B8902E64 /* Step.swift in Sources */,
+				2646573802DBE9B94D6E8A72 /* TimeResolver.swift in Sources */,
+				B2127F9A021674A29388C89B /* TimeSupport.swift in Sources */,
+				7455EFED3B5F51C6FA335E54 /* TimelineLayout.swift in Sources */,
+				2010830FDE27BA6C10F68ED0 /* User.swift in Sources */,
+				88F682F4756F9961C09250B9 /* WeekGrid.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		104B39F389CC90BCD2E6817A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "目标日历";
+				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "读取你的系统日历，把已有安排一起纳入排程。";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				INFOPLIST_KEY_UIUserInterfaceStyle = Automatic;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.goalcalendar.app;
+				PRODUCT_NAME = GoalCalendar;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		324C6A471E30336A1C2157F5 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		A0ED67ACCE0123B827DA276C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "目标日历";
+				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "读取你的系统日历，把已有安排一起纳入排程。";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				INFOPLIST_KEY_UIUserInterfaceStyle = Automatic;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.goalcalendar.app;
+				PRODUCT_NAME = GoalCalendar;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		D7638D81DF90C1A825F4D78A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		40C925D270EC007C8F9788AF /* Build configuration list for PBXNativeTarget "GoalCalendar" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A0ED67ACCE0123B827DA276C /* Debug */,
+				104B39F389CC90BCD2E6817A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		F26D640C702076870BF69E90 /* Build configuration list for PBXProject "GoalCalendar" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D7638D81DF90C1A825F4D78A /* Debug */,
+				324C6A471E30336A1C2157F5 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 20390A3D9F86DB71CFBC04D9 /* Project object */;
+}

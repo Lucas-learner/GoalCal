@@ -1,0 +1,678 @@
+[
+  {
+    "file": "s5_video30_A.jsonl",
+    "outline": [
+      "Lock the concept",
+      "Script and storyboard",
+      "Film and edit",
+      "Set up channel and publish",
+      "Review and plan video two"
+    ],
+    "rounds_total": 6,
+    "json_ok": 6,
+    "language_violations": [],
+    "phase_first_open": {
+      "Lock the concept": "initial",
+      "Script and storyboard": "round 1",
+      "Film and edit": "round 2",
+      "Set up channel and publish": "round 5",
+      "Review and plan video two": "round 6"
+    },
+    "phases_never_opened": [],
+    "near_dup_pairs_count": 0,
+    "near_dup_pairs": [],
+    "per_round": [
+      {
+        "round": 1,
+        "days_left": null,
+        "steps": [
+          {
+            "milestone": "Lock the concept",
+            "title": "Write down who it's for and the one thing they should take away",
+            "est_min": 15
+          },
+          {
+            "milestone": "Script and storyboard",
+            "title": "Draft the script as 6-8 bullet beats with a hook in the first line",
+            "est_min": 30
+          },
+          {
+            "milestone": "Script and storyboard",
+            "title": "Sketch a rough shot list, one line per beat",
+            "est_min": 20
+          }
+        ],
+        "milestone_violations": [],
+        "errors": [],
+        "parse_error": null
+      },
+      {
+        "round": 2,
+        "days_left": null,
+        "steps": [
+          {
+            "milestone": "Script and storyboard",
+            "title": "Add timing and camera notes to each shot in your list",
+            "est_min": 20
+          },
+          {
+            "milestone": "Script and storyboard",
+            "title": "Read the script aloud once and trim any lines that feel slow",
+            "est_min": 15
+          },
+          {
+            "milestone": "Film and edit",
+            "title": "Set up your filming spot and record one 10-second test clip",
+            "est_min": 25
+          }
+        ],
+        "milestone_violations": [],
+        "errors": [],
+        "parse_error": null
+      },
+      {
+        "round": 3,
+        "days_left": null,
+        "steps": [
+          {
+            "milestone": "Film and edit",
+            "title": "Record just the hook line until you have one clean take",
+            "est_min": 20
+          },
+          {
+            "milestone": "Film and edit",
+            "title": "Film the remaining shots on your list in one sitting",
+            "est_min": 40
+          },
+          {
+            "milestone": "Film and edit",
+            "title": "Assemble a rough cut: lay the clips in order, no polish yet",
+            "est_min": 35
+          }
+        ],
+        "milestone_violations": [],
+        "errors": [],
+        "parse_error": null
+      },
+      {
+        "round": 4,
+        "days_left": null,
+        "steps": [
+          {
+            "milestone": "Film and edit",
+            "title": "Watch the rough cut once and write down 2-3 fixes (cuts, pacing, audio level)",
+            "est_min": 15
+          },
+          {
+            "milestone": "Film and edit",
+            "title": "Make those fixes and add captions or a title card",
+            "est_min": 30
+          },
+          {
+            "milestone": "Film and edit",
+            "title": "Export as vertical 1080x1920 and watch it once on your phone",
+            "est_min": 20
+          }
+        ],
+        "milestone_violations": [],
+        "errors": [],
+        "parse_error": null
+      },
+      {
+        "round": 5,
+        "days_left": null,
+        "steps": [
+          {
+            "milestone": "Set up channel and publish",
+            "title": "Create the channel (or update name, handle and a 3-line bio)",
+            "est_min": 20
+          },
+          {
+            "milestone": "Set up channel and publish",
+            "title": "Write the title, a 3-sentence description and 3-5 tags for this video",
+            "est_min": 20
+          },
+          {
+            "milestone": "Set up channel and publish",
+            "title": "Upload the exported video, pick a thumbnail frame and hit publish",
+            "est_min": 30
+          }
+        ],
+        "milestone_violations": [],
+        "errors": [],
+        "parse_error": null
+      },
+      {
+        "round": 6,
+        "days_left": null,
+        "steps": [
+          {
+            "milestone": "Review and plan video two",
+            "title": "Open your video's analytics and write down just two numbers: views and average view duration",
+            "est_min": 10
+          },
+          {
+            "milestone": "Review and plan video two",
+            "title": "Jot 2 things that worked and 1 thing you'd change next time, one line each",
+            "est_min": 15
+          },
+          {
+            "milestone": "Review and plan video two",
+            "title": "Pick your video-two idea and write its one-sentence promise",
+            "est_min": 20
+          }
+        ],
+        "milestone_violations": [],
+        "errors": [],
+        "parse_error": null
+      }
+    ]
+  },
+  {
+    "file": "s5_video30_B.jsonl",
+    "outline": [
+      "Lock the concept",
+      "Script and storyboard",
+      "Film and edit",
+      "Set up channel and publish",
+      "Review and plan video two"
+    ],
+    "rounds_total": 6,
+    "json_ok": 6,
+    "language_violations": [],
+    "phase_first_open": {
+      "Lock the concept": "initial",
+      "Script and storyboard": "round 1",
+      "Film and edit": "round 2",
+      "Set up channel and publish": "round 4",
+      "Review and plan video two": "round 5"
+    },
+    "phases_never_opened": [],
+    "near_dup_pairs_count": 0,
+    "near_dup_pairs": [],
+    "per_round": [
+      {
+        "round": 1,
+        "days_left": 24,
+        "steps": [
+          {
+            "milestone": "Lock the concept",
+            "title": "Write a concept card: working title, one target viewer, and the one takeaway they should remember",
+            "est_min": 15
+          },
+          {
+            "milestone": "Script and storyboard",
+            "title": "Write three different opening hooks (first 5 seconds) and pick the strongest one",
+            "est_min": 20
+          },
+          {
+            "milestone": "Script and storyboard",
+            "title": "Draft the full 45-60 second script, one line per beat (hook, setup, payoff, call to action)",
+            "est_min": 35
+          }
+        ],
+        "milestone_violations": [],
+        "errors": [],
+        "parse_error": null
+      },
+      {
+        "round": 2,
+        "days_left": 21,
+        "steps": [
+          {
+            "milestone": "Script and storyboard",
+            "title": "Turn the finished script into an 8-10 shot list: for each shot note framing (wide/close), what happens, and its seconds on screen",
+            "est_min": 30
+          },
+          {
+            "milestone": "Script and storyboard",
+            "title": "Read the script aloud against the shot list with a stopwatch and trim any line so the whole thing lands under 60 seconds",
+            "est_min": 15
+          },
+          {
+            "milestone": "Film and edit",
+            "title": "Do a 60-second camera test: record one shot in your actual filming spot and check light, sound, and framing on playback",
+            "est_min": 20
+          }
+        ],
+        "milestone_violations": [],
+        "errors": [],
+        "parse_error": null
+      },
+      {
+        "round": 3,
+        "days_left": 18,
+        "steps": [
+          {
+            "milestone": "Film and edit",
+            "title": "Film every shot on your list in one session: two takes per shot, and re-shoot any take where the framing or sound fails your camera-test standard",
+            "est_min": 45
+          },
+          {
+            "milestone": "Film and edit",
+            "title": "Assemble a rough cut: lay all clips on the timeline in script order and trim each to its planned seconds until the cut runs under 60",
+            "est_min": 45
+          },
+          {
+            "milestone": "Film and edit",
+            "title": "Polish pass on the rough cut: add captions, level the audio, fix one thing that bugs you, and export the final file",
+            "est_min": 40
+          }
+        ],
+        "milestone_violations": [],
+        "errors": [],
+        "parse_error": null
+      },
+      {
+        "round": 4,
+        "days_left": 15,
+        "steps": [
+          {
+            "milestone": "Set up channel and publish",
+            "title": "Create the channel on your chosen platform: name, handle, profile image, and a one-line bio that matches your concept card's promise",
+            "est_min": 25
+          },
+          {
+            "milestone": "Set up channel and publish",
+            "title": "Write the upload package: a title under 60 characters, a 2-sentence description with your takeaway as the first line, 3 tags, and the exact cover/thumbnail text",
+            "est_min": 25
+          },
+          {
+            "milestone": "Set up channel and publish",
+            "title": "Upload the final file as a private/unlisted draft with the full upload package, then watch it start to finish on your phone and write down every fix needed before it goes public",
+            "est_min": 30
+          }
+        ],
+        "milestone_violations": [],
+        "errors": [],
+        "parse_error": null
+      },
+      {
+        "round": 5,
+        "days_left": 12,
+        "steps": [
+          {
+            "milestone": "Set up channel and publish",
+            "title": "Work down the fix list from your private-draft watch-through: fix the top three items, re-export, and flip the video to public — then note the exact publish time and paste the link somewhere you'll see it",
+            "est_min": 25
+          },
+          {
+            "milestone": "Review and plan video two",
+            "title": "Pull the first numbers on the published video (views, average view duration, likes/comments) and mark on the retention graph the exact second where most viewers drop off — one screenshot, one sentence on why",
+            "est_min": 20
+          },
+          {
+            "milestone": "Review and plan video two",
+            "title": "Turn that drop-off second plus the best-performing moment into a one-page brief for video two: the lesson you're applying, a working title, the target viewer, and the single takeaway — no shot list yet",
+            "est_min": 30
+          }
+        ],
+        "milestone_violations": [],
+        "errors": [],
+        "parse_error": null
+      },
+      {
+        "round": 6,
+        "days_left": 9,
+        "steps": [
+          {
+            "milestone": "Review and plan video two",
+            "title": "Turn your one-page video-two brief into a written promise, a target viewer, and three candidate hooks — then pick the hook that directly fixes the retention-drop second",
+            "est_min": 25
+          },
+          {
+            "milestone": "Script and storyboard",
+            "title": "Draft video two's 45–60 second script in one sitting, opening with the chosen retention-fix hook and reusing the beat structure that worked in video one",
+            "est_min": 40
+          },
+          {
+            "milestone": "Script and storyboard",
+            "title": "Convert video two's script into an 8-shot list with seconds per shot, and label the first shot as the retention-fix shot — stop before filming",
+            "est_min": 30
+          }
+        ],
+        "milestone_violations": [],
+        "errors": [],
+        "parse_error": null
+      }
+    ]
+  },
+  {
+    "file": "s6_guitar45_A.jsonl",
+    "outline": [
+      "Setup & first chords",
+      "Chord transitions & strumming",
+      "Song repertoire build",
+      "Full-song polish & dynamics",
+      "Demo performance prep"
+    ],
+    "rounds_total": 6,
+    "json_ok": 6,
+    "language_violations": [],
+    "phase_first_open": {
+      "Setup & first chords": "initial",
+      "Chord transitions & strumming": "round 1",
+      "Song repertoire build": "round 2",
+      "Full-song polish & dynamics": "round 4",
+      "Demo performance prep": "round 5"
+    },
+    "phases_never_opened": [],
+    "near_dup_pairs_count": 0,
+    "near_dup_pairs": [],
+    "per_round": [
+      {
+        "round": 1,
+        "days_left": null,
+        "steps": [
+          {
+            "milestone": "Setup & first chords",
+            "title": "Learn the open G and C chords and check each string rings cleanly",
+            "est_min": 30
+          },
+          {
+            "milestone": "Setup & first chords",
+            "title": "Practice slow switches between Em, Am, C and G for 10 minutes",
+            "est_min": 20
+          },
+          {
+            "milestone": "Chord transitions & strumming",
+            "title": "Strum steady downstrokes on one chord while counting 1-2-3-4 out loud",
+            "est_min": 15
+          }
+        ],
+        "milestone_violations": [],
+        "errors": [],
+        "parse_error": null
+      },
+      {
+        "round": 2,
+        "days_left": null,
+        "steps": [
+          {
+            "milestone": "Chord transitions & strumming",
+            "title": "Practice a down-up strumming pattern (D-DU-UDU) on a muted strum for 10 minutes",
+            "est_min": 15
+          },
+          {
+            "milestone": "Chord transitions & strumming",
+            "title": "Do a 10-minute metronome drill switching between Em, Am, C and G at a slow tempo",
+            "est_min": 20
+          },
+          {
+            "milestone": "Song repertoire build",
+            "title": "Pick one easy 2-3 chord song and play its chord changes with steady downstrokes",
+            "est_min": 25
+          }
+        ],
+        "milestone_violations": [],
+        "errors": [],
+        "parse_error": null
+      },
+      {
+        "round": 3,
+        "days_left": null,
+        "steps": [
+          {
+            "milestone": "Chord transitions & strumming",
+            "title": "Play your chosen song's chord progression with the D-DU-UDU pattern at a slow tempo for 15 minutes",
+            "est_min": 20
+          },
+          {
+            "milestone": "Song repertoire build",
+            "title": "Learn the chord shapes and changes for a second easy 2-3 chord song",
+            "est_min": 25
+          },
+          {
+            "milestone": "Song repertoire build",
+            "title": "Play both songs back-to-back once each without stopping to build stamina",
+            "est_min": 20
+          }
+        ],
+        "milestone_violations": [],
+        "errors": [],
+        "parse_error": null
+      },
+      {
+        "round": 4,
+        "days_left": null,
+        "steps": [
+          {
+            "milestone": "Song repertoire build",
+            "title": "Play your first song start to finish once and note the shakiest chord change",
+            "est_min": 15
+          },
+          {
+            "milestone": "Song repertoire build",
+            "title": "Loop that shakiest chord change slowly for 10 minutes until it feels smooth",
+            "est_min": 15
+          },
+          {
+            "milestone": "Full-song polish & dynamics",
+            "title": "Play the same song again with a soft verse and a louder chorus to practice dynamics",
+            "est_min": 20
+          }
+        ],
+        "milestone_violations": [],
+        "errors": [],
+        "parse_error": null
+      },
+      {
+        "round": 5,
+        "days_left": null,
+        "steps": [
+          {
+            "milestone": "Full-song polish & dynamics",
+            "title": "Record yourself playing your first song once on your phone, then listen back and write down two things to fix",
+            "est_min": 20
+          },
+          {
+            "milestone": "Full-song polish & dynamics",
+            "title": "Spend 15 minutes fixing those two spots slowly with a metronome, then play the song once more",
+            "est_min": 20
+          },
+          {
+            "milestone": "Demo performance prep",
+            "title": "Do a full run-through of the song standing up, playing it start to finish without stopping, as a dress rehearsal",
+            "est_min": 20
+          }
+        ],
+        "milestone_violations": [],
+        "errors": [],
+        "parse_error": null
+      },
+      {
+        "round": 6,
+        "days_left": null,
+        "steps": [
+          {
+            "milestone": "Demo performance prep",
+            "title": "Set your phone up to record and capture one full standing take of your song from start to finish",
+            "est_min": 20
+          },
+          {
+            "milestone": "Demo performance prep",
+            "title": "Listen back to the recording and loop the one spot that slips for 10 minutes with the metronome",
+            "est_min": 15
+          },
+          {
+            "milestone": "Demo performance prep",
+            "title": "Play the song live once for a friend or family member, or record and share a second full take",
+            "est_min": 20
+          }
+        ],
+        "milestone_violations": [],
+        "errors": [],
+        "parse_error": null
+      }
+    ]
+  },
+  {
+    "file": "s6_guitar45_B.jsonl",
+    "outline": [
+      "Setup & first chords",
+      "Chord transitions & strumming",
+      "Song repertoire build",
+      "Full-song polish & dynamics",
+      "Demo performance prep"
+    ],
+    "rounds_total": 6,
+    "json_ok": 6,
+    "language_violations": [],
+    "phase_first_open": {
+      "Setup & first chords": "initial",
+      "Chord transitions & strumming": "round 1",
+      "Song repertoire build": "round 3",
+      "Full-song polish & dynamics": "round 5",
+      "Demo performance prep": "round 6"
+    },
+    "phases_never_opened": [],
+    "near_dup_pairs_count": 0,
+    "near_dup_pairs": [],
+    "per_round": [
+      {
+        "round": 1,
+        "days_left": 40,
+        "steps": [
+          {
+            "milestone": "Setup & first chords",
+            "title": "Learn the D chord and check each string rings cleanly",
+            "est_min": 25
+          },
+          {
+            "milestone": "Setup & first chords",
+            "title": "Learn the G chord and do 5 minutes of slow Em–Am–D–G changes with a metronome at 40 bpm",
+            "est_min": 30
+          },
+          {
+            "milestone": "Chord transitions & strumming",
+            "title": "First strumming rep: steady all-downstroke 4/4 pattern over Em–Am–D–G, 5 clean laps in a row",
+            "est_min": 30
+          }
+        ],
+        "milestone_violations": [],
+        "errors": [],
+        "parse_error": null
+      },
+      {
+        "round": 2,
+        "days_left": 35,
+        "steps": [
+          {
+            "milestone": "Chord transitions & strumming",
+            "title": "Learn the C chord, check each string rings, then play slow C–G–C changes for 5 minutes at 40 bpm",
+            "est_min": 30
+          },
+          {
+            "milestone": "Chord transitions & strumming",
+            "title": "Switch the all-downstroke pattern to down-up eighth notes (1-and-2-and) over Em–Am at 50 bpm, 4 clean laps in a row",
+            "est_min": 35
+          },
+          {
+            "milestone": "Chord transitions & strumming",
+            "title": "One-minute change drill on the hardest pair (likely C–G): count clean changes, then beat that count on a second run",
+            "est_min": 25
+          }
+        ],
+        "milestone_violations": [],
+        "errors": [],
+        "parse_error": null
+      },
+      {
+        "round": 3,
+        "days_left": 30,
+        "steps": [
+          {
+            "milestone": "Chord transitions & strumming",
+            "title": "Learn the D-DU-UDU strumming pattern and loop it over G–C at 55 bpm until you get 4 clean laps without stopping",
+            "est_min": 30
+          },
+          {
+            "milestone": "Song repertoire build",
+            "title": "Pick your first song (e.g. Knockin' on Heaven's Door: G–D–Am–C) and play just its chord progression on downstrokes at 60 bpm, 3 passes",
+            "est_min": 30
+          },
+          {
+            "milestone": "Song repertoire build",
+            "title": "Play that song's verse section end to end with the strumming pattern, 3 run-throughs without stopping, and write down the one spot that breaks",
+            "est_min": 30
+          }
+        ],
+        "milestone_violations": [],
+        "errors": [],
+        "parse_error": null
+      },
+      {
+        "round": 4,
+        "days_left": 25,
+        "steps": [
+          {
+            "milestone": "Song repertoire build",
+            "title": "Isolate the spot that broke last time: loop just that bar/change 10 times slowly, then play the verse 3 times clean and log whether the break moves",
+            "est_min": 25
+          },
+          {
+            "milestone": "Song repertoire build",
+            "title": "Learn the chorus of song 1 and play verse straight into chorus without stopping, 3 passes at 60 bpm",
+            "est_min": 30
+          },
+          {
+            "milestone": "Song repertoire build",
+            "title": "Add a second song with an easy progression (e.g. Three Little Birds: A–D–E) and play 3 passes of its progression with the D-DU-UDU pattern at 60 bpm",
+            "est_min": 35
+          }
+        ],
+        "milestone_violations": [],
+        "errors": [],
+        "parse_error": null
+      },
+      {
+        "round": 5,
+        "days_left": 20,
+        "steps": [
+          {
+            "milestone": "Song repertoire build",
+            "title": "Close out song 2: learn its chorus, then play verse straight into chorus 3 times without stopping, and finish by running both songs back to back once as a mini set",
+            "est_min": 35
+          },
+          {
+            "milestone": "Full-song polish & dynamics",
+            "title": "Record one full song start to finish on your phone, listen back once, and write down the 3 spots that sound weakest",
+            "est_min": 25
+          },
+          {
+            "milestone": "Full-song polish & dynamics",
+            "title": "Dynamic contrast pass: verse with light downstrokes, chorus with full D-DU-UDU at 65 bpm, 3 passes per song so the chorus is audibly louder",
+            "est_min": 30
+          }
+        ],
+        "milestone_violations": [],
+        "errors": [],
+        "parse_error": null
+      },
+      {
+        "round": 6,
+        "days_left": 15,
+        "steps": [
+          {
+            "milestone": "Full-song polish & dynamics",
+            "title": "Record song 1 again with the verse-light/chorus-loud plan at 65 bpm, A/B it against your earlier take, and write down whether the chorus is now clearly louder",
+            "est_min": 30
+          },
+          {
+            "milestone": "Demo performance prep",
+            "title": "Stand up and play both songs back to back as one mini set with no stops, recorded in a single take; note the total time and the two spots where you flinched",
+            "est_min": 35
+          },
+          {
+            "milestone": "Demo performance prep",
+            "title": "Pick the single song for your demo and play it 3 times in a row with a 30-second pause between takes, holding the same tempo and dynamics each time",
+            "est_min": 35
+          }
+        ],
+        "milestone_violations": [],
+        "errors": [],
+        "parse_error": null
+      }
+    ]
+  }
+]

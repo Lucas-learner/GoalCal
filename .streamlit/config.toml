@@ -1,0 +1,20 @@
+[theme]
+base = "light"
+primaryColor = "#0f766e"
+backgroundColor = "#faf9f6"
+secondaryBackgroundColor = "#f1eee9"
+textColor = "#292524"
+borderColor = "#e7e2da"
+baseRadius = "0.5rem"
+font = "sans serif"
+
+[server]
+headless = true
+address = "127.0.0.1"
+port = 8501
+enableXsrfProtection = true
+enableCORS = true
+maxUploadSize = 5
+
+[browser]
+gatherUsageStats = false
