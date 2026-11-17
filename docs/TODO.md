@@ -1,6 +1,6 @@
 # GoalCal 待办清单（TODO）
 
-> 更新日期：2026-11-17  
+> 更新日期：2026-11-17
 > 当前已上线版本：Web 新版（`goalcal.zhang.sarl` / Cloudflare Tunnel `goalcal-v2` / 正式数据库 `var/production/goalcal.db` Schema `v8`）
 
 ---
@@ -53,8 +53,8 @@
 
 - [x] **最新注册与根路径逻辑补入浏览器 E2E 测试**
   - `frontend/e2e/auth.spec.ts` 已覆盖根路径、免邀请码邮箱注册、邮箱登录、语言和反馈；使用自动创建的临时库。
-- [ ] **合并迭代工作区回主仓库 & 迁移/下线旧版**
-  - 确认 `goalcal.zhang.sarl` 稳定运行后，将当前迭代代码合回主仓库 `/Users/macmini/projects/GoalCal` 统一维护。
-  - 决定是否将旧版 `var/goalcal-production.db`（或预览库 `var/web-preview.db`）数据一致性迁移入新库，并下线旧版 `8501` 与 ngrok 隧道（`local.goalcal.*`）。
+- [x] **合并迭代工作区回主仓库 & 迁移/下线旧版**
+  - 已统一到主仓库并保留双方 Git 历史；生产服务与构建均从根目录运行。
+  - 新版数据完整迁入 `var/production/goalcal.db`；旧数据只归档不合并，旧版 8501/8502 与 ngrok 已下线，8522 兼容进程不再启动。
 - [ ] **Cloudflare HTTPS 强制跳转加固**
   - 在 Cloudflare 控制台 `zhang.sarl` → `SSL/TLS` → `Edge Certificates` 确认开启 **Always Use HTTPS**，并将非 HTTPS 请求自动 301 到 HTTPS。

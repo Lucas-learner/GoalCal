@@ -1,7 +1,8 @@
 """Same-origin authentication, React frontend and Web API gateway.
 
-The gateway owns the HttpOnly browser cookie. Streamlit only reads the cookie on
-new connections; it never sends a session token into page JavaScript or a URL.
+The gateway owns the HttpOnly browser cookie and authenticates the Web API.
+Session tokens are never sent into page JavaScript or a URL. Streamlit proxying
+is disabled unless explicitly enabled for local compatibility regression.
 """
 
 from __future__ import annotations
@@ -30,7 +31,7 @@ COOKIE_NAME = "goalcal_session"
 FORM_COOKIE_NAME = "goalcal_form"
 LANG_COOKIE_NAME = "goalcal_lang"
 SESSION_SECONDS = 12 * 60 * 60
-UPSTREAM_PORT = int(os.getenv("GOALCAL_UPSTREAM_PORT", "8502"))
+UPSTREAM_PORT = int(os.getenv("GOALCAL_UPSTREAM_PORT", "8518"))
 UPSTREAM_HTTP = f"http://127.0.0.1:{UPSTREAM_PORT}"
 UPSTREAM_WS = f"ws://127.0.0.1:{UPSTREAM_PORT}"
 

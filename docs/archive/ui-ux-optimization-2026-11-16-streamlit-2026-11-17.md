@@ -1,6 +1,6 @@
 # GoalCal 界面设计与用户体验优化方案
 
-> 参考基准：`GoalCalendar_IOS_demo` 交互设计 × 当前 `GoalCal` Web 端实现（`app.py`、`goalcal/ui/*`、`goalcal/domain/*`）  
+> 参考基准：`GoalCalendar_IOS_demo` 交互设计 × 当前 `GoalCal` Web 端实现（`app.py`、`goalcal/ui/*`、`goalcal/domain/*`）
 > 日期：2026-11-16
 
 ---
@@ -20,7 +20,7 @@ GoalCal 目前在视觉基调上已经建立起很克制、舒服的风格（`go
 
 ### 1. Chat 页：从“极简问答框”变成“有说服力、可追溯的决策流”
 
-对应文件：`goalcal/ui/chat_page.py`、`goalcal/ui/chat.py`、`goalcal/ui/current.py`  
+对应文件：`goalcal/ui/chat_page.py`、`goalcal/ui/chat.py`、`goalcal/ui/current.py`
 借鉴来源：`GoalCalendar_IOS_demo/GoalCalendarApp/Views/ChatView.swift`（`ProposalCard`）、`ChatViewModel.swift`
 
 * **痛点 A：推荐时段卡片“哑巴式展示”**
@@ -43,7 +43,7 @@ GoalCal 目前在视觉基调上已经建立起很克制、舒服的风格（`go
 
 ### 2. Goals 页：用“像素块进度感”替代“表单堆砌感”
 
-对应文件：`goalcal/ui/goals_page.py`、`goalcal/ui/progress.py`  
+对应文件：`goalcal/ui/goals_page.py`、`goalcal/ui/progress.py`
 借鉴来源：`GoalCalendar_IOS_demo/GoalCalendarApp/Views/GoalListView.swift`（`StepStrip`）、`GoalDetailView.swift`
 
 * **借鉴 iOS `StepStrip`：增加“可视化完成拼图”**
@@ -62,7 +62,7 @@ GoalCal 目前在视觉基调上已经建立起很克制、舒服的风格（`go
 
 ### 3. Calendar 页：补齐“就地闭环”，别让用户来回跳页
 
-对应文件：`goalcal/ui/calendar_page.py`、`goalcal/ui/calendar_view.py`、`goalcal/domain/calendar_service.py`  
+对应文件：`goalcal/ui/calendar_page.py`、`goalcal/ui/calendar_view.py`、`goalcal/domain/calendar_service.py`
 借鉴来源：`GoalCalendar_IOS_demo/GoalCalendarApp/Views/CalendarView.swift`（`EventDetailSheet`、`EventComposerSheet`、`goalsSection`）、`EventSeries.swift`、`SeriesScope.swift`
 
 * **痛点 A：点开日历事件，不能直接完成或修改时间**
@@ -84,7 +84,7 @@ GoalCal 目前在视觉基调上已经建立起很克制、舒服的风格（`go
 
 ### 4. Settings 页：去掉“极客语法”，按使用频率分层
 
-对应文件：`goalcal/ui/settings_page.py`  
+对应文件：`goalcal/ui/settings_page.py`
 借鉴来源：`GoalCalendar_IOS_demo/GoalCalendarApp/Views/SettingsView.swift`
 
 * **把字符串输入改成可视化控件**：`Preferred windows` 目前要求用户按 `09-12,14-18` 手输，`Protected lunch window` 要求手输 `12-13`，输错就会报 `ValueError`。建议改成直观的时段勾选（如 `Morning 09–12`、`Afternoon 14–18`、`Evening 20–22` 快捷开关 + 自定义范围选择器），把配置出错率降到零。

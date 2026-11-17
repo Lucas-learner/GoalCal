@@ -1,4 +1,4 @@
-"""Run the iteration against an isolated, seeded local database (no model billing unless --llm)."""
+"""Run the Web app against a seeded development database (LLM opt-in via --llm-env)."""
 import argparse
 from pathlib import Path
 import os

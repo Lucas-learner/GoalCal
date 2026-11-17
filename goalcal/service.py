@@ -32,8 +32,8 @@ def main():
         return
     if args.service == 'app':
         init_db()  # fail before binding port if migration fails
-        upstream_port = os.getenv('GOALCAL_UPSTREAM_PORT', '8502')
-        gateway_port = os.getenv('GOALCAL_GATEWAY_PORT', '8501')
+        upstream_port = os.getenv('GOALCAL_UPSTREAM_PORT', '8518')
+        gateway_port = os.getenv('GOALCAL_GATEWAY_PORT', '8517')
         os.environ['GOALCAL_LEGACY_UI'] = '1' if args.legacy_ui else '0'
         commands = [
             ('gateway', [sys.executable, '-m', 'uvicorn', 'goalcal.auth_proxy:app',
@@ -48,7 +48,7 @@ def main():
     elif args.provider == 'ngrok':
         if not args.ngrok or not args.config:
             parser.error('ngrok requires --ngrok and --config')
-        gateway_port = os.getenv('GOALCAL_GATEWAY_PORT', '8501')
+        gateway_port = os.getenv('GOALCAL_GATEWAY_PORT', '8517')
         command = [args.ngrok, 'http', f'http://127.0.0.1:{gateway_port}',
                    '--config', args.config, '--inspect=false',
                    '--log', 'stdout', '--log-format', 'json', '--log-level', 'warn']
