@@ -153,3 +153,9 @@ def test_past_window_returns_empty():
         datetime(2026, 10, 21, 8, 0, tzinfo=TZ),
     )
     assert propose(Requirement(est_min=45), WED, [], window=window) == []
+
+
+def test_default_candidates_include_today_afternoon_when_today_is_free():
+    now = datetime(2026, 10, 21, 10, 26, tzinfo=TZ)
+    got = propose(Requirement(est_min=30, energy=1, kind="physical"), now, [], days=5, top_n=6)
+    assert any(c.start.date() == now.date() and 12 <= c.start.hour < 18 for c in got)

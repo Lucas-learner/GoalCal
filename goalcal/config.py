@@ -18,8 +18,8 @@ def _bool(value: str | None, default: bool = False) -> bool:
 
 @dataclass(frozen=True)
 class Settings:
-    production: bool = True
-    db_url: str = f"sqlite:///{ROOT / 'var' / 'goalcal-production.db'}"
+    production: bool = False
+    db_url: str = f"sqlite:///{ROOT / 'var' / 'development' / 'goalcal.db'}"
     tz: str = "Asia/Shanghai"
     llm_api_key: str = ""
     llm_base_url: str = "https://api.siliconflow.cn/v1"
@@ -32,12 +32,12 @@ class Settings:
 
 
 def get_settings() -> Settings:
-    configured_url = os.getenv("GOALCAL_DB_URL", f"sqlite:///{ROOT / 'var' / 'goalcal-production.db'}")
-    if _bool(os.getenv("GOALCAL_PRODUCTION"), True):
+    configured_url = os.getenv("GOALCAL_DB_URL", f"sqlite:///{ROOT / 'var' / 'development' / 'goalcal.db'}")
+    if _bool(os.getenv("GOALCAL_PRODUCTION"), False):
         if not configured_url.startswith("sqlite:////"):
             raise ValueError("Production requires an absolute SQLite database URL")
     return Settings(
-        production=_bool(os.getenv("GOALCAL_PRODUCTION"), True),
+        production=_bool(os.getenv("GOALCAL_PRODUCTION"), False),
         db_url=configured_url,
         tz=os.getenv("GOALCAL_TZ", "Asia/Shanghai"),
         llm_api_key=os.getenv("LLM_API_KEY", ""),

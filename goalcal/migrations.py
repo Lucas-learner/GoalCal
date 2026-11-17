@@ -1,8 +1,10 @@
 """Versioned, transactional migration; failure aborts startup."""
 from .storage import backup, connect, database_path
 from .models import Base
+from .web import models as _web_models
+from .web import transport_models as _transport_models
 
-VERSION = 6
+VERSION = 8
 
 
 def migrate(engine):
@@ -28,11 +30,12 @@ def migrate(engine):
                 return
             Base.metadata.create_all(con)
             columns = {r[1] for r in con.exec_driver_sql('PRAGMA table_info(users)')}
-            for name, ddl in [('username', 'TEXT'), ('password_hash', 'TEXT'),
+            for name, ddl in [('username', 'TEXT'), ('email', 'TEXT'), ('password_hash', 'TEXT'),
                               ('disabled', 'BOOLEAN NOT NULL DEFAULT 0')]:
                 if name not in columns:
                     con.exec_driver_sql(f'ALTER TABLE users ADD COLUMN {name} {ddl}')
             con.exec_driver_sql('CREATE UNIQUE INDEX IF NOT EXISTS ix_users_username ON users(username)')
+            con.exec_driver_sql('CREATE UNIQUE INDEX IF NOT EXISTS ix_users_email ON users(email)')
             for ddl in [
                 'CREATE TABLE IF NOT EXISTS invites (digest TEXT PRIMARY KEY, expires REAL, used_by INTEGER REFERENCES users(id))',
                 'CREATE TABLE IF NOT EXISTS auth_sessions (digest TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id), expires REAL NOT NULL)',

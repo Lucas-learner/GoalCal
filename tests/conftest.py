@@ -15,6 +15,9 @@ os.environ["GOALCAL_DB_URL"] = f"sqlite:///{TEST_DB}"
 os.environ["GOALCAL_TZ"] = "Asia/Shanghai"
 os.environ["LLM_ENABLED"] = "false"
 os.environ["LLM_API_KEY"] = ""
+os.environ["GOALCAL_ENV_FILE"] = "/dev/null"
+os.environ["GOALCAL_ROOT_APP"] = "0"  # Legacy tests opt into their historical routing.
+os.environ["GOALCAL_OPEN_REGISTRATION"] = "0"
 
 from goalcal.models import Base  # noqa: E402
 

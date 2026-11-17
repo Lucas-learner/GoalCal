@@ -53,6 +53,8 @@ def resolve_block(
     partial → 步骤保持 todo，只记录投入时间；
     missed  → 步骤保持 todo，只留打卡记录。
     """
+    from ..web.legacy import require_idle
+    require_idle(session, event_id=event.id)
     if outcome not in OUTCOMES:
         raise ValueError(f"unknown outcome: {outcome}")
     event.status = outcome

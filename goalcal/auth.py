@@ -1,7 +1,8 @@
-"""Local accounts, single-use invitation registration and revocable sessions."""
+"""Local accounts, email/invitation registration and revocable sessions."""
 from dataclasses import dataclass
 from hashlib import sha256
 import logging
+import os
 import re
 import secrets
 import time
@@ -13,6 +14,20 @@ from .storage import connect
 log = logging.getLogger('goalcal.audit')
 _hasher = PasswordHasher(type=Type.ID)
 _dummy = _hasher.hash(secrets.token_urlsafe(32))
+_EMAIL_RE = re.compile(r"^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+$")
+
+
+def open_registration_enabled() -> bool:
+    return os.getenv('GOALCAL_OPEN_REGISTRATION', '').strip().lower() in {'1', 'true', 'yes', 'on'}
+
+
+def normalize_email(email: str | None) -> str | None:
+    cleaned = (email or '').strip().lower()
+    if not cleaned:
+        return None
+    if len(cleaned) > 254 or not _EMAIL_RE.fullmatch(cleaned):
+        raise AuthError('邮箱格式无效')
+    return cleaned
 
 
 class AuthError(ValueError):
@@ -30,17 +45,25 @@ def digest(value):
     return sha256(value.encode()).hexdigest()
 
 
+MIN_PASSWORD_LEN = 6
+
+
+def _hash_password(password: str) -> str:
+    if not MIN_PASSWORD_LEN <= len(password) <= 256:
+        raise AuthError(f'密码须为 {MIN_PASSWORD_LEN}–256 个字符')
+    return _hasher.hash(password)
+
+
 def credentials(username, password, tz):
     username = username.strip().lower()
     if not re.fullmatch(r'[a-z0-9_]{3,32}', username):
         raise AuthError('用户名须为 3–32 个英文字母、数字或下划线')
-    if not 12 <= len(password) <= 256:
-        raise AuthError('密码须为 12–256 个字符')
+    hashed = _hash_password(password)
     try:
         ZoneInfo(tz)
     except (ValueError, KeyError):
         raise AuthError('无效的时区') from None
-    return username, _hasher.hash(password)
+    return username, hashed
 
 
 def invite(days=7, max_uses=1):
@@ -68,22 +91,55 @@ def _invite_valid(con, invitation):
     return True
 
 
-def create_user(username, password, tz='Asia/Shanghai', invitation=None, *, admin=False):
+def create_user(
+    username,
+    password,
+    tz='Asia/Shanghai',
+    invitation=None,
+    *,
+    admin=False,
+    email=None,
+    require_invite=None,
+    require_email=False,
+):
     invitation = (invitation or "").strip()
-    if not admin:
+    if require_invite is None:
+        require_invite = (not admin) and (not open_registration_enabled())
+    norm_email = normalize_email(email)
+    if (require_email or (not admin and open_registration_enabled())) and not norm_email:
+        raise AuthError('请填写有效的邮箱地址')
+    if require_invite:
         with connect() as con:
             if not _invite_valid(con, invitation):
                 raise AuthError('邀请码无效、已使用或已过期')
+    elif not admin:
+        now = time.time()
+        with connect() as con:
+            con.execute('BEGIN IMMEDIATE')
+            con.execute(
+                'INSERT INTO login_limits VALUES (?, 0, ?) '
+                'ON CONFLICT(key) DO UPDATE SET attempts=0, reset_at=excluded.reset_at WHERE login_limits.reset_at<=?',
+                ('register_global', now + 900, now),
+            )
+            row = con.execute('SELECT attempts FROM login_limits WHERE key=?', ('register_global',)).fetchone()
+            if row[0] >= 30:
+                raise AuthError('注册尝试过多，请稍后再试')
+            con.execute('UPDATE login_limits SET attempts=attempts+1 WHERE key=?', ('register_global',))
     username, hashed = credentials(username, password, tz)
     with connect() as con:
         con.execute('BEGIN IMMEDIATE')
-        if not admin:
+        if require_invite:
             if not _invite_valid(con, invitation):
                 raise AuthError('邀请码无效、已使用或已过期')
         if con.execute('SELECT 1 FROM users WHERE username=?', (username,)).fetchone():
             raise AuthError('用户名不可用')
-        uid = con.execute('INSERT INTO users (name, username, password_hash, tz, disabled, created_at) VALUES (?, ?, ?, ?, 0, CURRENT_TIMESTAMP)', (username, username, hashed, tz)).lastrowid
-        if not admin:
+        if norm_email and con.execute('SELECT 1 FROM users WHERE email=?', (norm_email,)).fetchone():
+            raise AuthError('该邮箱已被注册')
+        uid = con.execute(
+            'INSERT INTO users (name, username, email, password_hash, tz, disabled, created_at) VALUES (?, ?, ?, ?, ?, 0, CURRENT_TIMESTAMP)',
+            (username, username, norm_email, hashed, tz),
+        ).lastrowid
+        if require_invite:
             dig = digest(invitation)
             con.execute('INSERT INTO invite_uses (digest, user_id) VALUES (?, ?)', (dig, uid))
             con.execute('UPDATE invites SET used_by=? WHERE digest=?', (uid, dig))
@@ -92,18 +148,19 @@ def create_user(username, password, tz='Asia/Shanghai', invitation=None, *, admi
 
 
 def login(username, password):
-    username = username.strip().lower()[:256]
+    identifier = username.strip().lower()[:256]
     now = time.time()
     # Reserve an attempt BEFORE password hashing, durably and atomically.
     with connect() as con:
         con.execute('BEGIN IMMEDIATE')
-        for key, limit in [(digest(username), 5), ('global', 100)]:
+        for key, limit in [(digest(identifier), 5), ('global', 100)]:
             con.execute('INSERT INTO login_limits VALUES (?, 0, ?) ON CONFLICT(key) DO UPDATE SET attempts=0, reset_at=excluded.reset_at WHERE login_limits.reset_at<=?', (key, now+900, now))
             row = con.execute('SELECT attempts FROM login_limits WHERE key=?', (key,)).fetchone()
             if row[0] >= limit:
                 raise AuthError('登录尝试过多，请在 15 分钟后重试')
-        con.execute('UPDATE login_limits SET attempts=attempts+1 WHERE key IN (?, ?)', (digest(username), 'global'))
-        row = con.execute('SELECT * FROM users WHERE username=?', (username,)).fetchone()
+        con.execute('UPDATE login_limits SET attempts=attempts+1 WHERE key IN (?, ?)', (digest(identifier), 'global'))
+        col = 'email' if '@' in identifier else 'username'
+        row = con.execute(f'SELECT * FROM users WHERE {col}=?', (identifier,)).fetchone()
     valid = False
     try:
         valid = _hasher.verify(row['password_hash'] if row and row['password_hash'] else _dummy, password[:257])
@@ -120,7 +177,7 @@ def login(username, password):
             raise AuthError('账号状态已改变，请重新登录')
         con.execute('DELETE FROM auth_sessions WHERE expires<=?', (now,))
         con.execute('INSERT INTO auth_sessions VALUES (?, ?, ?)', (digest(token), row['id'], now+43200))
-        con.execute('DELETE FROM login_limits WHERE key=?', (digest(username),))
+        con.execute('DELETE FROM login_limits WHERE key=?', (digest(identifier),))
     log.info('login_succeeded user_id=%s', row['id'])
     return token
 
@@ -144,10 +201,12 @@ def logout(token):
 
 
 def manage(username, *, password=None, disabled=None):
-    hashed = credentials(username, password, 'Asia/Shanghai')[1] if password is not None else None
+    hashed = _hash_password(password) if password is not None else None
+    identifier = username.strip().lower()
+    col = 'email' if '@' in identifier else 'username'
     with connect() as con:
         con.execute('BEGIN IMMEDIATE')
-        row = con.execute('SELECT id FROM users WHERE username=?', (username.lower(),)).fetchone()
+        row = con.execute(f'SELECT id FROM users WHERE {col}=?', (identifier,)).fetchone()
         if not row:
             raise AuthError('账号不存在')
         if hashed:

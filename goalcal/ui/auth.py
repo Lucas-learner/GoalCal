@@ -56,7 +56,7 @@ def _local_login_page():
             st.error(english_auth_error(str(exc)))
     with register_tab, st.form('register'):
         username = st.text_input('Username', key='register_name')
-        password = st.text_input('Password (at least 12 characters)', type='password')
+        password = st.text_input('Password (at least 6 characters)', type='password')
         invitation = st.text_input('Invitation code', type='password')
         tz = st.selectbox('Time zone', options=_TIMEZONES, index=_DEFAULT_TZ_INDEX)
         registered = st.form_submit_button('Register')

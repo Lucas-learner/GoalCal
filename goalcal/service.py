@@ -22,6 +22,7 @@ def main():
     parser.add_argument('--ngrok')
     parser.add_argument('--url')
     parser.add_argument('--config')
+    parser.add_argument('--legacy-ui', action='store_true', help='Enable the retained Streamlit compatibility UI (local regression only)')
     args = parser.parse_args()
     configure_logging()
     if args.service == 'backup':
@@ -33,18 +34,22 @@ def main():
         init_db()  # fail before binding port if migration fails
         upstream_port = os.getenv('GOALCAL_UPSTREAM_PORT', '8502')
         gateway_port = os.getenv('GOALCAL_GATEWAY_PORT', '8501')
+        os.environ['GOALCAL_LEGACY_UI'] = '1' if args.legacy_ui else '0'
         commands = [
-            ('streamlit', [sys.executable, '-m', 'streamlit', 'run', str(ROOT / 'app.py'),
-                           '--server.address=127.0.0.1', f'--server.port={upstream_port}',
-                           '--server.enableXsrfProtection=true']),
             ('gateway', [sys.executable, '-m', 'uvicorn', 'goalcal.auth_proxy:app',
                          '--host', '127.0.0.1', '--port', gateway_port,
+                         '--proxy-headers', '--forwarded-allow-ips', '127.0.0.1',
                          '--no-access-log', '--log-level', 'warning']),
         ]
+        if args.legacy_ui:
+            commands.insert(0, ('streamlit', [sys.executable, '-m', 'streamlit', 'run', str(ROOT / 'app.py'),
+                                            '--server.address=127.0.0.1', f'--server.port={upstream_port}',
+                                            '--server.enableXsrfProtection=true']))
     elif args.provider == 'ngrok':
         if not args.ngrok or not args.config:
             parser.error('ngrok requires --ngrok and --config')
-        command = [args.ngrok, 'http', 'http://127.0.0.1:8501',
+        gateway_port = os.getenv('GOALCAL_GATEWAY_PORT', '8501')
+        command = [args.ngrok, 'http', f'http://127.0.0.1:{gateway_port}',
                    '--config', args.config, '--inspect=false',
                    '--log', 'stdout', '--log-format', 'json', '--log-level', 'warn']
         if args.url:

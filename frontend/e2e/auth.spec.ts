@@ -1,0 +1,29 @@
+import { test, expect } from '@playwright/test';
+
+test('root, open email registration, email login, language and feedback', async ({ page }) => {
+  const suffix = Date.now().toString();
+  const email = `audit-${suffix}@example.test`;
+  await page.goto('/');
+  await expect(page.getByRole('textbox', { name: '用户名或邮箱', exact: true })).toBeVisible();
+  await page.getByRole('link', { name: '注册', exact: true }).click();
+  await expect(page.getByRole('textbox', { name: '邮箱', exact: true })).toBeVisible();
+  await expect(page.getByRole('textbox', { name: '邀请码', exact: true })).toHaveCount(0);
+  await page.getByRole('textbox', { name: '用户名', exact: true }).fill(`audit_${suffix}`);
+  await page.getByRole('textbox', { name: '邮箱', exact: true }).fill(email);
+  await page.getByRole('textbox', { name: '密码（至少 6 位）', exact: true }).fill('Audit-2026-safe!');
+  await page.getByRole('button', { name: '注册', exact: true }).click();
+  await expect(page.getByRole('textbox', { name: '用户名或邮箱', exact: true })).toBeVisible();
+  await page.getByRole('link', { name: 'EN', exact: true }).click();
+  await page.getByRole('textbox', { name: 'Username or email', exact: true }).fill(email);
+  await page.getByRole('textbox', { name: 'Password', exact: true }).fill('Audit-2026-safe!');
+  await page.getByRole('button', { name: 'Log in', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Today', exact: true })).toBeVisible();
+  await page.goto('/');
+  await expect(page).toHaveURL(/\/app\/$/);
+  await page.goto('/app/settings');
+  await page.getByRole('button', { name: 'Metrics & Feedback', exact: true }).click();
+  await page.locator('#feedback-message-input').fill('Consolidation browser acceptance feedback.');
+  const submitted = page.waitForResponse(r => r.url().endsWith('/feedback') && r.request().method() === 'POST');
+  await page.getByRole('button', { name: 'Submit feedback', exact: true }).click();
+  expect((await submitted).status()).toBe(200);
+});

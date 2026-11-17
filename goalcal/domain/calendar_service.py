@@ -106,6 +106,8 @@ def find_event(
 
 
 def move_event(session: Session, event: Event, new_start: datetime, tz: str) -> Event:
+    from ..web.legacy import require_idle
+    require_idle(session, event_id=event.id)
     duration = event.end_utc - event.start_utc
     event.start_utc = as_utc_naive(new_start, tz)
     event.end_utc = event.start_utc + duration
@@ -116,6 +118,8 @@ def move_event(session: Session, event: Event, new_start: datetime, tz: str) -> 
 
 def delete_event(session: Session, event: Event) -> None:
     """硬删事件。scheduled 由未来目标块推导，步骤状态无需回写。"""
+    from ..web.legacy import require_idle
+    require_idle(session, event_id=event.id)
     session.execute(update(Checkin).where(Checkin.event_id == event.id).values(event_id=None))
     session.execute(update(Interaction).where(Interaction.event_id == event.id).values(event_id=None))
     session.execute(update(RescheduleLog).where(RescheduleLog.new_event_id == event.id).values(new_event_id=None))
@@ -220,6 +224,8 @@ def busy_blocks(
 ) -> list[BusyBlock]:
     blocks = []
     for ev in events_between(session, user_id, start_utc, end_utc):
+        if ev.status in {"skipped", "missed"}:
+            continue
         blocks.append(
             BusyBlock(
                 start=as_local(ev.start_utc, tz),

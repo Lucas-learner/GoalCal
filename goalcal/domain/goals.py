@@ -114,6 +114,8 @@ def find_goal(session: Session, user_id: int, hint: str) -> Goal | None:
 
 def archive_goal(session: Session, goal: Goal) -> int:
     """软删目标，并撤掉它挂在日历上的未来目标块。"""
+    from ..web.legacy import require_idle
+    require_idle(session, goal_id=goal.id)
     from . import calendar_service as cal
 
     removed = sum(cal.cancel_blocks(session, step.id) for step in goal.steps)
@@ -132,6 +134,8 @@ def extend_deadline(session: Session, goal: Goal, days: int, today: date | None 
 
 def pause_goal(session: Session, goal: Goal, now: datetime | None = None) -> int:
     """暂停目标：不再参与排期和过期块提醒；未来目标块撤掉，恢复时重新排。"""
+    from ..web.legacy import require_idle
+    require_idle(session, goal_id=goal.id)
     from . import calendar_service as cal
 
     reference = now or now_utc()
@@ -185,6 +189,8 @@ def update_step(
 
     计划是用户的工作文档，不只是 AI 一次性生成的结果；修改后同步未来目标块标题。
     """
+    from ..web.legacy import require_idle
+    require_idle(session, step_id=step.id)
     if title is not None:
         cleaned = title.strip()[:200]
         if cleaned:
@@ -213,6 +219,8 @@ def update_step(
 
 def delete_step(session: Session, step: Step) -> None:
     """删除一个步骤，连同它的打卡记录和未来目标块。"""
+    from ..web.legacy import require_idle
+    require_idle(session, step_id=step.id)
     from . import calendar_service as cal
 
     cal.cancel_blocks(session, step.id)
@@ -228,6 +236,8 @@ def replace_steps(
     session: Session, goal: Goal, step_defs: list[dict], template_key: str = "llm"
 ) -> None:
     """用一份新计划替换目标的全部步骤（用于 AI 重新拆解）。"""
+    from ..web.legacy import require_idle
+    require_idle(session, goal_id=goal.id)
     from . import calendar_service as cal
 
     for step in list(goal.steps):
@@ -343,6 +353,8 @@ def complete_step(
     partial  → 只记录投入时间，步骤仍是 todo（不伪造 scheduled 状态）。
     not_done → 保留原状态，只留一条打卡记录，供 72h 恢复闭环使用。
     """
+    from ..web.legacy import require_idle
+    require_idle(session, step_id=step.id)
     if verdict == "done":
         logged = minutes if minutes is not None else step.est_min
         step.status = "done"

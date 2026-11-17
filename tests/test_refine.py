@@ -467,4 +467,3 @@ def test_refine_upcoming_rejects_steps_exceeding_duration_limit(session, user, m
     titles = [s.title for s in created]
     assert "周末长跑14公里" not in titles
     assert all(s.est_min <= 60 for s in created)
-

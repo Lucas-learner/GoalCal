@@ -227,4 +227,3 @@ def test_chinese_week_variants():
     ]
     for text, expected in cases:
         assert find_dates(text, NOW)[0][1] == expected, f"failed on {text}"
-

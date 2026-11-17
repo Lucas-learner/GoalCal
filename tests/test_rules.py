@@ -314,4 +314,3 @@ def test_reproduce_next_next_week_meeting_rule_parse():
     assert action.title == "开组会"
     assert action.start == datetime(2026, 11, 11, 15, 0, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
     assert action.end == datetime(2026, 11, 11, 16, 0, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
-

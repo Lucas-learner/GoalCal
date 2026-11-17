@@ -8,6 +8,8 @@ import uuid
 import httpx2
 import pytest
 
+from dataclasses import replace
+
 from goalcal import auth, db, storage
 from goalcal import auth_proxy
 from goalcal.auth_proxy import COOKIE_NAME, app
@@ -15,11 +17,15 @@ from goalcal.auth_proxy import COOKIE_NAME, app
 
 @pytest.fixture(autouse=True)
 def _isolated_auth_db(tmp_path, monkeypatch):
+    monkeypatch.setenv("GOALCAL_LEGACY_UI", "1")
     path = tmp_path / "auth.db"
-    db.init_db(f"sqlite:///{path}")
+    url = f"sqlite:///{path}"
+    orig_settings = db.settings
+    db.init_db(url)
+    monkeypatch.setattr(db, "settings", replace(orig_settings, db_url=url))
     monkeypatch.setattr(storage, "database_path", lambda url=None: path)
     yield
-    db.get_engine()
+    db.get_engine(orig_settings.db_url)
 
 
 def _account():
@@ -197,7 +203,9 @@ def test_login_page_matches_app_shell_style():
         transport = httpx2.ASGITransport(app=app)
         async with httpx2.AsyncClient(transport=transport, base_url="https://goalcal.example") as client:
             page = await client.get("/", headers={"Accept": "text/html"})
-            assert "📅 GoalCal" in page.text
+            assert 'class="brand-mark"' in page.text
+            assert "GoalCal" in page.text
+            assert "📅" not in page.text
             assert 'aria-current="page">Log in' in page.text
             assert 'href="/_goalcal/register"' in page.text
             register = await client.get("/_goalcal/register")
@@ -255,5 +263,51 @@ def test_register_page_timezone_select_and_nonce_csp():
             assert login_nonce != nonce  # Per-page unique nonce
             assert '<select name="tz"' not in login.text
             assert '<script nonce=' not in login.text
+
+    asyncio.run(scenario())
+
+
+def test_auth_pages_follow_accept_language_and_cookie_override():
+    async def scenario():
+        transport = httpx2.ASGITransport(app=app)
+        async with httpx2.AsyncClient(transport=transport, base_url="https://goalcal.example") as client:
+            zh_login = await client.get("/", headers={"Accept": "text/html", "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"})
+            assert zh_login.status_code == 200
+            assert '<html lang="zh-CN">' in zh_login.text
+            assert "让计划适应你的生活节奏" in zh_login.text
+            assert 'aria-current="page">登录</a>' in zh_login.text
+            assert "Plans that adapt" not in zh_login.text
+            assert "试运行期间" not in zh_login.text
+
+            en_login = await client.get("/", headers={"Accept": "text/html", "Accept-Language": "en-US,en;q=0.9,zh;q=0.5"})
+            assert en_login.status_code == 200
+            assert '<html lang="en">' in en_login.text
+            assert "Plans that adapt to the rhythm of your life" in en_login.text
+            assert 'aria-current="page">Log in</a>' in en_login.text
+            assert "让计划适应你的生活节奏" not in en_login.text
+            assert "During the trial" not in en_login.text
+
+            switched = await client.get("/_goalcal/lang?lang=zh&next=/", follow_redirects=False)
+            assert switched.status_code == 303
+            assert switched.headers["location"] == "/"
+            overridden = await client.get("/", headers={"Accept": "text/html", "Accept-Language": "en-US,en;q=0.9"})
+            assert "让计划适应你的生活节奏" in overridden.text
+
+            # Selecting a language on the login page persists it onto the user account on login.
+            name = _account()
+            await client.get("/_goalcal/lang?lang=en&next=/_goalcal/login?next=/app/", follow_redirects=False)
+            page_en = await client.get("/_goalcal/login?next=/app/", headers={"Accept": "text/html"})
+            logged = await client.post("/_goalcal/login", data={
+                "username": name, "password": "test-password-long", "csrf": _csrf(page_en), "next": "/app/",
+            }, follow_redirects=False)
+            assert logged.status_code == 303
+            token = client.cookies.get(COOKIE_NAME)
+            assert token
+            from datetime import datetime, timezone
+            from goalcal.web.core import Service
+            from goalcal.web.http import scoped
+            with scoped(token) as (session, principal):
+                me = Service(session, principal.user_id, principal.tz, datetime.now(timezone.utc)).me()
+                assert me["lang"] == "en"
 
     asyncio.run(scenario())

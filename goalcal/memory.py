@@ -124,6 +124,12 @@ def set_preference(
         raise PreferenceError("scope must be a non-empty string")
     scope = scope.strip()
     _validate_meta(source, confidence, expires_at)
+    if key == "web_availability":
+        from .web.availability import validate_availability
+        try:
+            value = validate_availability(value)
+        except ValueError as exc:
+            raise PreferenceError(str(exc)) from exc
     if key in SCHEDULER_KEYS:
         value = SCHEDULER_KEYS[key](value)  # 白名单键：写入即校验并归一化
     try:
@@ -217,6 +223,7 @@ def get_scheduler_preferences(session: Session, user_id: int, *, now: datetime |
             UserPreference.scope.in_((SCHEDULER_SCOPE, DEFAULT_SCOPE)),
         )
     )
+    web_availability = None
     has_preferred_windows = False
     learning_enabled = True
     for row in sorted(rows, key=lambda item: item.scope == DEFAULT_SCOPE):
@@ -226,6 +233,13 @@ def get_scheduler_preferences(session: Session, user_id: int, *, now: datetime |
             try:
                 learning_enabled = json.loads(row.value) is not False
             except (json.JSONDecodeError, TypeError):
+                pass
+            continue
+        if row.key == "web_availability" and row.scope == SCHEDULER_SCOPE:
+            from .web.availability import validate_availability
+            try:
+                web_availability = validate_availability(json.loads(row.value))
+            except (ValueError, TypeError):
                 pass
             continue
         convert = SCHEDULER_KEYS.get(row.key)
@@ -246,4 +260,8 @@ def get_scheduler_preferences(session: Session, user_id: int, *, now: datetime |
         defaults = Preferences()
         prefs.day_start_hour = defaults.day_start_hour
         prefs.day_end_hour = defaults.day_end_hour
+    if web_availability is not None:
+        prefs.web_availability = web_availability
+        prefs.buffer_minutes = web_availability["buffer_minutes"]
+        prefs.max_goal_minutes_per_day = web_availability["max_goal_minutes_per_day"]
     return prefs
