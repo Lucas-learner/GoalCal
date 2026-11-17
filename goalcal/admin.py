@@ -62,7 +62,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='command', required=True)
     create = sub.add_parser('create-user'); create.add_argument('username'); create.add_argument('--tz', default='Asia/Shanghai')
-    inv = sub.add_parser('invite'); inv.add_argument('--days', type=int, default=7)
+    inv = sub.add_parser('invite'); inv.add_argument('--days', type=int, default=7, help='有效期天数，0 表示永久有效')
+    inv.add_argument('--max-uses', type=int, default=1, help='可使用次数，0 表示不限次数')
     for name in ('disable', 'enable', 'reset-password'):
         sub.add_parser(name).add_argument('username')
     sub.add_parser('migrate'); sub.add_parser('backup')
@@ -86,7 +87,7 @@ def main():
             raise ValueError('Passwords do not match')
         auth.create_user(args.username, password, args.tz, admin=True)
     elif args.command == 'invite':
-        print(auth.invite(args.days))
+        print(auth.invite(args.days, args.max_uses))
     elif args.command in ('disable', 'enable'):
         auth.manage(args.username, disabled=args.command == 'disable')
     elif args.command == 'reset-password':

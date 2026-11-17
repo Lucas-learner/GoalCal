@@ -513,16 +513,39 @@ def looks_like_new_command(text: str, now: datetime) -> bool:
     return action.intent in NEW_COMMAND_INTENTS or targeted_progress
 
 
-def auto_refine_if_low(
-    session: Session, user_id: int, goal: Goal, now: datetime, *, use_llm: bool = True
-) -> str:
-    """剩余 todo 步骤少于 2 个时，按阶段大纲自动补下一批；返回一句告知（没补则 ""）。"""
+def plan_refill(
+    session: Session,
+    user_id: int,
+    goal: Goal,
+    now: datetime,
+    *,
+    use_llm: bool = True,
+    completing: Step | None = None,
+) -> list[dict]:
+    """写库前规划下一批步骤（只读）；completing 是本轮即将完成的步骤。
+
+    写事务开始后 LLM 会被守卫拒绝（llm/client.py 的 write_transaction 保护），
+    所以完成步骤的路径必须先 plan、再写库、最后 apply_refill。
+    """
     if goal.status != "active":
-        return ""
-    pending = [s for s in goal.steps if s.status == "todo"]
+        return []
+    pending = [s for s in goal.steps if s.status == "todo" and s is not completing]
     if len(pending) >= 2:
+        return []
+    return refine.plan_upcoming_defs(session, goal, use_llm=use_llm, today=now.date())
+
+
+def apply_refill(
+    session: Session,
+    user_id: int,
+    goal: Goal,
+    now: datetime,
+    defs: list[dict],
+) -> str:
+    """应用 plan_refill 的规划结果，返回一句告知（没补则 ""）。"""
+    if not defs:
         return ""
-    created = refine.refine_upcoming(session, goal, use_llm=use_llm)
+    created = refine.refine_upcoming(session, goal, defs=defs)
     if not created:
         return ""
     metrics.record(
@@ -532,6 +555,19 @@ def auto_refine_if_low(
     )
     titles = ", ".join(f'"{s.title}"' for s in created)
     return f"You're almost out of steps, so I added {len(created)} more from the phase outline: {titles}."
+
+
+def auto_refine_if_low(
+    session: Session, user_id: int, goal: Goal, now: datetime, *, use_llm: bool = True
+) -> str:
+    """剩余 todo 步骤少于 2 个时，按阶段大纲自动补下一批；返回一句告知（没补则 ""）。
+
+    仅适用于尚未写库的路径；完成步骤的路径用 plan_refill + apply_refill。
+    """
+    return apply_refill(
+        session, user_id, goal, now,
+        plan_refill(session, user_id, goal, now, use_llm=use_llm),
+    )
 
 
 def _create_goal(session, user_id, action, now, tz, parser, *, use_llm: bool = True) -> Reply:
@@ -1101,6 +1137,11 @@ def _log_progress(session, user_id, action, now, tz, parser, *, use_llm: bool = 
         return Reply(f"“{goal.title}” is already complete. 🎉", action, parser)
 
     partial = action.checkin_outcome == "partial" or bool(PARTIAL.search(action.raw or ""))
+    # 先规划下一批：complete_step 写库后 LLM 会被写事务守卫拒绝
+    refill_defs = plan_refill(
+        session, user_id, goal, now, use_llm=use_llm,
+        completing=None if partial else step,
+    )
     goal_svc.complete_step(
         session, step, verdict="partial" if partial else "done", raw_text=action.raw,
         now=as_utc_naive(now, tz),
@@ -1109,7 +1150,7 @@ def _log_progress(session, user_id, action, now, tz, parser, *, use_llm: bool = 
         # 步骤已完成：已开始的块标 done 留作完成记录，未来块照常取消
         cal.resolve_due_blocks_done(session, step.id, as_utc_naive(now, tz))
         cal.cancel_future_blocks(session, step.id, as_utc_naive(now, tz))
-    note = auto_refine_if_low(session, user_id, goal, now, use_llm=use_llm)
+    note = apply_refill(session, user_id, goal, now, refill_defs)
     pct = int(goal_svc.progress(goal) * 100)
     nxt = _pick_step(goal)
     if partial:
@@ -1650,18 +1691,22 @@ def _checkin_outcome(session, user_id, ctx, action, text, now, tz, parser, *, us
         outcome = "missed"
 
     now_utc = as_utc_naive(now, tz)
+    done_step = session.get(Step, ev.step_id) if outcome == "done" and ev.step_id is not None else None
+    done_goal = done_step.goal if done_step is not None else None
+    # 先规划下一批：resolve_block 写库后 LLM 会被写事务守卫拒绝
+    refill_defs = (
+        plan_refill(session, user_id, done_goal, now, use_llm=use_llm, completing=done_step)
+        if done_goal is not None else []
+    )
     recovery.resolve_block(session, ev, outcome, now_utc)
     ctx.outcome = outcome
     ctx.step_id = ev.step_id
 
     if outcome == "done":
-        step = session.get(Step, ev.step_id) if ev.step_id is not None else None
+        step, goal = done_step, done_goal
         if ev.step_id is not None:
             cal.cancel_future_blocks(session, ev.step_id, now_utc)
-        goal = step.goal if step is not None else None
-        refine_note = ""
-        if goal is not None and goal.status == "active":
-            refine_note = auto_refine_if_low(session, user_id, goal, now, use_llm=use_llm)
+        refine_note = apply_refill(session, user_id, goal, now, refill_defs) if goal is not None else ""
         pct = int(goal_svc.progress(goal) * 100) if goal is not None else 0
         text_out = f"Nice — \"{_block_title(session, ev)}\" marked done! Goal progress is at {pct}%."
         if goal is not None and sum(1 for s in goal.steps if s.status == "done") == 1:

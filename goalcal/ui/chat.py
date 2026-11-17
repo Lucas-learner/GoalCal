@@ -93,8 +93,9 @@ def render_messages(messages: list[dict]) -> None:
         # 加载更早的消息后按此键滚动回原首条。
         key = msg.get("client_id") or (f"db_{msg['id']}" if msg.get("id") else f"unsaved_{index}")
         with st.container(key=f"chat_msg_{key}"):
-            with st.chat_message(msg["role"]):
-                st.markdown(message_markdown(msg["content"]))
+            with st.container(key=f"chat_role_{msg['role']}_{key}"):
+                with st.chat_message(msg["role"]):
+                    st.markdown(message_markdown(msg["content"]))
 
 
 def append(messages: list[dict], role: str, content: str) -> None:

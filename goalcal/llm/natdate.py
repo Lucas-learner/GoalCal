@@ -199,9 +199,10 @@ def find_dates(text: str, now: datetime) -> list[tuple[str, datetime]]:
         n = int(m.group(1) or m.group(2))
         add(m, (now + timedelta(days=n)).date())
 
-    # 4) next week / 下周（"下周一" 交给下面的中文星期规则，别在这里吃掉）
-    for m in re.finditer(r"\bnext\s+week\b|下周(?![一二三四五六日天])", text, re.I):
-        add(m, (now + timedelta(days=7)).date())
+    # 4) next week / 下周 / 下下周（"下周一" 交给下面的中文星期规则，别在这里吃掉）
+    for m in re.finditer(r"\bnext\s+week\b|(下+)\s*(?:个)?(?:周|星期|礼拜)(?![一二三四五六日天])", text, re.I):
+        weeks = len(m.group(1)) if m.group(1) else 1
+        add(m, (now + timedelta(days=7 * weeks)).date())
 
     # 5) weekday（支持 next / this / coming）
     for m in re.finditer(
@@ -217,11 +218,16 @@ def find_dates(text: str, now: datetime) -> list[tuple[str, datetime]]:
             d = _next_weekday(now, target, qualifier == "coming")
         add(m, d)
 
-    # 6) 中文星期：周五 / 星期五 / 礼拜五 / 下周五
-    for m in re.finditer(r"(下+|这|本)?\s*(?:周|星期|礼拜)([一二三四五六日天])", text):
+    # 6) 中文星期：周五 / 星期五 / 礼拜五 / 下周五 / 下下周三 / 这周日
+    for m in re.finditer(r"(下+|这|本)?\s*(?:个)?(?:周|星期|礼拜)([一二三四五六日天])", text):
+        prefix = m.group(1) or ""
         target = CN_WEEKDAYS[m.group(2)]
-        force_next = bool(m.group(1) and "下" in m.group(1))
-        add(m, _next_weekday(now, target, force_next))
+        count_xia = prefix.count("下")
+        if count_xia >= 1:
+            d = (now + timedelta(days=7 * count_xia - now.weekday() + target)).date()
+        else:
+            d = _next_weekday(now, target, False)
+        add(m, d)
 
     # 7) 中文月日：10月29日 / 10月29号
     for m in re.finditer(r"(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]", text):

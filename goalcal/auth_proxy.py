@@ -11,6 +11,7 @@ import html
 import os
 import secrets
 from urllib.parse import urlsplit
+import zoneinfo
 
 import httpx2
 import websockets
@@ -35,6 +36,35 @@ _HOP_HEADERS = {
     "te", "trailer", "transfer-encoding", "upgrade",
 }
 
+_TIMEZONES = sorted(zoneinfo.available_timezones())
+_TZ_OPTIONS_HTML = "".join(
+    f'<option value="{html.escape(tz)}"'
+    f'{" selected" if tz == "Asia/Shanghai" else ""}>'
+    f'{html.escape(tz)}</option>'
+    for tz in _TIMEZONES
+)
+
+_DETECT_TZ_SCRIPT = """<script nonce="{nonce}">
+(function() {{
+  try {{
+    var tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (!tz) return;
+    var sel = document.querySelector('select[name="tz"]');
+    if (!sel) return;
+    for (var i = 0; i < sel.options.length; i++) {{
+      var opt = sel.options[i];
+      if (opt.value === tz) {{
+        if (i !== 0) {{
+          sel.insertBefore(opt, sel.firstChild);
+        }}
+        sel.value = tz;
+        break;
+      }}
+    }}
+  }} catch (e) {{}}
+}})();
+</script>"""
+
 
 def english_auth_error(message: str) -> str:
     return {
@@ -50,37 +80,59 @@ def english_auth_error(message: str) -> str:
 
 def _login_page(request: Request, message: str = "", *, register: bool = False) -> HTMLResponse:
     form_token = secrets.token_urlsafe(32)
+    script_nonce = secrets.token_urlsafe(32)
     notice = f'<p class="notice" role="alert">{html.escape(message)}</p>' if message else ""
     if register:
-        fields = """<label>Username<input name="username" autocomplete="username" required></label>
+        fields = f"""<label>Username<input name="username" autocomplete="username" required></label>
 <label>Password (at least 12 characters)<input name="password" type="password" autocomplete="new-password" required></label>
 <label>Invitation code<input name="invitation" required></label>
-<label>Time zone<input name="tz" value="Asia/Shanghai" required></label>"""
-        heading, action, button = "Create account", "/_goalcal/register", "Register"
+<label>Time zone<select name="tz" required>{_TZ_OPTIONS_HTML}</select></label>"""
+        action, button = "/_goalcal/register", "Register"
+        login_current, register_current = "", ' aria-current="page"'
+        script = _DETECT_TZ_SCRIPT.format(nonce=script_nonce)
     else:
         fields = """<label>Username<input name="username" autocomplete="username" required></label>
 <label>Password<input name="password" type="password" autocomplete="current-password" required></label>"""
-        heading, action, button = "Log in", "/_goalcal/login", "Log in"
+        action, button = "/_goalcal/login", "Log in"
+        login_current, register_current = ' aria-current="page"', ""
+        script = ""
     body = f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GoalCal</title><style>
-body{{font:16px system-ui,sans-serif;background:#f8fafc;color:#172033;margin:0}}
-main{{max-width:420px;margin:10vh auto;padding:32px;background:white;border:1px solid #e6eaf0;border-radius:12px}}
-h1{{font-size:28px;margin:0 0 20px}}nav{{display:flex;gap:18px;margin-bottom:22px}}
-a{{color:#176c69}}label{{display:block;margin:14px 0;font-weight:600}}
-input{{box-sizing:border-box;display:block;width:100%;padding:10px;margin-top:6px;border:1px solid #cbd5df;border-radius:6px;font:inherit}}
-button{{width:100%;padding:11px;border:0;border-radius:6px;background:#176c69;color:white;font:inherit;cursor:pointer}}
-.notice{{padding:10px;background:#fff3e6;border-radius:6px}}.disclosure{{font-size:12px;color:#64748b;line-height:1.5;margin-top:24px}}
-</style></head><body><main><h1>📆 GoalCal</h1><nav><a href="/">Log in</a><a href="/_goalcal/register">Create account</a></nav>
-<h2>{heading}</h2>{notice}<form method="post" action="{action}"><input type="hidden" name="csrf" value="{form_token}">{fields}<button type="submit">{button}</button></form>
+:root{{--ink:#292524;--primary:#0f766e;--line:#e7e2da;--fill:#f1eee9}}
+*{{box-sizing:border-box}}
+body{{font:16px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;background:#faf9f6;color:var(--ink);margin:0}}
+main{{max-width:1040px;margin:0 auto;padding:24px clamp(20px,4vw,48px) 64px}}
+.brand{{font-size:2.6rem;font-weight:700;letter-spacing:-0.02em;margin:24px 0 28px}}
+nav{{display:flex;gap:24px;border-bottom:1px solid var(--line)}}
+nav a{{padding:0 4px 10px;color:var(--ink);text-decoration:none;font-size:1.05rem}}
+nav a[aria-current="page"]{{color:var(--primary);border-bottom:2px solid var(--primary);margin-bottom:-1px}}
+.card{{border:1px solid var(--line);border-radius:8px;padding:32px;margin-top:32px}}
+label{{display:block;margin:0 0 20px}}
+input,select{{display:block;width:100%;margin-top:8px;padding:12px 14px;border:1px solid transparent;border-radius:8px;background:var(--fill);font:inherit;color:var(--ink)}}
+input:focus,select:focus{{outline:2px solid var(--primary);outline-offset:-1px}}
+button{{padding:9px 22px;border:1px solid #d9d3c9;border-radius:8px;background:#fff;color:var(--ink);font:inherit;cursor:pointer}}
+button:hover{{background:var(--fill)}}
+.notice{{padding:12px 14px;background:#fdf0dd;border-radius:8px;margin:0 0 20px}}
+.disclosure{{font-size:13px;color:#8a857d;line-height:1.6;margin-top:28px}}
+</style></head><body><main><h1 class="brand">📅 GoalCal</h1>
+<nav><a href="/"{login_current}>Log in</a><a href="/_goalcal/register"{register_current}>Create account</a></nav>
+<div class="card">{notice}<form method="post" action="{action}"><input type="hidden" name="csrf" value="{form_token}">{fields}<button type="submit">{button}</button></form></div>
 <p class="disclosure">During the trial, we log action types, timing, and errors to improve the app. Passwords, chat messages, and calendar details are not automatically added to runtime logs.</p>
-</main></body></html>"""
+</main>{script}</body></html>"""
     response = HTMLResponse(body)
     response.headers["Cache-Control"] = "no-store"
     response.headers["Content-Security-Policy"] = (
-        "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; "
+        f"default-src 'none'; script-src 'nonce-{script_nonce}'; style-src 'unsafe-inline'; form-action 'self'; "
         "base-uri 'none'; frame-ancestors 'none'"
     )
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.set_cookie(
+        FORM_COOKIE_NAME, form_token, max_age=600, path="/",
+        secure=_secure_cookie(request), httponly=True, samesite="strict",
+    )
+    return response
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.set_cookie(

@@ -1375,10 +1375,14 @@ def complete_step(step_id: int) -> None:
             return
         title = step.title
         now_utc = as_utc_naive(runtime.now(), runtime.timezone())
+        # 先规划下一批：complete_step 写库后 LLM 会被写事务守卫拒绝
+        refill_defs = agent.plan_refill(
+            session, runtime.user_id(), step.goal, runtime.now(), completing=step
+        )
         goal_svc.complete_step(session, step, raw_text="completed from UI", now=now_utc)
         cal.resolve_due_blocks_done(session, step_id, now_utc)
         cal.cancel_future_blocks(session, step_id, now_utc)
-        note = agent.auto_refine_if_low(session, runtime.user_id(), step.goal, runtime.now())
+        note = agent.apply_refill(session, runtime.user_id(), step.goal, runtime.now(), refill_defs)
     pending = st.session_state.get("pending")
     if pending and pending.get("step_id") == step_id:
         st.session_state["pending"] = None

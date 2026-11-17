@@ -32,7 +32,10 @@ the whole goal now. Return ONE JSON object:
 {{"outline":["阶段1","阶段2","阶段3"],"steps":[{{"milestone":"阶段1","title":"...","outcome":"...","est_min":30,"energy":1,"kind":"deep"}}]}}
 
 Rules:
-1. outline: 3-5 short phase names covering the whole goal, in order.
+1. outline: 3-5 short phase names covering the whole goal, in order. Scale them to
+   days_left: a short deadline needs fewer, broader phases; a long horizon allows
+   more gradual ones. If a phase has a hard peak target (a distance, volume, or
+   score to reach before wind-down), say so in the phase name.
 2. steps: 2-3 concrete steps for the FIRST phase only; their milestone must be
    exactly outline[0]. The very first step should be small enough to start today.
 3. Every step must be specific to THIS goal. One step = one observable action

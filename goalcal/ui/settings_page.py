@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import json
+import zoneinfo
 
 import streamlit as st
 
-from .. import auth, feedback, memory, metrics
-from ..auth_proxy import COOKIE_NAME
+from .. import auth, db, feedback, memory, metrics
 from ..config import settings
 from ..domain import ics_import
+from ..models import User
 from ..safe_fetch import fetch_ics
 from . import runtime
-from .auth import clear_state
+from .auth import behind_proxy, clear_state
+
+_TIMEZONES = sorted(zoneinfo.available_timezones())
 
 
 FEEDBACK_CATEGORY_LABELS = {
@@ -38,13 +41,34 @@ def _render_account() -> None:
     details, action = st.columns([4, 1])
     details.markdown(f"**{st.session_state['username']}**")
     details.caption(f"Time zone: {runtime.timezone()}")
-    token = st.context.cookies.get(COOKIE_NAME)
-    if isinstance(token, str) and token:
+    if behind_proxy():
         action.html('<form action="/_goalcal/logout" method="post"><button type="submit">Log out</button></form>')
     elif action.button("Log out", key="settings_logout", use_container_width=True):
         auth.logout(st.session_state.get("auth_token"))
         clear_state()
         st.rerun(scope="app")
+
+    current_tz = runtime.timezone()
+    tz_index = _TIMEZONES.index(current_tz) if current_tz in _TIMEZONES else 0
+    with st.form("account_timezone"):
+        selected_tz = st.selectbox(
+            "Time zone",
+            options=_TIMEZONES,
+            index=tz_index,
+            help="Changing time zone affects scheduling and reminders.",
+        )
+        saved = st.form_submit_button("Save time zone")
+    if saved:
+        try:
+            with db.session_scope() as session:
+                user = session.get(User, runtime.user_id())
+                if user is not None:
+                    user.tz = selected_tz
+            st.session_state["tz"] = selected_tz
+            runtime.flash("Time zone updated. Changing your time zone affects scheduling.")
+            st.rerun()
+        except Exception as exc:
+            st.error(f"Failed to update time zone: {exc}")
 
 
 def _render_preferences() -> None:

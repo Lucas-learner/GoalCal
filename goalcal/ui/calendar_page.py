@@ -119,7 +119,10 @@ def _remember_range(state: dict) -> None:
 def render(*, active: bool = True) -> None:
     with st.container(key="calendar_heading"):
         if active:
-            st.title("Calendar")
+            with st.container(key="calendar_title_row", horizontal=True, vertical_alignment="bottom"):
+                st.title("Calendar")
+                with st.container(key="calendar_import_link"):
+                    st.page_link("routes/settings.py", label="Import calendar")
             st.caption("Your local schedule and goal blocks. Calendar connections are managed in Settings.")
     if active and (flash := st.session_state.pop("flash", None)):
         st.toast(flash)

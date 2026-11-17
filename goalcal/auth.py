@@ -43,35 +43,50 @@ def credentials(username, password, tz):
     return username, _hasher.hash(password)
 
 
-def invite(days=7):
-    if not 1 <= days <= 365:
-        raise AuthError('有效期须为 1–365 天')
+def invite(days=7, max_uses=1):
+    if not 0 <= days <= 365:
+        raise AuthError('有效期须为 0–365 天，0 表示永久有效')
+    if not 0 <= max_uses <= 10000:
+        raise AuthError('使用次数须为 0–10000 次，0 表示不限次数')
     token = secrets.token_urlsafe(32)
+    expires = None if days == 0 else time.time() + days * 86400
     with connect() as con:
-        con.execute('INSERT INTO invites VALUES (?, ?, NULL)', (digest(token), time.time()+days*86400))
+        con.execute('INSERT INTO invites (digest, expires, max_uses) VALUES (?, ?, ?)',
+                    (digest(token), expires, max_uses))
     log.info('invite_created')
     return token
+
+
+def _invite_valid(con, invitation):
+    row = con.execute('SELECT * FROM invites WHERE digest=?', (digest(invitation or ''),)).fetchone()
+    if not row or (row['expires'] is not None and row['expires'] <= time.time()):
+        return False
+    if row['max_uses']:
+        used = con.execute('SELECT COUNT(*) FROM invite_uses WHERE digest=?', (row['digest'],)).fetchone()[0]
+        if used >= row['max_uses']:
+            return False
+    return True
 
 
 def create_user(username, password, tz='Asia/Shanghai', invitation=None, *, admin=False):
     invitation = (invitation or "").strip()
     if not admin:
         with connect() as con:
-            row = con.execute('SELECT * FROM invites WHERE digest=?', (digest(invitation or ''),)).fetchone()
-            if not row or row['used_by'] is not None or row['expires'] <= time.time():
+            if not _invite_valid(con, invitation):
                 raise AuthError('邀请码无效、已使用或已过期')
     username, hashed = credentials(username, password, tz)
     with connect() as con:
         con.execute('BEGIN IMMEDIATE')
         if not admin:
-            row = con.execute('SELECT * FROM invites WHERE digest=?', (digest(invitation or ''),)).fetchone()
-            if not row or row['used_by'] is not None or row['expires'] <= time.time():
+            if not _invite_valid(con, invitation):
                 raise AuthError('邀请码无效、已使用或已过期')
         if con.execute('SELECT 1 FROM users WHERE username=?', (username,)).fetchone():
             raise AuthError('用户名不可用')
         uid = con.execute('INSERT INTO users (name, username, password_hash, tz, disabled, created_at) VALUES (?, ?, ?, ?, 0, CURRENT_TIMESTAMP)', (username, username, hashed, tz)).lastrowid
         if not admin:
-            con.execute('UPDATE invites SET used_by=? WHERE digest=?', (uid, digest(invitation)))
+            dig = digest(invitation)
+            con.execute('INSERT INTO invite_uses (digest, user_id) VALUES (?, ?)', (dig, uid))
+            con.execute('UPDATE invites SET used_by=? WHERE digest=?', (uid, dig))
     log.info('account_created user_id=%s', uid)
     return uid
 

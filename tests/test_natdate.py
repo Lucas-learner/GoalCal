@@ -34,7 +34,12 @@ def _first(text):
         ("next Monday", datetime(2026, 10, 26, 9, 0, tzinfo=TZ)),
         ("next Friday", datetime(2026, 10, 30, 9, 0, tzinfo=TZ)),
         ("周五", datetime(2026, 10, 23, 9, 0, tzinfo=TZ)),
-        ("下周五", datetime(2026, 10, 23, 9, 0, tzinfo=TZ)),
+        ("下周五", datetime(2026, 10, 30, 9, 0, tzinfo=TZ)),
+        ("下下周五", datetime(2026, 11, 6, 9, 0, tzinfo=TZ)),
+        ("这周五", datetime(2026, 10, 23, 9, 0, tzinfo=TZ)),
+        ("下周三", datetime(2026, 10, 28, 9, 0, tzinfo=TZ)),
+        ("下下周三", datetime(2026, 11, 4, 9, 0, tzinfo=TZ)),
+        ("下下周", datetime(2026, 11, 4, 9, 0, tzinfo=TZ)),
         ("October 28th", datetime(2026, 10, 28, 9, 0, tzinfo=TZ)),
         ("10/28", datetime(2026, 10, 28, 9, 0, tzinfo=TZ)),
         ("10月29日", datetime(2026, 10, 29, 9, 0, tzinfo=TZ)),
@@ -145,3 +150,81 @@ def test_extract_window(text, expected):
 )
 def test_extract_window_rejects_explicit_times_and_non_windows(text):
     assert extract_window(text, NOW) is None
+
+
+# ------------------------------------------------------------ 边界与周期回归：这周 / 下周 / 下下周
+
+
+def test_reproduce_next_next_week_saturday_boundary():
+    """回归用例：复现附件边界解析复测问题。
+    当前时刻：2026-10-31 10:00:00（周六）
+    输入：下下周三下午三点开组会
+    预期：2026-11-11 15:00
+    """
+    sat_now = datetime(2026, 10, 31, 10, 0, tzinfo=TZ)
+    found = find_dates("下下周三下午三点开组会", sat_now)
+    assert len(found) == 1
+    token, dt = found[0]
+    assert token == "下下周三"
+    assert dt == datetime(2026, 11, 11, 15, 0, tzinfo=TZ)
+
+
+def test_chinese_week_distinctions_cross_month():
+    """周六跨月边界测试：2026-10-31（周六），验证这周/下周/下下周及跨月到11月。"""
+    sat_now = datetime(2026, 10, 31, 10, 0, tzinfo=TZ)
+    cases = [
+        ("这周日", datetime(2026, 11, 1, 9, 0, tzinfo=TZ)),
+        ("下周一", datetime(2026, 11, 2, 9, 0, tzinfo=TZ)),
+        ("下周三", datetime(2026, 11, 4, 9, 0, tzinfo=TZ)),
+        ("下周日", datetime(2026, 11, 8, 9, 0, tzinfo=TZ)),
+        ("下下周一", datetime(2026, 11, 9, 9, 0, tzinfo=TZ)),
+        ("下下周三", datetime(2026, 11, 11, 9, 0, tzinfo=TZ)),
+        ("下下周日", datetime(2026, 11, 15, 9, 0, tzinfo=TZ)),
+    ]
+    for text, expected in cases:
+        assert find_dates(text, sat_now)[0][1] == expected, f"failed on {text}"
+
+
+def test_chinese_week_distinctions_on_sunday():
+    """周日基准测试：2026-10-25（周日），验证周日当天的这周/下周/下下周。"""
+    sun_now = datetime(2026, 10, 25, 10, 0, tzinfo=TZ)
+    cases = [
+        ("这周日", datetime(2026, 10, 25, 9, 0, tzinfo=TZ)),
+        ("下周日", datetime(2026, 11, 1, 9, 0, tzinfo=TZ)),
+        ("下下周日", datetime(2026, 11, 8, 9, 0, tzinfo=TZ)),
+        ("周一", datetime(2026, 10, 26, 9, 0, tzinfo=TZ)),
+        ("下周一", datetime(2026, 10, 26, 9, 0, tzinfo=TZ)),
+        ("下下周一", datetime(2026, 11, 2, 9, 0, tzinfo=TZ)),
+        ("下周三", datetime(2026, 10, 28, 9, 0, tzinfo=TZ)),
+        ("下下周三", datetime(2026, 11, 4, 9, 0, tzinfo=TZ)),
+    ]
+    for text, expected in cases:
+        assert find_dates(text, sun_now)[0][1] == expected, f"failed on {text}"
+
+
+def test_chinese_week_distinctions_cross_year():
+    """跨年基准测试：2026-12-30（周三），验证这周/下周/下下周跨入2027年。"""
+    year_end_now = datetime(2026, 12, 30, 10, 0, tzinfo=TZ)
+    cases = [
+        ("这周五", datetime(2027, 1, 1, 9, 0, tzinfo=TZ)),
+        ("下周五", datetime(2027, 1, 8, 9, 0, tzinfo=TZ)),
+        ("下下周五", datetime(2027, 1, 15, 9, 0, tzinfo=TZ)),
+        ("下周一", datetime(2027, 1, 4, 9, 0, tzinfo=TZ)),
+        ("下周三", datetime(2027, 1, 6, 9, 0, tzinfo=TZ)),
+        ("下下周三", datetime(2027, 1, 13, 9, 0, tzinfo=TZ)),
+    ]
+    for text, expected in cases:
+        assert find_dates(text, year_end_now)[0][1] == expected, f"failed on {text}"
+
+
+def test_chinese_week_variants():
+    """验证'个'字修饰词及'星期/礼拜'同义词。"""
+    cases = [
+        ("下个周三", datetime(2026, 10, 28, 9, 0, tzinfo=TZ)),
+        ("下个星期三", datetime(2026, 10, 28, 9, 0, tzinfo=TZ)),
+        ("下下个星期三", datetime(2026, 11, 4, 9, 0, tzinfo=TZ)),
+        ("下下礼拜五", datetime(2026, 11, 6, 9, 0, tzinfo=TZ)),
+    ]
+    for text, expected in cases:
+        assert find_dates(text, NOW)[0][1] == expected, f"failed on {text}"
+

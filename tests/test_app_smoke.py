@@ -1133,6 +1133,20 @@ def test_signed_out_deep_link_returns_login_without_rendering_page(page_path):
     assert not at.chat_input
 
 
+def test_expired_session_behind_gateway_links_back_to_login(monkeypatch):
+    """网关之后会话失效：不渲染应用内表单（websocket 断开后它是死按钮），
+    只给整页跳回网关登录页的纯链接——断连残影里也能点击。"""
+    from goalcal.ui import auth as ui_auth
+
+    monkeypatch.setattr(ui_auth, 'behind_proxy', lambda: True)
+    at = AppTest.from_file(APP, default_timeout=30).run()
+    assert not at.exception, at.exception
+    assert not at.chat_input
+    assert not any(t.key == 'login_name' for t in at.text_input)
+    links = [m.value for m in at.markdown if 'target="_top"' in m.value]
+    assert links and 'href="/"' in links[0]
+
+
 @pytest.mark.parametrize('page_path', ['routes/calendar.py', 'routes/goals.py', 'routes/settings.py'])
 def test_one_login_from_subpage_restores_navigation(page_path, monkeypatch):
     signed_in = _app()
@@ -1274,3 +1288,51 @@ def test_fresh_browser_session_resets_but_page_switch_keeps_history():
     ]
     assert any(b.key == "home_suggestion_new" for b in fresh.button)  # 空账号显示三层首页建议
     assert _stored() == 1  # DB 里旧消息真实删除，只剩重置后的欢迎消息
+
+
+def test_registration_timezone_selectbox_and_settings_edit_timezone():
+    """注册表单时区为下拉框且能选非默认时区；Settings 页能修改时区并持久化。"""
+    init_db()
+    username = "ui_" + uuid.uuid4().hex[:12]
+    invitation = auth.invite()
+    at = AppTest.from_file(APP, default_timeout=30).run()
+
+    # 注册页时区为下拉框，默认 Asia/Shanghai
+    tz_select = next(s for s in at.selectbox if s.label == "Time zone")
+    assert tz_select.value == "Asia/Shanghai"
+    assert "America/New_York" in tz_select.options
+
+    # 选择 America/New_York 注册
+    tz_select.set_value("America/New_York")
+    next(t for t in at.text_input if t.key == "register_name").set_value(username)
+    next(t for t in at.text_input if t.label == "Password (at least 12 characters)").set_value("new-user-password-42")
+    next(t for t in at.text_input if t.label == "Invitation code").set_value(invitation)
+    next(b for b in at.button if b.label == "Register").click().run()
+    assert not at.exception, at.exception
+
+    # 登录后会话时区应为注册时选中的 America/New_York
+    next(t for t in at.text_input if t.key == "login_name").set_value(username)
+    next(t for t in at.text_input if t.key == "login_password").set_value("new-user-password-42")
+    next(b for b in at.button if b.label == "Log in").click().run()
+    assert not at.exception, at.exception
+    assert at.session_state["tz"] == "America/New_York"
+    uid = at.session_state["user_id"]
+
+    # 进 Settings 页查看时区与修改
+    at = _settings(at)
+    assert not at.exception, at.exception
+    assert any(c.value == "Time zone: America/New_York" for c in at.caption)
+
+    settings_tz = next(s for s in at.selectbox if s.label == "Time zone")
+    assert settings_tz.value == "America/New_York"
+    settings_tz.set_value("Europe/London")
+    next(b for b in at.button if b.label == "Save time zone").click().run()
+    assert not at.exception, at.exception
+
+    # 保存后更新 session_state、显示提示、更新 caption、数据库持久化
+    assert at.session_state["tz"] == "Europe/London"
+    assert any(c.value == "Time zone: Europe/London" for c in at.caption)
+    assert any("affects scheduling" in t.value for t in at.toast)
+    with session_scope() as s:
+        user = s.get(User, uid)
+        assert user is not None and user.tz == "Europe/London"

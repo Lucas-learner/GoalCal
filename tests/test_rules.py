@@ -303,3 +303,15 @@ def test_checkin_new_command_returns_none():
     assert parse_checkin_answer("帮我安排明天10点开会", NOW) is None
     assert parse_checkin_answer("明天10点帮我加个会", NOW) is None
     assert parse_checkin_answer("中午吃了吗", NOW) is None
+
+
+def test_reproduce_next_next_week_meeting_rule_parse():
+    """回归：2026-10-31 10:00:00 周六，'下下周三下午三点开组会'解析并规范化。"""
+    sat_now = datetime(2026, 10, 31, 10, 0, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+    text = "下下周三下午三点开组会"
+    action = parse_with_rules(text, sat_now).normalized(sat_now)
+    assert action.intent == "add_event"
+    assert action.title == "开组会"
+    assert action.start == datetime(2026, 11, 11, 15, 0, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+    assert action.end == datetime(2026, 11, 11, 16, 0, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+

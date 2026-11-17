@@ -192,6 +192,21 @@ def test_logout_ignores_expired_form_cookie_and_clears_stale_session():
     asyncio.run(scenario())
 
 
+def test_login_page_matches_app_shell_style():
+    async def scenario():
+        transport = httpx2.ASGITransport(app=app)
+        async with httpx2.AsyncClient(transport=transport, base_url="https://goalcal.example") as client:
+            page = await client.get("/", headers={"Accept": "text/html"})
+            assert "📅 GoalCal" in page.text
+            assert 'aria-current="page">Log in' in page.text
+            assert 'href="/_goalcal/register"' in page.text
+            register = await client.get("/_goalcal/register")
+            assert 'aria-current="page">Create account' in register.text
+            assert 'action="/_goalcal/register"' in register.text
+
+    asyncio.run(scenario())
+
+
 def test_logout_rejects_cross_site_post_without_revoking_session():
     name = _account()
 
@@ -208,5 +223,37 @@ def test_logout_rejects_cross_site_post_without_revoking_session():
             }, follow_redirects=False)
             assert rejected.status_code == 403
             assert auth.authenticate(token).username == name
+
+    asyncio.run(scenario())
+
+
+def test_register_page_timezone_select_and_nonce_csp():
+    import zoneinfo
+    all_timezones = sorted(zoneinfo.available_timezones())
+
+    async def scenario():
+        transport = httpx2.ASGITransport(app=app)
+        async with httpx2.AsyncClient(transport=transport, base_url="https://goalcal.example") as client:
+            register = await client.get("/_goalcal/register")
+            csp = register.headers.get("content-security-policy", "")
+            match = re.search(r"script-src 'nonce-([^']+)'", csp)
+            assert match, f"Expected nonce in CSP: {csp}"
+            nonce = match.group(1)
+            assert f'<script nonce="{nonce}">' in register.text
+            assert "Intl.DateTimeFormat().resolvedOptions().timeZone" in register.text
+            assert '<select name="tz" required>' in register.text
+            assert '<option value="Asia/Shanghai" selected>Asia/Shanghai</option>' in register.text
+            for tz in all_timezones[::50]:
+                assert f'<option value="{tz}"' in register.text
+
+            # Login page also has nonce in CSP, but no register script or select
+            login = await client.get("/", headers={"Accept": "text/html"})
+            login_csp = login.headers.get("content-security-policy", "")
+            login_match = re.search(r"script-src 'nonce-([^']+)'", login_csp)
+            assert login_match
+            login_nonce = login_match.group(1)
+            assert login_nonce != nonce  # Per-page unique nonce
+            assert '<select name="tz"' not in login.text
+            assert '<script nonce=' not in login.text
 
     asyncio.run(scenario())

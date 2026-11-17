@@ -246,15 +246,22 @@ def test_refine_upcoming_llm_uses_history_and_reasons(session, user, monkeypatch
                 ]
             }
 
-    monkeypatch.setattr(refine, "settings", SimpleNamespace(llm_ready=True))
-    monkeypatch.setattr("goalcal.llm.client.LLMClient", lambda: _CapturingClient())
+    monkeypatch.setattr(refine, "settings", SimpleNamespace(llm_enabled=True))
+    monkeypatch.setattr(refine, "plan_client", lambda: _CapturingClient())
 
-    created = refine.refine_upcoming(session, goal)
+    created = refine.refine_upcoming(session, goal, today=NOW.date())
 
     assert [s.title for s in created] == ["下一阶段第一步", "下一阶段第二步"]
     assert {s.milestone for s in created} == {"B"}
     assert [s.seq for s in created] == [2, 3]
     assert captured["outline"] == ["A", "B", "C"]
+    assert captured["days_left"] == 30  # deadline = NOW + 30 天
+    assert captured["phases"] == [
+        {"name": "A", "done_steps": 1, "todo_steps": 0},
+        {"name": "B", "done_steps": 0, "todo_steps": 0},
+        {"name": "C", "done_steps": 0, "todo_steps": 0},
+    ]
+    assert captured["phase_stall"] is None
     assert captured["done_steps"] == [
         {"title": "已完成步骤", "est_min": 30, "actual_min": 50}
     ]
@@ -268,8 +275,8 @@ def test_refine_upcoming_falls_back_to_outline_phase_for_unknown_milestone(
     goal_svc.complete_step(session, goal.steps[0])
     payload = {"steps": [{"milestone": "不存在的阶段", "title": "新步骤", "est_min": 20, "energy": 1, "kind": "deep"}]}
 
-    monkeypatch.setattr(refine, "settings", SimpleNamespace(llm_ready=True))
-    monkeypatch.setattr("goalcal.llm.client.LLMClient", lambda: _FakeClient(payload))
+    monkeypatch.setattr(refine, "settings", SimpleNamespace(llm_enabled=True))
+    monkeypatch.setattr(refine, "plan_client", lambda: _FakeClient(payload))
 
     created = refine.refine_upcoming(session, goal)
 
@@ -297,6 +304,72 @@ def test_refine_upcoming_uses_outline_without_llm_and_template(session, user):
     assert len(created) == 2
     assert all(step.milestone == "N" for step in created)
     assert refine.refine_upcoming(session, goal) == []
+
+
+def test_refine_upcoming_drops_exact_duplicate_titles(session, user, monkeypatch):
+    """完全同名的续批步骤丢弃；“3公里→4公里”这种递进不受影响。"""
+    goal = _goal_with_defs(session, user, [("A", "完成一次3公里轻松跑", 30)], outline=["A", "B"])
+    payload = {
+        "steps": [
+            {"milestone": "B", "title": "完成一次3公里轻松跑", "est_min": 30, "energy": 1, "kind": "deep"},
+            {"milestone": "B", "title": "完成一次4公里轻松跑", "est_min": 35, "energy": 1, "kind": "deep"},
+        ]
+    }
+    monkeypatch.setattr(refine, "settings", SimpleNamespace(llm_enabled=True))
+    monkeypatch.setattr(refine, "plan_client", lambda: _FakeClient(payload))
+
+    created = refine.refine_upcoming(session, goal, today=NOW.date())
+
+    assert [s.title for s in created] == ["完成一次4公里轻松跑"]
+
+
+def test_phase_stall_flagged_after_two_batches_in_same_phase(session, user, monkeypatch):
+    """最近 4 步全停在同一阶段且后面还有未拆步骤的阶段 → payload 带 phase_stall。"""
+    goal = _goal_with_defs(
+        session, user,
+        [("A", "a1", 30), ("A", "a2", 30), ("A", "a3", 30), ("A", "a4", 30)],
+        outline=["A", "B", "C"],
+    )
+    captured = {}
+
+    class _CapturingClient:
+        def complete_json(self, system, user, temperature=0.0):
+            captured.update(json.loads(user))
+            return {"steps": [{"milestone": "B", "title": "开新阶段第一步", "est_min": 20, "energy": 1, "kind": "deep"}]}
+
+    monkeypatch.setattr(refine, "settings", SimpleNamespace(llm_enabled=True))
+    monkeypatch.setattr(refine, "plan_client", lambda: _CapturingClient())
+
+    refine.refine_upcoming(session, goal, today=NOW.date())
+
+    assert captured["phase_stall"] == {"phase": "A", "batches": 2}
+
+
+def test_log_progress_refills_via_llm_before_write(session, user, monkeypatch):
+    """回归：完成步骤触发续批时，LLM 规划必须先于写库。
+
+    此前顺序反了（先 complete_step 再 auto_refine_if_low），写事务守卫拒绝
+    LLM 调用，非模板目标只能拿到 "Define the next action for X" 占位步骤。
+    """
+    goal = _goal_with_defs(session, user, [("A", "唯一待办步骤", 30)], outline=["A", "B"])
+    payload = {
+        "steps": [
+            {"milestone": "B", "title": "下一阶段第一步", "est_min": 20, "energy": 1, "kind": "deep"},
+            {"milestone": "B", "title": "下一阶段第二步", "est_min": 30, "energy": 1, "kind": "deep"},
+        ]
+    }
+    monkeypatch.setattr(refine, "settings", SimpleNamespace(llm_enabled=True))
+    monkeypatch.setattr(refine, "plan_client", lambda: _FakeClient(payload))
+
+    reply = agent.handle(session, user.id, "完成了唯一待办步骤", NOW, TZ)
+
+    assert reply.action.intent == "log_progress"
+    session.refresh(goal)
+    titles = {s.title for s in goal.steps}
+    assert {"下一阶段第一步", "下一阶段第二步"} <= titles
+    assert not any("Define the next action" in t for t in titles)
+    rows = _refined_rows(session)
+    assert len(rows) == 1 and json.loads(rows[0].payload)["auto"] is True
 
 
 # ------------------------------------------------------------ 按阶段进度
@@ -348,3 +421,50 @@ def test_goal_without_outline_derives_phases_from_milestones(session, user):
     session.refresh(goal)
     assert goal.status == "done"
     assert goal_svc.progress(goal) == 1.0
+
+
+def test_refine_upcoming_rejects_premature_post_event_steps(session, user, monkeypatch):
+    """回归：距离截止日还有 9 天时，拒绝赛后恢复步骤并回退，防止假设活动已发生。"""
+    today = NOW.date()
+    deadline = today + timedelta(days=9)
+    goal = _goal_with_defs(session, user, [("P1", "完成赛前冲刺准备", 30)], outline=["P1", "P2"])
+    goal.deadline = deadline
+    session.flush()
+
+    payload = {
+        "steps": [
+            {"milestone": "P2", "title": "赛后恢复：慢走与小腿轻柔拉伸", "est_min": 30, "energy": 1, "kind": "light"},
+            {"milestone": "P2", "title": "做一次半马比赛复盘", "est_min": 30, "energy": 1, "kind": "admin"},
+        ]
+    }
+    monkeypatch.setattr(refine, "settings", SimpleNamespace(llm_enabled=True))
+    monkeypatch.setattr(refine, "plan_client", lambda: _FakeClient(payload))
+
+    # 应该拒绝 LLM 的赛后生成，回退到大纲占位步骤而非存入赛后步骤
+    created = refine.refine_upcoming(session, goal, today=today)
+
+    titles = [s.title for s in created]
+    assert not any("赛后" in t or "复盘" in t for t in titles)
+    assert any("Define the next action for P2" in t for t in titles)
+
+
+def test_refine_upcoming_rejects_steps_exceeding_duration_limit(session, user, monkeypatch):
+    """回归：拒绝超过产品 60 分钟上限的步骤（如 70-90 分钟长跑），不单纯缩小估时数字。"""
+    today = NOW.date()
+    goal = _goal_with_defs(session, user, [("P1", "首批步骤", 30)], outline=["P1", "P2"])
+
+    payload = {
+        "steps": [
+            {"milestone": "P2", "title": "周末长跑14公里", "est_min": 90, "energy": 2, "kind": "deep"},
+        ]
+    }
+    monkeypatch.setattr(refine, "settings", SimpleNamespace(llm_enabled=True))
+    monkeypatch.setattr(refine, "plan_client", lambda: _FakeClient(payload))
+
+    # 超过 60 分钟应被拒绝回退，不应被强制 clamp 成 60 存入
+    created = refine.refine_upcoming(session, goal, today=today)
+
+    titles = [s.title for s in created]
+    assert "周末长跑14公里" not in titles
+    assert all(s.est_min <= 60 for s in created)
+

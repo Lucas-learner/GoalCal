@@ -14,6 +14,7 @@ CSS = """
     --goalcal-primary: #0f766e;
     --goalcal-line: #e7e2da;
     --goalcal-radius: 8px;
+    --goalcal-button-bg: #ffffff;
 }
 
 .stApp,
@@ -43,6 +44,18 @@ div[data-testid="stVerticalBlockBorderWrapper"]:has(> div > .st-key-calendar_she
     border: none;
 }
 
+.st-key-calendar_title_row {
+    width: fit-content;
+}
+.st-key-calendar_import_link div[data-testid="stPageLink"] a {
+    width: auto;
+    background: var(--goalcal-button-bg);
+    border: 1px solid var(--goalcal-line);
+    border-radius: var(--goalcal-radius);
+    padding: 0.2rem 0.5rem;
+    font-size: 0.8rem;
+}
+
 div[data-testid="stVerticalBlockBorderWrapper"] {
     border: 1px solid var(--goalcal-line);
     border-radius: var(--goalcal-radius);
@@ -62,8 +75,11 @@ form[action="/_goalcal/logout"] button {
     padding: 0.25rem 0.75rem;
     border: 1px solid var(--goalcal-line);
     border-radius: var(--goalcal-radius);
-    background: transparent;
+    background: var(--goalcal-button-bg);
     cursor: pointer;
+}
+.st-key-settings_logout .stButton > button {
+    background: var(--goalcal-button-bg);
 }
 .stButton > button[kind="primary"] {
     background: var(--goalcal-primary);
@@ -83,12 +99,26 @@ div[data-testid="stChatInput"] textarea {
     border-color: var(--goalcal-line);
 }
 
-div[data-testid="stChatMessage"] {
+div[class*="st-key-chat_role_"] div[data-testid="stChatMessage"] {
     background: transparent;
     border: none;
-    padding-top: 0.25rem;
-    padding-bottom: 0.25rem;
+    padding: 0.25rem 0;
 }
+div[class*="st-key-chat_role_"] div[data-testid="stChatMessageAvatarUser"],
+div[class*="st-key-chat_role_"] div[data-testid="stChatMessageAvatarAssistant"] {
+    display: none;
+}
+div[class*="st-key-chat_role_user_"] div[data-testid="stChatMessage"] {
+    width: fit-content;
+    max-width: 80%;
+    margin-left: auto;
+    padding: 0.65rem 0.9rem;
+    background: var(--goalcal-button-bg);
+    border: 1px solid var(--goalcal-line);
+    border-radius: 16px;
+    overflow-wrap: anywhere;
+}
+
 
 hr, div[data-testid="stDivider"] {
     border-color: var(--goalcal-line);
