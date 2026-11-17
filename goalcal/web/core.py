@@ -1,0 +1,882 @@
+"""Tenant-aware web operations. The caller owns transaction, auth and retries.
+
+Legacy records use content versions so changes made through the original UI are
+also detected. Writes never commit, delete events, or expose conversation state.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+from datetime import date, datetime, time, timedelta, timezone
+from uuid import uuid4
+from zoneinfo import ZoneInfo
+
+from sqlalchemy import inspect, or_, select
+
+from .. import memory, metrics
+from ..data.goal_templates import first_batch, full_steps, milestones, pick_template
+from ..domain import goals as goal_service, recovery, scheduler
+from ..models import Checkin, Event, Goal, Interaction, Step, User, RescheduleLog
+from .availability import allows, validate_availability
+from .models import WebDraft, WebExecution, WebOperation, WebProposal
+from .transport_models import WebThread
+
+UTC = timezone.utc
+OPEN = ("planned", "moved")
+
+
+class ApiError(ValueError):
+    def __init__(self, code: str, message: str, status: int = 409):
+        super().__init__(message)
+        self.code, self.message, self.status = code, message, status
+
+
+def _json(value) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _hash(value) -> str:
+    return hashlib.sha256(_json(value).encode()).hexdigest()[:32]
+
+
+def version_token(row) -> str:
+    """Opaque version including legacy-only fields that may change elsewhere."""
+    if isinstance(row, (WebDraft, WebExecution, WebProposal)):
+        return str(row.version)
+    values = {c.key: getattr(row, c.key) for c in inspect(type(row)).columns}
+    if isinstance(row, Goal):
+        # A goal is an aggregate: a legacy step change also updates its DTO version.
+        values["steps"] = [(s.id, version_token(s)) for s in sorted(row.steps, key=lambda s: (s.seq, s.id))]
+    return _hash(values)
+
+
+def parse_datetime(value) -> datetime:
+    if not isinstance(value, str) or len(value) > 64:
+        raise ApiError("validation", "请输入带时区的 ISO 日期时间", 422)
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            raise ValueError("timezone required")
+        return parsed.astimezone(UTC)
+    except (ValueError, OverflowError) as exc:
+        raise ApiError("validation", "请输入带时区的 ISO 日期时间", 422) from exc
+
+
+def _utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+def _naive(value: datetime) -> datetime:
+    return _utc(value).replace(tzinfo=None)
+
+
+def _iso(value: datetime | None) -> str | None:
+    return _utc(value).isoformat().replace("+00:00", "Z") if value is not None else None
+
+
+def _text(value, field="标题", limit=200, empty=False) -> str:
+    if not isinstance(value, str) or len(value) > limit or (not empty and not value.strip()):
+        raise ApiError("validation", f"{field}需要 1 至 {limit} 个字符", 422)
+    return value.strip()
+
+
+def _integer(value, lo, hi, field) -> int:
+    if type(value) is not int or not lo <= value <= hi:
+        raise ApiError("validation", f"{field}需要 {lo} 至 {hi} 的整数", 422)
+    return value
+
+
+def _deadline(value) -> date | None:
+    if value is None or value == "":
+        return None
+    try:
+        if not isinstance(value, str) or len(value) != 10:
+            raise ValueError()
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        raise ApiError("validation", "截止日期格式应为 YYYY-MM-DD", 422) from exc
+
+
+class Service:
+    def __init__(self, session, user_id: int, tz: str, now: datetime):
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("now must be timezone aware")
+        self.session, self.user_id, self.tz = session, user_id, tz
+        self.zone = ZoneInfo(tz)
+        self.now = now.astimezone(UTC)
+        self.now_naive = _naive(now)
+
+    def _get(self, model, id):
+        row = self.session.get(model, id)
+        if row is None or (hasattr(row, "user_id") and row.user_id != self.user_id):
+            raise ApiError("not_found", "记录不存在", 404)
+        if isinstance(row, Step):
+            self._get(Goal, row.goal_id)
+        return row
+
+    def check_version(self, row, body):
+        if not isinstance(body, dict) or not isinstance(body.get("version"), str):
+            raise ApiError("validation", "需要记录版本", 422)
+        if body["version"] != version_token(row):
+            raise ApiError("version_conflict", "内容已更新，请刷新后重试")
+
+    def serialize_step(self, step: Step) -> dict:
+        scheduled = next(iter(self._open_step_events(step.id)), None)
+        return {"id": step.id, "goal_id": step.goal_id, "title": step.title,
+                "outcome": step.outcome, "est_min": step.est_min, "status": step.status,
+                "milestone": step.milestone, "version": version_token(step),
+                "scheduled_event": self.serialize_event(scheduled) if scheduled else None}
+
+    def serialize_goal(self, goal: Goal) -> dict:
+        return {"id": goal.id, "title": goal.title, "outcome": goal.outcome,
+                "deadline": goal.deadline.isoformat() if goal.deadline else None,
+                "status": goal.status, "pinned": goal.pinned, "version": version_token(goal),
+                "progress": goal_service.progress(goal), "outline": goal_service.outline_phases(goal),
+                "steps": [self.serialize_step(s) for s in sorted(goal.steps, key=lambda s: (s.seq, s.id))]}
+
+    def serialize_event(self, event: Event) -> dict:
+        step = self._get(Step, event.step_id) if event.step_id is not None else None
+        goal = self._get(Goal, step.goal_id) if step else None
+        return {"id": event.id, "title": event.title, "start": _iso(event.start_utc),
+                "end": _iso(event.end_utc), "kind": event.kind, "status": event.status,
+                "step_id": event.step_id, "goal_id": goal.id if goal else None,
+                "goal_title": goal.title if goal else None, "version": version_token(event)}
+
+    def serialize_execution(self, execution: WebExecution) -> dict:
+        step = self._get(Step, execution.step_id)
+        goal = self._get(Goal, step.goal_id)
+        return {"id": execution.id, "event_id": execution.event_id, "step_id": step.id,
+                "goal_title": goal.title, "step_title": step.title,
+                "started_at": _iso(execution.started_at),
+                "expected_end_at": _iso(execution.expected_end_at),
+                "status": execution.status, "version": version_token(execution)}
+
+    def serialize_proposal(self, proposal: WebProposal) -> dict:
+        payload = json.loads(proposal.payload_json)
+        step = self._get(Step, proposal.step_id)
+        goal = self._get(Goal, proposal.goal_id)
+        status = proposal.status
+        if status == "open" and proposal.expires_at <= self.now_naive:
+            status = "expired"
+        return {"id": proposal.id, "version": version_token(proposal), "status": status,
+                "goal_id": goal.id, "goal_title": goal.title, "step_id": step.id,
+                "step_title": step.title, "expires_at": _iso(proposal.expires_at),
+                "candidates": payload["candidates"]}
+
+    def _events(self):
+        return list(self.session.scalars(select(Event).where(Event.user_id == self.user_id)))
+
+    def _executions(self):
+        return list(self.session.scalars(select(WebExecution).where(WebExecution.user_id == self.user_id)))
+
+    def _running(self):
+        return next((r for r in self._executions() if r.status == "running"), None)
+
+    def _ensure_not_running(self, *, event_id=None, step_id=None, goal_id=None):
+        for execution in self._executions():
+            if execution.status != "running":
+                continue
+            if (execution.event_id == event_id or execution.step_id == step_id
+                    or (goal_id is not None and self._get(Step, execution.step_id).goal_id == goal_id)):
+                raise ApiError("execution_active", "请先完成当前执行的签到")
+
+    def _active_step(self, step: Step):
+        goal = self._get(Goal, step.goal_id)
+        if goal.status != "active" or step.status != "todo":
+            raise ApiError("invalid_state", "只有进行中目标的待办步骤可以执行或排期")
+        return goal
+
+    def _open_step_events(self, step_id):
+        return [e for e in self._events() if e.step_id == step_id and e.kind == "block" and e.status in OPEN]
+
+    def _prefs(self):
+        return memory.get_scheduler_preferences(self.session, self.user_id, now=self.now_naive)
+
+    def _availability(self):
+        prefs = self._prefs()
+        if prefs.web_availability is not None:
+            return prefs.web_availability
+        def window(start, end):
+            return [{"days": list(range(7)), "start": f"{start:02}:00", "end": f"{end:02}:00"}]
+        return {"available_windows": window(prefs.day_start_hour, prefs.day_end_hour),
+                "protected_windows": window(*prefs.lunch),
+                "preferred_windows": [w for a, b in prefs.preferred_windows for w in window(a, b)],
+                "buffer_minutes": prefs.buffer_minutes,
+                "max_goal_minutes_per_day": prefs.max_goal_minutes_per_day}
+
+    def _when(self, start, end):
+        a, b = _utc(start).astimezone(self.zone), _utc(end).astimezone(self.zone)
+        return f"{a:%m月%d日 %H:%M}–{b:%H:%M}" if a.date() == b.date() else f"{a:%m月%d日 %H:%M}–{b:%m月%d日 %H:%M}"
+
+    def _validate_interval(self, start, end):
+        if end <= start or end - start > timedelta(days=7):
+            raise ApiError("validation", "结束须晚于开始，单个日程不能超过七天", 422)
+
+    def _slot(self, start, end, *, ignore=(), step=None, goal=None, goal_block=True):
+        self._validate_interval(start, end)
+        start, end = _utc(start), _utc(end)
+        config = self._availability()
+        local_start, local_end = start.astimezone(self.zone), end.astimezone(self.zone)
+        if goal_block:
+            if start < self.now:
+                raise ApiError("invalid_time", "执行时间不能在过去")
+            if not allows(local_start, local_end, config):
+                raise ApiError("outside_availability", "该时间不在可用时段，或与保护时段重叠")
+            if goal is None and step is not None:
+                goal = self._active_step(step)
+            if goal and goal.deadline and local_end > datetime.combine(goal.deadline + timedelta(days=1), time(), self.zone):
+                raise ApiError("deadline", "该时间超过目标截止日期")
+        pad = timedelta(minutes=config["buffer_minutes"] if goal_block else 0)
+        occupied = [e for e in self._events() if e.id not in ignore and e.status not in ("skipped", "missed")]
+        if any(start < _utc(e.end_utc) + pad and end > _utc(e.start_utc) - pad for e in occupied):
+            raise ApiError("schedule_conflict", "该时段与已有日程冲突")
+        if goal_block:
+            day_start = datetime.combine(local_start.date(), time(), self.zone).astimezone(UTC)
+            day_end = datetime.combine(local_start.date() + timedelta(days=1), time(), self.zone).astimezone(UTC)
+            minutes = sum(max(0, (min(_utc(e.end_utc), day_end) - max(_utc(e.start_utc), day_start)).total_seconds()) / 60
+                          for e in occupied if e.kind == "block" and _utc(e.end_utc) > day_start and _utc(e.start_utc) < day_end)
+            if minutes + (end - start).total_seconds() / 60 > config["max_goal_minutes_per_day"]:
+                raise ApiError("daily_limit", "该日目标时间已达上限")
+
+    def me(self):
+        user = self._get(User, self.user_id)
+        return {"id": user.id, "name": user.name, "email": user.email, "timezone": user.tz}
+
+    def goals(self, include_archived: bool = False):
+        stmt = select(Goal).where(Goal.user_id == self.user_id)
+        if not include_archived:
+            stmt = stmt.where(Goal.status != "archived")
+        rows = self.session.scalars(stmt)
+        return {"goals": [self.serialize_goal(g) for g in sorted(rows, key=lambda g: (not g.pinned, g.id))]}
+
+    def goal(self, id, include_archived: bool = False):
+        goal = self._get(Goal, id)
+        if goal.status == "archived" and not include_archived:
+            raise ApiError("not_found", "目标不存在或已归档", 404)
+        return self.serialize_goal(goal)
+
+    def today(self):
+        day = self.now.astimezone(self.zone).date()
+        start = datetime.combine(day, time(), self.zone)
+        end = datetime.combine(day + timedelta(days=1), time(), self.zone)
+        events = self.events(_iso(start), _iso(end))["events"]
+        active = list(self.session.scalars(select(Goal).where(Goal.user_id == self.user_id, Goal.status == "active")))
+        upcoming = sorted([e for e in self._events() if e.kind == "block" and e.status in OPEN and _utc(e.end_utc) > self.now], key=lambda e: e.start_utc)
+        chosen = None
+        for ev in upcoming:
+            if ev.step_id is not None:
+                step = self._get(Step, ev.step_id)
+                if (step.status == "todo" and step.goal.status == "active"
+                        and goal_service.next_step(step.goal).id == step.id):
+                    chosen = {"goal": self.serialize_goal(step.goal), "step": self.serialize_step(step), "event": self.serialize_event(ev)}
+                    break
+        if chosen is None:
+            for goal in sorted(active, key=lambda g: (not g.pinned, g.deadline or date.max, g.id)):
+                step = goal_service.next_step(goal)
+                if step:
+                    chosen = {"goal": self.serialize_goal(goal), "step": self.serialize_step(step), "event": None}
+                    break
+        running = self._running()
+        recovery_events = [e for e in recovery.unresolved_blocks(self.session, self.user_id, self.now_naive)
+                           if not any(x.event_id == e.id and x.status == "running" for x in self._executions())]
+        return {"date": day.isoformat(), "timezone": self.tz, "next": chosen,
+                "execution": self.serialize_execution(running) if running else None,
+                "recovery": [self.serialize_event(e) for e in recovery_events], "events": events}
+
+    def _step_defs(self, values):
+        if not isinstance(values, list) or not 1 <= len(values) <= 100:
+            raise ApiError("validation", "需要 1 至 100 个步骤", 422)
+        out = []
+        for value in values:
+            if not isinstance(value, dict):
+                raise ApiError("validation", "步骤格式错误", 422)
+            kind = value.get("kind", "deep")
+            if kind not in ("deep", "admin", "physical", "social", "research"):
+                raise ApiError("validation", "步骤类型无效", 422)
+            out.append({"title": _text(value.get("title")),
+                        "outcome": _text(value.get("outcome", ""), "成果", 4000, empty=True),
+                        "est_min": _integer(value.get("est_min", 45), 5, 480, "预计分钟"),
+                        "energy": _integer(value.get("energy", 1), 0, 2, "精力"), "kind": kind,
+                        "milestone": _text(value.get("milestone", ""), "阶段", 120, empty=True)})
+        return out
+
+    def draft(self, body):
+        title = _text(body.get("title"))
+        deadline = _deadline(body.get("deadline"))
+        if deadline and deadline < self.now.astimezone(self.zone).date():
+            raise ApiError("validation", "截止日期不能在过去", 422)
+        prepared = body.get("_prepared")
+        if prepared is not None:
+            if not isinstance(prepared, dict):
+                raise ApiError("validation", "生成的草稿格式错误", 422)
+            definitions = self._step_defs(prepared.get("steps"))
+            outline = prepared.get("outline", [])
+            source = _text(prepared.get("source", "llm"), "草稿来源", 200)
+        else:
+            key = pick_template(title)
+            definitions = self._step_defs(first_batch(full_steps(key)))
+            outline = milestones(key)
+            source = "template_fallback: deterministic goal template (LLM unavailable)"
+        if (not isinstance(outline, list) or len(outline) > 100
+                or any(not isinstance(x, str) or not x.strip() or len(x) > 120 for x in outline)):
+            raise ApiError("validation", "阶段大纲格式错误", 422)
+        payload = {"title": title, "deadline": deadline.isoformat() if deadline else None,
+                   "outline": outline, "steps": definitions, "source": source}
+        draft = WebDraft(id=uuid4().hex, user_id=self.user_id, payload_json=_json(payload), version=1)
+        self.session.add(draft)
+        self.session.flush()
+        return {"id": draft.id, **payload, "version": version_token(draft)}
+
+    def create_goal(self, body):
+        draft = self._get(WebDraft, body.get("draft_id"))
+        self.check_version(draft, body)
+        if draft.goal_id is not None:
+            raise ApiError("draft_used", "该草稿已保存")
+        title = _text(body.get("title"))
+        deadline = _deadline(body.get("deadline"))
+        if deadline and deadline < self.now.astimezone(self.zone).date():
+            raise ApiError("validation", "截止日期不能在过去", 422)
+        definitions = self._step_defs(body.get("steps"))
+        payload = json.loads(draft.payload_json)
+        goal = goal_service.create_goal(self.session, self.user_id, title, deadline=deadline,
+                                       with_template=False, step_defs=[dict(s, seq=i) for i, s in enumerate(definitions)],
+                                       template_key=(pick_template(payload["title"]) if definitions == payload.get("steps")
+                                                     and payload.get("source") != "llm" else "web_outline"),
+                                       now=self.now_naive)
+        goal.deadline = deadline
+        goal.draft_id = draft.id
+        goal.outline = _json(payload.get("outline", []))
+        # Edited milestones must remain reachable even if the outline was edited away.
+        if {s["milestone"] for s in definitions} - set(payload.get("outline", [])):
+            goal.outline = _json(list(dict.fromkeys(s["milestone"] for s in definitions if s["milestone"])))
+        draft.goal_id = goal.id
+        draft.version += 1
+        self.session.flush()
+        return {"message": f"已创建目标「{goal.title}」", "goal": self.serialize_goal(goal)}
+
+    def _auto_refill(self, goal: Goal, body: dict) -> str:
+        """Auto-generate the next outline phase once all current todo steps are completed."""
+        if goal.status != "active" or any(s.status == "todo" for s in goal.steps):
+            return ""
+        remaining = set(goal_service.outline_phases(goal)) - {s.milestone for s in goal.steps}
+        if not remaining:
+            return ""
+        from ..agent import apply_refill, plan_refill
+        defs = body.get("_refill_defs")
+        if defs is None:
+            defs = plan_refill(self.session, self.user_id, goal, self.now_naive, use_llm=False)
+        if not defs:
+            return ""
+        message = apply_refill(self.session, self.user_id, goal, self.now_naive, defs)
+        self.session.flush()
+        if not message:
+            return ""
+        next_phase = defs[0].get("milestone", "") if defs else ""
+        return f"；已自动生成「{next_phase}」阶段步骤" if next_phase else "；已自动生成下一阶段步骤"
+
+    def refill(self, goal_id, body):
+        """Continue a completed starter batch through the existing rolling planner."""
+        from ..agent import apply_refill, plan_refill
+
+        goal = self._get(Goal, goal_id)
+        self.check_version(goal, body)
+        if goal.status != "active" or any(s.status == "todo" for s in goal.steps):
+            raise ApiError("invalid_state", "请先完成当前批次，再生成下一批步骤")
+        self._ensure_not_running(goal_id=goal.id)
+        remaining = set(goal_service.outline_phases(goal)) - {s.milestone for s in goal.steps}
+        if not remaining:
+            raise ApiError("no_remaining_phases", "所有阶段均已有步骤")
+        defs = body.get("_refill_defs")
+        used_llm = defs is not None
+        if defs is None:
+            defs = plan_refill(self.session, self.user_id, goal, self.now_naive, use_llm=False)
+        if not defs:
+            raise ApiError("no_remaining_phases", "没有可生成的后续步骤")
+        message = apply_refill(self.session, self.user_id, goal, self.now_naive, defs)
+        self.session.flush()
+        if not message:
+            raise ApiError("no_remaining_phases", "没有可生成的后续步骤")
+        source_note = "AI 拆解" if used_llm else "模板与阶段大纲"
+        return {"message": f"已为「{goal.title}」生成下一批步骤（{source_note}）", "goal": self.serialize_goal(goal)}
+
+    def _soft_cancel(self, events):
+        for event in events:
+            event.status = "skipped"
+            event.resolved_at = self.now_naive
+
+    def update_goal(self, id, body):
+        goal = self._get(Goal, id)
+        self.check_version(goal, body)
+        title = _text(body["title"]) if "title" in body else goal.title
+        status = body.get("status", goal.status)
+        if status not in ("active", "paused", "done", "archived"):
+            raise ApiError("validation", "目标状态无效", 422)
+        if "pinned" in body and type(body["pinned"]) is not bool:
+            raise ApiError("validation", "pinned 必须为布尔值", 422)
+        if status != "active":
+            self._ensure_not_running(goal_id=goal.id)
+            self._soft_cancel([e for e in self._events() if e.step_id in {s.id for s in goal.steps}
+                               and e.status in OPEN and _utc(e.start_utc) >= self.now])
+        if title != goal.title:
+            for event in self._events():
+                if event.status in OPEN and event.step_id in {step.id for step in goal.steps}:
+                    step = self._get(Step, event.step_id)
+                    event.title = f"{title} · {step.title}"[:200]
+        goal.title, goal.status = title, status
+        if "pinned" in body:
+            goal.pinned = body["pinned"]
+        if status == "archived":
+            goal.pinned = False
+            for proposal in self.session.scalars(select(WebProposal).where(
+                    WebProposal.user_id == self.user_id, WebProposal.goal_id == goal.id, WebProposal.status == "open")):
+                proposal.status = "superseded"
+                proposal.version += 1
+            for thread in self.session.scalars(select(WebThread).where(
+                    WebThread.user_id == self.user_id, WebThread.focus_goal_id == goal.id)):
+                thread.focus_goal_id = None
+        self.session.flush()
+        msg = f"已归档目标「{goal.title}」" if status == "archived" else f"已更新目标「{goal.title}」"
+        return {"message": msg, "goal": self.serialize_goal(goal)}
+
+    def delete_goal(self, id, body):
+        goal = self._get(Goal, id)
+        self.check_version(goal, body)
+        self._ensure_not_running(goal_id=goal.id)
+        title = goal.title
+        step_ids = [s.id for s in goal.steps]
+        event_ids = [e.id for e in self._events() if e.step_id in step_ids]
+        proposal_ids = [p.id for p in self.session.scalars(select(WebProposal).where(
+            WebProposal.user_id == self.user_id, WebProposal.goal_id == goal.id))]
+        for thread in self.session.scalars(select(WebThread).where(WebThread.user_id == self.user_id)):
+            if thread.focus_goal_id == goal.id:
+                thread.focus_goal_id = None
+            if thread.proposal_id in proposal_ids:
+                thread.proposal_id = None
+        for draft in self.session.scalars(select(WebDraft).where(
+                WebDraft.user_id == self.user_id, WebDraft.goal_id == goal.id)):
+            draft.goal_id = None
+        interaction_filters = [Interaction.goal_id == goal.id]
+        if step_ids:
+            interaction_filters.append(Interaction.step_id.in_(step_ids))
+        if event_ids:
+            interaction_filters.append(Interaction.event_id.in_(event_ids))
+        for item in self.session.scalars(select(Interaction).where(
+                Interaction.user_id == self.user_id, or_(*interaction_filters))):
+            if item.goal_id == goal.id:
+                item.goal_id = None
+            if item.step_id in step_ids:
+                item.step_id = None
+            if item.event_id in event_ids:
+                item.event_id = None
+        self.session.flush()
+        exec_filters = []
+        if step_ids:
+            exec_filters.append(WebExecution.step_id.in_(step_ids))
+        if event_ids:
+            exec_filters.append(WebExecution.event_id.in_(event_ids))
+        if exec_filters:
+            for execution in self.session.scalars(select(WebExecution).where(
+                    WebExecution.user_id == self.user_id, or_(*exec_filters))):
+                self.session.delete(execution)
+        for proposal in self.session.scalars(select(WebProposal).where(
+                WebProposal.user_id == self.user_id, WebProposal.goal_id == goal.id)):
+            self.session.delete(proposal)
+        if event_ids:
+            for log in self.session.scalars(select(RescheduleLog).where(
+                    or_(RescheduleLog.event_id.in_(event_ids), RescheduleLog.new_event_id.in_(event_ids)))):
+                self.session.delete(log)
+        checkin_filters = []
+        if step_ids:
+            checkin_filters.append(Checkin.step_id.in_(step_ids))
+        if event_ids:
+            checkin_filters.append(Checkin.event_id.in_(event_ids))
+        if checkin_filters:
+            for checkin in self.session.scalars(select(Checkin).where(or_(*checkin_filters))):
+                self.session.delete(checkin)
+        if event_ids:
+            for event in self.session.scalars(select(Event).where(
+                    Event.user_id == self.user_id, Event.id.in_(event_ids))):
+                self.session.delete(event)
+        self.session.flush()
+        self.session.delete(goal)
+        self.session.flush()
+        return {"message": f"已删除目标「{title}」"}
+
+    def update_step(self, id, body):
+        step = self._get(Step, id)
+        self.check_version(step, body)
+        title = _text(body["title"]) if "title" in body else step.title
+        est = _integer(body["est_min"], 5, 480, "预计分钟") if "est_min" in body else step.est_min
+        status = body.get("status", step.status)
+        if status not in ("todo", "done", "dropped"):
+            raise ApiError("validation", "步骤状态无效", 422)
+        if step.goal.status in ("paused", "archived") and status != step.status:
+            raise ApiError("invalid_state", "请先恢复目标")
+        self._ensure_not_running(step_id=step.id)
+        if title != step.title:
+            for event in self._open_step_events(step.id):
+                event.title = f"{step.goal.title} · {title}"[:200]
+        step.title, step.est_min = title, est
+        refill_note = ""
+        if status != step.status:
+            if status == "done":
+                goal_service.complete_step(self.session, step, now=self.now_naive)
+            else:
+                step.status, step.completed_at = status, None
+                if status == "todo" and step.goal.status == "done":
+                    step.goal.status = "active"
+            if status in ("done", "dropped"):
+                self._soft_cancel([e for e in self._open_step_events(step.id) if _utc(e.start_utc) >= self.now])
+            if status == "done":
+                refill_note = self._auto_refill(step.goal, body)
+        self.session.flush()
+        return {"message": f"已更新「{step.goal.title}」的步骤{refill_note}", "goal": self.serialize_goal(step.goal)}
+
+    def events(self, start, end):
+        start, end = parse_datetime(start), parse_datetime(end)
+        if end <= start or end - start > timedelta(days=93):
+            raise ApiError("validation", "日历查询范围须为 1 至 93 天", 422)
+        events = [e for e in self._events() if _utc(e.end_utc) > start and _utc(e.start_utc) < end]
+        return {"events": [self.serialize_event(e) for e in sorted(events, key=lambda e: (e.start_utc, e.id))]}
+
+    def create_event(self, body):
+        title = _text(body.get("title"))
+        start, end = parse_datetime(body.get("start")), parse_datetime(body.get("end"))
+        self._slot(start, end, goal_block=False)
+        event = Event(user_id=self.user_id, title=title, start_utc=_naive(start), end_utc=_naive(end), kind="external", status="planned", source="web")
+        self.session.add(event)
+        self.session.flush()
+        return {"message": f"已添加「{title}」：{self._when(start, end)}", "event": self.serialize_event(event),
+                "operation_id": self._operation([(event, None)])}
+
+    def _editable_event(self, id, body):
+        event = self._get(Event, id)
+        self.check_version(event, body)
+        if event.status not in OPEN:
+            raise ApiError("invalid_state", "该日程已处理")
+        self._ensure_not_running(event_id=event.id)
+        return event
+
+    def _event_snapshot(self, event):
+        return {"id": event.id, "start": _iso(event.start_utc), "end": _iso(event.end_utc),
+                "status": event.status, "resolved_at": _iso(event.resolved_at)}
+
+    def _operation(self, changes):
+        self.session.flush()
+        row = WebOperation(id=uuid4().hex, user_id=self.user_id, payload_json=_json([
+            {"before": before, "after": self._event_snapshot(event), "version": version_token(event)}
+            for event, before in changes]), undone=False)
+        self.session.add(row)
+        self.session.flush()
+        return row.id
+
+    def move_event(self, id, body):
+        event = self._editable_event(id, body)
+        start, end = parse_datetime(body.get("start")), parse_datetime(body.get("end"))
+        step = self._get(Step, event.step_id) if event.step_id else None
+        goal = self._active_step(step) if step else None
+        self._slot(start, end, ignore=(event.id,), step=step, goal=goal, goal_block=event.kind == "block")
+        before = self._event_snapshot(event)
+        event.start_utc, event.end_utc, event.status = _naive(start), _naive(end), "moved"
+        operation = self._operation([(event, before)])
+        return {"message": f"已调整「{event.title}」：{self._when(start, end)}", "event": self.serialize_event(event), "operation_id": operation}
+
+    def cancel_event(self, id, body):
+        event = self._editable_event(id, body)
+        before = self._event_snapshot(event)
+        self._soft_cancel([event])
+        operation = self._operation([(event, before)])
+        return {"message": f"已取消「{event.title}」：{self._when(event.start_utc, event.end_utc)}", "event": self.serialize_event(event), "operation_id": operation}
+
+    def supersede_proposals(self):
+        for row in self.session.scalars(select(WebProposal).where(WebProposal.user_id == self.user_id, WebProposal.status == "open")):
+            row.status, row.version = "superseded", row.version + 1
+        self.session.flush()
+
+    def propose(self, step_id, body):
+        step = self._get(Step, step_id)
+        goal = self._active_step(step)
+        self._ensure_not_running(step_id=step.id)
+        start = parse_datetime(body["window_start"]) if body.get("window_start") is not None else self.now
+        end = parse_datetime(body["window_end"]) if body.get("window_end") is not None else start + timedelta(days=7)
+        if end <= start or end - start > timedelta(days=93):
+            raise ApiError("validation", "候选查询范围须为 1 至 93 天", 422)
+        start = max(start, self.now)
+        if goal.deadline:
+            end = min(end, datetime.combine(goal.deadline + timedelta(days=1), time(), self.zone).astimezone(UTC))
+        ignore = {e.id for e in self._open_step_events(step.id)}
+        prefs = self._prefs()
+        # Web proposals use the same materialized constraints as all later writes.
+        prefs.web_availability = self._availability()
+        busy = [scheduler.BusyBlock(_utc(e.start_utc).astimezone(self.zone), _utc(e.end_utc).astimezone(self.zone), e.kind)
+                for e in self._events() if e.id not in ignore and e.status not in ("skipped", "missed")]
+        candidates = scheduler.propose(scheduler.Requirement(est_min=step.est_min, energy=step.energy, kind=step.kind, min_chunk=min(20, step.est_min)),
+                                       self.now.astimezone(self.zone), busy, prefs=prefs, top_n=6, deadline=goal.deadline,
+                                       window=(start.astimezone(self.zone), end.astimezone(self.zone))) if end > start else []
+        self.supersede_proposals()
+        row = WebProposal(id=uuid4().hex, user_id=self.user_id, step_id=step.id, goal_id=goal.id,
+                          status="open", version=1, expires_at=self.now_naive + timedelta(minutes=30),
+                          payload_json=_json({"step_version": version_token(step), "goal_version": version_token(goal),
+                                              "preferences": _hash(self._availability()),
+                                              "candidates": [{"start": _iso(c.start), "end": _iso(c.end), "reasons": c.reasons,
+                                                              "score": round(c.score, 3)} for c in candidates]}))
+        self.session.add(row)
+        self.session.flush()
+        if candidates:
+            metrics.record(self.session, self.user_id, metrics.PROPOSAL_SHOWN, self.now_naive,
+                           goal_id=goal.id, step_id=step.id, payload={"count": len(candidates), "source": "web"})
+        return self.serialize_proposal(row)
+
+    def schedule_step(self, step_id, body):
+        step = self._get(Step, step_id)
+        self.check_version(step, body)
+        goal = self._active_step(step)
+        self._ensure_not_running(step_id=step.id)
+        start = parse_datetime(body.get("start"))
+        if start <= self.now:
+            raise ApiError("invalid_time", "请选择将来的开始时间", 422)
+        end = start + timedelta(minutes=step.est_min)
+        old = self._open_step_events(step.id)
+        self._slot(start, end, ignore={e.id for e in old}, step=step, goal=goal)
+        changes = [(e, self._event_snapshot(e)) for e in old]
+        self._soft_cancel(old)
+        event = Event(user_id=self.user_id, title=f"{goal.title} · {step.title}"[:200],
+                      start_utc=_naive(start), end_utc=_naive(end), kind="block",
+                      status="planned", source="web", step_id=step.id)
+        self.session.add(event)
+        self.session.flush()
+        changes.append((event, None))
+        self.supersede_proposals()
+        operation = self._operation(changes)
+        return {"message": f"已安排「{goal.title}」：{step.title}，{self._when(start, end)}",
+                "event": self.serialize_event(event), "goal": self.serialize_goal(goal),
+                "operation_id": operation}
+
+    def accept(self, proposal_id, body):
+        proposal = self._get(WebProposal, proposal_id)
+        self.check_version(proposal, body)
+        if proposal.status != "open" or proposal.expires_at <= self.now_naive:
+            raise ApiError("stale_proposal", "该候选已失效，请重新排期")
+        payload = json.loads(proposal.payload_json)
+        step = self._get(Step, proposal.step_id)
+        goal = self._active_step(step)
+        self._ensure_not_running(step_id=step.id)
+        if (payload["step_version"] != version_token(step) or payload["goal_version"] != version_token(goal)
+                or payload["preferences"] != _hash(self._availability())):
+            raise ApiError("stale_proposal", "目标或偏好已更新，请重新排期")
+        index = _integer(body.get("index"), 0, max(0, len(payload["candidates"]) - 1), "候选序号")
+        if not payload["candidates"]:
+            raise ApiError("validation", "没有可接受的候选", 422)
+        candidate = payload["candidates"][index]
+        start, end = parse_datetime(candidate["start"]), parse_datetime(candidate["end"])
+        old = self._open_step_events(step.id)
+        self._slot(start, end, ignore={e.id for e in old}, step=step, goal=goal)
+        changes = [(e, self._event_snapshot(e)) for e in old]
+        self._soft_cancel(old)
+        event = Event(user_id=self.user_id, title=f"{goal.title} · {step.title}"[:200], start_utc=_naive(start),
+                      end_utc=_naive(end), kind="block", status="planned", source="proposal", step_id=step.id)
+        self.session.add(event)
+        self.session.flush()
+        changes.append((event, None))
+        recoverable = [old_event for old_event in self._events()
+                       if old_event.step_id == step.id and old_event.status in ("missed", "partial")
+                       and old_event.resolved_at is not None and old_event.end_utc <= event.start_utc]
+        if recoverable:
+            previous = max(recoverable, key=lambda e: (e.resolved_at, e.id))
+            self.session.add(RescheduleLog(event_id=previous.id, new_event_id=event.id,
+                             ts=self.now_naive, moved_to_utc=event.start_utc, reason="web_recovery", auto=False))
+        proposal.status, proposal.version = "accepted", proposal.version + 1
+        operation = self._operation(changes)
+        metrics.record(self.session, self.user_id, metrics.PROPOSAL_ACCEPTED, self.now_naive,
+                       goal_id=goal.id, step_id=step.id, event_id=event.id, payload={"source": "web"})
+        return {"message": f"已安排「{goal.title}」：{step.title}，{self._when(start, end)}", "event": self.serialize_event(event),
+                "proposal": self.serialize_proposal(proposal), "operation_id": operation}
+
+    def undo(self, operation_id):
+        operation = self._get(WebOperation, operation_id)
+        if operation.undone:
+            raise ApiError("already_undone", "该操作已撤销")
+        changes = json.loads(operation.payload_json)
+        ids = {c["after"]["id"] for c in changes}
+        rows = []
+        for change in changes:
+            event = self._get(Event, change["after"]["id"])
+            self._ensure_not_running(event_id=event.id)
+            if version_token(event) != change["version"]:
+                raise ApiError("undo_conflict", "日程已被修改，无法撤销")
+            before = change["before"]
+            if before is not None and before["status"] in OPEN:
+                step = self._get(Step, event.step_id) if event.step_id else None
+                goal = self._active_step(step) if step else None
+                # Restoring overdue history is valid, but still checks interval conflicts.
+                if event.kind == "block" and parse_datetime(before["start"]) >= self.now:
+                    self._slot(parse_datetime(before["start"]), parse_datetime(before["end"]), ignore=ids, step=step, goal=goal)
+                else:
+                    self._slot(parse_datetime(before["start"]), parse_datetime(before["end"]), ignore=ids, goal_block=False)
+            rows.append((event, before))
+        # Validate the complete restored schedule, including cumulative daily load.
+        restored = [(e, b) for e, b in rows if b is not None and b["status"] in OPEN]
+        config = self._availability()
+        for i, (event, before) in enumerate(restored):
+            start, end = parse_datetime(before["start"]), parse_datetime(before["end"])
+            for other, other_before in restored[i + 1:]:
+                pad = timedelta(minutes=config["buffer_minutes"] if "block" in (event.kind, other.kind) else 0)
+                if start < parse_datetime(other_before["end"]) + pad and end > parse_datetime(other_before["start"]) - pad:
+                    raise ApiError("undo_conflict", "恢复的日程相互冲突")
+        existing = [e for e in self._events() if e.id not in ids and e.kind == "block" and e.status not in ("skipped", "missed")]
+        for event, before in restored:
+            if event.kind != "block" or parse_datetime(before["start"]) < self.now:
+                continue
+            day = parse_datetime(before["start"]).astimezone(self.zone).date()
+            lo = datetime.combine(day, time(), self.zone).astimezone(UTC)
+            hi = datetime.combine(day + timedelta(days=1), time(), self.zone).astimezone(UTC)
+            spans = [(_utc(e.start_utc), _utc(e.end_utc)) for e in existing]
+            spans += [(parse_datetime(b["start"]), parse_datetime(b["end"])) for e, b in restored if e.kind == "block"]
+            minutes = sum(max(0, (min(end, hi) - max(start, lo)).total_seconds()) / 60 for start, end in spans if end > lo and start < hi)
+            if minutes > config["max_goal_minutes_per_day"]:
+                raise ApiError("daily_limit", "恢复日程将超出每日目标时间上限")
+        for event, before in rows:
+            if before is None:
+                self._soft_cancel([event])
+                for log in self.session.scalars(select(RescheduleLog).where(RescheduleLog.new_event_id == event.id)):
+                    log.new_event_id = None
+            else:
+                event.start_utc, event.end_utc = _naive(parse_datetime(before["start"])), _naive(parse_datetime(before["end"]))
+                event.status = before["status"]
+                event.resolved_at = _naive(parse_datetime(before["resolved_at"])) if before["resolved_at"] else None
+        operation.undone = True
+        self.session.flush()
+        return {"message": "已撤销操作", "event": self.serialize_event(rows[-1][0])}
+
+    def _start(self, step, event=None):
+        goal = self._active_step(step)
+        if self._running():
+            raise ApiError("execution_active", "已有正在进行的执行")
+        if goal_service.next_step(goal).id != step.id:
+            raise ApiError("invalid_state", "请先完成这个目标的前一步")
+        if event is None and self._open_step_events(step.id):
+            raise ApiError("already_scheduled", "该步骤已有日程，请从日程开始")
+        duration = (_utc(event.end_utc) - _utc(event.start_utc)) if event else timedelta(minutes=step.est_min)
+        end = self.now + duration
+        self._slot(self.now, end, ignore=(event.id,) if event else (), step=step, goal=goal)
+        if event is None:
+            event = Event(user_id=self.user_id, title=f"{goal.title} · {step.title}"[:200], kind="block", source="web", status="planned", step_id=step.id)
+            self.session.add(event)
+        event.start_utc, event.end_utc = self.now_naive, _naive(end)
+        self.session.flush()
+        execution = WebExecution(id=uuid4().hex, user_id=self.user_id, event_id=event.id, step_id=step.id,
+                                 status="running", started_at=self.now_naive, expected_end_at=_naive(end), version=1)
+        self.session.add(execution)
+        self.session.flush()
+        return {"message": f"开始「{goal.title}」：{step.title}，{self._when(self.now, end)}", "event": self.serialize_event(event),
+                "execution": self.serialize_execution(execution)}
+
+    def start_event(self, id, body):
+        event = self._get(Event, id)
+        self.check_version(event, body)
+        if event.kind != "block" or event.status not in OPEN or event.step_id is None:
+            raise ApiError("invalid_state", "只有未处理的目标块可以开始")
+        if any(x.event_id == event.id for x in self._executions()):
+            raise ApiError("already_started", "该日程已开始过")
+        return self._start(self._get(Step, event.step_id), event)
+
+    def start_step(self, id, body):
+        step = self._get(Step, id)
+        self.check_version(step, body)
+        return self._start(step)
+
+    def checkin_execution(self, id, body):
+        execution = self._get(WebExecution, id)
+        self.check_version(execution, body)
+        if execution.status != "running":
+            raise ApiError("already_resolved", "该执行已签到")
+        outcome = body.get("outcome")
+        if outcome not in ("done", "extend", "adjust"):
+            raise ApiError("validation", "执行签到结果无效", 422)
+        event = self._get(Event, execution.event_id)
+        step = self._get(Step, execution.step_id)
+        goal = self._active_step(step)
+        if (event.status not in OPEN or event.step_id != execution.step_id
+                or event.start_utc != execution.started_at or event.end_utc != execution.expected_end_at):
+            raise ApiError("invalid_state", "执行对应的日程已被修改，请刷新后处理")
+        if outcome == "extend":
+            end = _utc(execution.expected_end_at) + timedelta(minutes=15)
+            # Keep the original interval, but allow its already elapsed portion.
+            if end <= self.now:
+                raise ApiError("invalid_time", "执行已超时，请调整或完成后重新开始")
+            config = self._availability()
+            if not allows(_utc(event.start_utc).astimezone(self.zone), end.astimezone(self.zone), config):
+                raise ApiError("outside_availability", "延长时间超出可用时段")
+            # Revalidate whole interval with original start by temporarily evaluating at that instant.
+            actual_now = self.now
+            try:
+                self.now = _utc(event.start_utc)
+                self._slot(self.now, end, ignore=(event.id,), step=step, goal=goal)
+            finally:
+                self.now = actual_now
+            execution.expected_end_at, event.end_utc = _naive(end), _naive(end)
+        else:
+            minutes = max(0, int((self.now_naive - execution.started_at).total_seconds() // 60))
+            previous_checkin = self.session.info.get("web_execution_checkin")
+            self.session.info["web_execution_checkin"] = execution.id
+            try:
+                recovery.resolve_block(self.session, event, "done" if outcome == "done" else "partial", self.now_naive, minutes=minutes)
+            finally:
+                if previous_checkin is None:
+                    self.session.info.pop("web_execution_checkin", None)
+                else:
+                    self.session.info["web_execution_checkin"] = previous_checkin
+            # Early completion releases the unspent part of this calendar block.
+            # Keep expected_end_at as the execution's original expectation.
+            if self.now_naive < event.end_utc:
+                event.end_utc = max(event.start_utc + timedelta(seconds=1), self.now_naive)
+            execution.status = "completed" if outcome == "done" else "adjusted"
+            execution.resolved_at = self.now_naive
+            if outcome == "done":
+                self._soft_cancel([e for e in self._open_step_events(step.id) if e.id != event.id and _utc(e.start_utc) >= self.now])
+        execution.version += 1
+        self.session.flush()
+        refill_note = self._auto_refill(goal, body) if outcome == "done" else ""
+        return {"message": f"已更新「{goal.title}」的执行{refill_note}", "execution": self.serialize_execution(execution),
+                "event": self.serialize_event(event), "goal": self.serialize_goal(goal)}
+
+    def checkin_event(self, id, body):
+        event = self._get(Event, id)
+        self.check_version(event, body)
+        outcome = body.get("outcome")
+        if outcome not in ("done", "missed", "partial"):
+            raise ApiError("validation", "日程签到结果无效", 422)
+        if event.kind != "block" or event.status not in OPEN or _utc(event.end_utc) >= self.now:
+            raise ApiError("invalid_state", "只有已结束且未签到的目标块可以签到")
+        self._ensure_not_running(event_id=event.id, step_id=event.step_id)
+        if any(x.event_id == event.id for x in self._executions()):
+            raise ApiError("already_started", "请从执行记录签到")
+        step = self._get(Step, event.step_id) if event.step_id else None
+        if step:
+            self._active_step(step)
+        recovery.resolve_block(self.session, event, outcome, self.now_naive)
+        if step and outcome == "done":
+            self._soft_cancel([e for e in self._open_step_events(step.id) if _utc(e.start_utc) >= self.now])
+        self.session.flush()
+        refill_note = self._auto_refill(step.goal, body) if step and outcome == "done" else ""
+        result = {"message": f"已记录签到{refill_note}", "event": self.serialize_event(event)}
+        if step:
+            result["goal"] = self.serialize_goal(step.goal)
+        return result
+
+    def preferences(self):
+        data = self._availability()
+        return {**data, "version": _hash(data)}
+
+    def save_preferences(self, body):
+        if not isinstance(body.get("version"), str):
+            raise ApiError("validation", "需要偏好版本", 422)
+        if body["version"] != self.preferences()["version"]:
+            raise ApiError("version_conflict", "偏好已更新，请刷新后重试")
+        try:
+            data = validate_availability(body)
+        except ValueError as exc:
+            raise ApiError("validation", str(exc), 422) from exc
+        memory.set_preference(self.session, self.user_id, "web_availability", data, scope="scheduler")
+        self.session.flush()
+        return self.preferences()

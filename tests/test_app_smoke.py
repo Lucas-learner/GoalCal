@@ -55,7 +55,7 @@ def _empty_app() -> AppTest:
     invitation = auth.invite()
     at = AppTest.from_file(APP, default_timeout=30).run()
     next(t for t in at.text_input if t.key == "register_name").set_value(username)
-    next(t for t in at.text_input if t.label == "Password (at least 12 characters)").set_value("new-user-password-42")
+    next(t for t in at.text_input if t.label == "Password (at least 6 characters)").set_value("new-user-password-42")
     next(t for t in at.text_input if t.label == "Invitation code").set_value(invitation)
     next(b for b in at.button if b.label == "Register").click().run()
     next(t for t in at.text_input if t.key == "login_name").set_value(username)
@@ -657,7 +657,7 @@ def test_registration_login_starts_empty_and_disable_exits():
     invitation = auth.invite()
     at = AppTest.from_file(APP, default_timeout=30).run()
     next(t for t in at.text_input if t.key == "register_name").set_value(username)
-    next(t for t in at.text_input if t.label == "Password (at least 12 characters)").set_value("new-user-password-42")
+    next(t for t in at.text_input if t.label == "Password (at least 6 characters)").set_value("new-user-password-42")
     next(t for t in at.text_input if t.label == "Invitation code").set_value(invitation)
     next(b for b in at.button if b.label == "Register").click().run()
     assert not at.exception
@@ -1243,7 +1243,7 @@ def test_fresh_browser_session_resets_but_page_switch_keeps_history():
 
     at = AppTest.from_file(APP, default_timeout=30).run()
     next(t for t in at.text_input if t.key == "register_name").set_value(username)
-    next(t for t in at.text_input if t.label == "Password (at least 12 characters)").set_value("new-user-password-42")
+    next(t for t in at.text_input if t.label == "Password (at least 6 characters)").set_value("new-user-password-42")
     next(t for t in at.text_input if t.label == "Invitation code").set_value(invitation)
     next(b for b in at.button if b.label == "Register").click().run()
     next(t for t in at.text_input if t.key == "login_name").set_value(username)
@@ -1305,7 +1305,7 @@ def test_registration_timezone_selectbox_and_settings_edit_timezone():
     # 选择 America/New_York 注册
     tz_select.set_value("America/New_York")
     next(t for t in at.text_input if t.key == "register_name").set_value(username)
-    next(t for t in at.text_input if t.label == "Password (at least 12 characters)").set_value("new-user-password-42")
+    next(t for t in at.text_input if t.label == "Password (at least 6 characters)").set_value("new-user-password-42")
     next(t for t in at.text_input if t.label == "Invitation code").set_value(invitation)
     next(b for b in at.button if b.label == "Register").click().run()
     assert not at.exception, at.exception

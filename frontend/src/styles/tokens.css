@@ -1,0 +1,28 @@
+:root {
+  --bg: #fafaf8;
+  --surface: #fffefd;
+  --surface-soft: #f4f4f1;
+  --sidebar: rgba(244, 244, 241, 0.86);
+  --ink: #1d1d1f;
+  --muted: #6e6e73;
+  --faint: #a1a1a6;
+  --line: rgba(29, 29, 31, 0.08);
+  --line-strong: rgba(29, 29, 31, 0.16);
+  --accent: #303638;
+  --accent-soft: #eceeef;
+  --blue: #6b7f89;
+  --blue-soft: #edf0f1;
+  --blue-ink: #52646d;
+  --nav-active: #eaeae6;
+  --current-bg: #f6f6f3;
+  --selected-bg: #f6f7f6;
+  --external-bg: #eef0f1;
+  --external-border: #939b9f;
+  --external-ink: #596168;
+  --toast: rgba(28, 29, 29, 0.92);
+  --radius: 13px;
+  --control: 9px;
+  --shadow: 0 1px 2px rgba(20, 22, 24, 0.02), 0 8px 24px rgba(20, 22, 24, 0.025);
+  --shadow-toast: 0 8px 28px rgba(0, 0, 0, 0.16);
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", "Helvetica Neue", Arial, sans-serif;
+}

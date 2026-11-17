@@ -42,9 +42,13 @@ Rules:
    that can fit in 15-60 minutes. Do not put dates or clock times in steps.
 4. Each step needs an observable outcome, est_min, energy (0=low, 1=medium,
    2=deep focus), and kind: deep | admin | physical | social | research.
-5. Use the same language as the goal title. Chinese goal -> Chinese outline and steps.
-6. Do not use placeholder labels such as "Topic A", "Part B", or "Step 1".
-7. Output only JSON, no markdown.
+5. Readability & format rules (strictly keep text concise and scannable):
+   - outline phase names: 4-12 Chinese characters (or 2-5 English words); avoid long colon subtitles.
+   - step title: clear verb-object phrase, 8-26 Chinese characters (or <=14 English words). Put ONLY the core action in title; NO parenthetical notes, NO nested quotes, and NO multi-clause "after doing A, do B (note C)" sentences.
+   - outcome: one crisp verifiable result in 10-24 Chinese characters; NO slash lists in parentheses.
+6. Use the same language as the goal title. Chinese goal -> Chinese outline and steps.
+7. Do not use placeholder labels such as "Topic A", "Part B", or "Step 1".
+8. Output only JSON, no markdown.
 """
 
 PLAN_SYSTEM = """You are GoalCal's goal decomposition planner.
@@ -63,9 +67,12 @@ Rules:
    unless the goal is actually a project.
 3. One step = one observable action that can fit in 15-60 minutes. Do not put dates or
    clock times in steps; scheduling is a separate system.
-4. Each step needs a milestone (a short phase name), an observable outcome, est_min,
-   energy (0=low, 1=medium, 2=deep focus), and kind:
+4. Each step needs a milestone (a short phase name of 4-12 Chinese characters),
+   an observable outcome (10-24 Chinese characters, no parenthetical slash lists),
+   est_min, energy (0=low, 1=medium, 2=deep focus), and kind:
    deep | admin | physical | social | research.
+   Keep step titles as clear verb-object phrases (8-26 Chinese characters) with
+   NO parenthetical notes or multi-clause warm-up chains.
 5. For exam / course review goals, plan like a good tutor: collect scope and past papers,
    inventory topics, diagnose weak areas, review by topic, practice under time, review
    mistakes, then do a final recall/check.

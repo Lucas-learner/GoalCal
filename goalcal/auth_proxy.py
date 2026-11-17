@@ -18,7 +18,7 @@ import websockets
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
-from starlette.routing import Route, WebSocketRoute
+from starlette.routing import Route, WebSocketRoute, Mount
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from . import auth
@@ -69,70 +69,88 @@ _DETECT_TZ_SCRIPT = """<script nonce="{nonce}">
 def english_auth_error(message: str) -> str:
     return {
         "用户名须为 3–32 个英文字母、数字或下划线": "Username must be 3–32 letters, numbers, or underscores.",
-        "密码须为 12–256 个字符": "Password must be 12–256 characters.",
+        "密码须为 6–256 个字符": "Password must be 6–256 characters.",
+        "密码须为 12–256 个字符": "Password must be 6–256 characters.",
+        "邮箱格式无效": "Please enter a valid email address.",
+        "请填写有效的邮箱地址": "Please enter a valid email address.",
         "无效的时区": "Invalid time zone.",
         "邀请码无效、已使用或已过期": "Invitation code is invalid, used, or expired.",
         "用户名不可用": "Username is unavailable.",
+        "该邮箱已被注册": "This email is already registered.",
+        "注册尝试过多，请稍后再试": "Too many registration attempts. Please try again later.",
         "登录尝试过多，请在 15 分钟后重试": "Too many login attempts. Try again in 15 minutes.",
         "用户名或密码错误": "Incorrect username or password.",
     }.get(message, message)
 
 
-def _login_page(request: Request, message: str = "", *, register: bool = False) -> HTMLResponse:
+def _login_page(request: Request, message: str = "", *, register: bool = False, app_login: bool = False) -> HTMLResponse:
     form_token = secrets.token_urlsafe(32)
     script_nonce = secrets.token_urlsafe(32)
     notice = f'<p class="notice" role="alert">{html.escape(message)}</p>' if message else ""
+    open_reg = auth.open_registration_enabled()
     if register:
+        extra = (
+            '<label>Email<input name="email" type="email" autocomplete="email" required></label>'
+            if open_reg
+            else '<label>Invitation code<input name="invitation" required></label>'
+        )
         fields = f"""<label>Username<input name="username" autocomplete="username" required></label>
-<label>Password (at least 12 characters)<input name="password" type="password" autocomplete="new-password" required></label>
-<label>Invitation code<input name="invitation" required></label>
+{extra}
+<label>Password (at least 6 characters)<input name="password" type="password" autocomplete="new-password" required></label>
 <label>Time zone<select name="tz" required>{_TZ_OPTIONS_HTML}</select></label>"""
         action, button = "/_goalcal/register", "Register"
         login_current, register_current = "", ' aria-current="page"'
         script = _DETECT_TZ_SCRIPT.format(nonce=script_nonce)
     else:
-        fields = """<label>Username<input name="username" autocomplete="username" required></label>
+        user_label = "Username or email" if open_reg else "Username"
+        fields = f"""<label>{user_label}<input name="username" autocomplete="username" required></label>
 <label>Password<input name="password" type="password" autocomplete="current-password" required></label>"""
         action, button = "/_goalcal/login", "Log in"
         login_current, register_current = ' aria-current="page"', ""
         script = ""
+    return_field = '<input type="hidden" name="next" value="/app/">' if app_login else ""
+    login_href = "/_goalcal/login?next=/app/" if app_login else "/"
+    register_href = "/_goalcal/register?next=/app/" if app_login else "/_goalcal/register"
+    brand_html = '<span class="brand-mark" aria-hidden="true"></span><span>GoalCal</span>'
     body = f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GoalCal</title><style>
-:root{{--ink:#292524;--primary:#0f766e;--line:#e7e2da;--fill:#f1eee9}}
+:root{{--bg:#fafaf8;--surface:#fffefd;--surface-soft:#f4f4f1;--ink:#1d1d1f;--muted:#6e6e73;--faint:#a1a1a6;--line:rgba(29,29,31,0.08);--line-strong:rgba(29,29,31,0.16);--accent:#303638;--blue:#6b7f89;--radius:13px;--control:9px;--shadow:0 1px 2px rgba(20,22,24,0.02),0 8px 24px rgba(20,22,24,0.025)}}
 *{{box-sizing:border-box}}
-body{{font:16px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;background:#faf9f6;color:var(--ink);margin:0}}
-main{{max-width:1040px;margin:0 auto;padding:24px clamp(20px,4vw,48px) 64px}}
-.brand{{font-size:2.6rem;font-weight:700;letter-spacing:-0.02em;margin:24px 0 28px}}
-nav{{display:flex;gap:24px;border-bottom:1px solid var(--line)}}
-nav a{{padding:0 4px 10px;color:var(--ink);text-decoration:none;font-size:1.05rem}}
-nav a[aria-current="page"]{{color:var(--primary);border-bottom:2px solid var(--primary);margin-bottom:-1px}}
-.card{{border:1px solid var(--line);border-radius:8px;padding:32px;margin-top:32px}}
-label{{display:block;margin:0 0 20px}}
-input,select{{display:block;width:100%;margin-top:8px;padding:12px 14px;border:1px solid transparent;border-radius:8px;background:var(--fill);font:inherit;color:var(--ink)}}
-input:focus,select:focus{{outline:2px solid var(--primary);outline-offset:-1px}}
-button{{padding:9px 22px;border:1px solid #d9d3c9;border-radius:8px;background:#fff;color:var(--ink);font:inherit;cursor:pointer}}
-button:hover{{background:var(--fill)}}
-.notice{{padding:12px 14px;background:#fdf0dd;border-radius:8px;margin:0 0 20px}}
-.disclosure{{font-size:13px;color:#8a857d;line-height:1.6;margin-top:28px}}
-</style></head><body><main><h1 class="brand">📅 GoalCal</h1>
-<nav><a href="/"{login_current}>Log in</a><a href="/_goalcal/register"{register_current}>Create account</a></nav>
-<div class="card">{notice}<form method="post" action="{action}"><input type="hidden" name="csrf" value="{form_token}">{fields}<button type="submit">{button}</button></form></div>
+body{{font:14px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro Display","PingFang SC","Helvetica Neue",Arial,sans-serif;background:var(--bg);color:var(--ink);margin:0;-webkit-font-smoothing:antialiased}}
+main{{min-height:100dvh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:32px 18px}}
+.shell{{width:100%;max-width:416px}}
+.brand-wrap{{display:flex;flex-direction:column;align-items:center;gap:8px;margin:0 0 24px;text-align:center}}
+.brand{{display:inline-flex;align-items:center;gap:10px;font-size:20px;font-weight:720;letter-spacing:-0.04em;margin:0;color:var(--ink)}}
+.brand-mark{{width:27px;height:27px;border-radius:9px;background:var(--accent);position:relative;flex:0 0 auto}}
+.brand-mark::before{{content:"";position:absolute;width:9px;height:9px;border:2px solid var(--surface);border-radius:50%;left:7px;top:7px}}
+.subtitle{{margin:0;font-size:12.5px;color:var(--muted)}}
+.card{{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:24px}}
+nav{{display:grid;grid-template-columns:1fr 1fr;gap:4px;padding:4px;background:var(--surface-soft);border-radius:11px;margin-bottom:20px}}
+nav a{{display:flex;align-items:center;justify-content:center;min-height:34px;padding:0 12px;border-radius:8px;color:var(--muted);text-decoration:none;font-size:13px;font-weight:500;transition:background-color .15s,color .15s}}
+nav a:hover{{color:var(--ink)}}
+nav a[aria-current="page"]{{background:var(--surface);color:var(--ink);font-weight:620;box-shadow:0 1px 2px rgba(20,22,24,0.06)}}
+label{{display:block;margin:0 0 15px;font-size:12px;font-weight:600;color:var(--ink)}}
+input,select{{display:block;width:100%;min-height:40px;margin-top:6px;padding:8px 12px;border:1px solid var(--line-strong);border-radius:var(--control);background:var(--surface);font:400 14px/1.4 inherit;color:var(--ink)}}
+input:focus,select:focus,button:focus-visible,nav a:focus-visible{{outline:2px solid var(--blue);outline-offset:2px}}
+button{{display:inline-flex;align-items:center;justify-content:center;width:100%;height:40px;margin-top:6px;padding:0 16px;border:1px solid var(--accent);border-radius:var(--control);background:var(--accent);color:#fff;font:600 13px/1 inherit;cursor:pointer;transition:background-color .15s}}
+button:hover{{background:#23282a}}
+.notice{{padding:10px 12px;background:#fdf3e7;border:1px solid rgba(180,120,40,0.2);border-radius:var(--control);color:#5c3d15;font-size:12.5px;margin:0 0 16px}}
+.disclosure{{font-size:11.5px;color:var(--faint);line-height:1.6;margin:16px 0 0;text-align:center}}
+</style></head><body><main><div class="shell">
+<div class="brand-wrap"><h1 class="brand">{brand_html}</h1><p class="subtitle">让计划适应你的生活节奏</p></div>
+<div class="card">
+<nav aria-label="Authentication"><a href="{login_href}"{login_current}>Log in</a><a href="{register_href}"{register_current}>Create account</a></nav>
+{notice}<form method="post" action="{action}"><input type="hidden" name="csrf" value="{form_token}">{return_field}{fields}<button type="submit">{button}</button></form>
+</div>
 <p class="disclosure">During the trial, we log action types, timing, and errors to improve the app. Passwords, chat messages, and calendar details are not automatically added to runtime logs.</p>
-</main>{script}</body></html>"""
+</div></main>{script}</body></html>"""
     response = HTMLResponse(body)
     response.headers["Cache-Control"] = "no-store"
     response.headers["Content-Security-Policy"] = (
         f"default-src 'none'; script-src 'nonce-{script_nonce}'; style-src 'unsafe-inline'; form-action 'self'; "
         "base-uri 'none'; frame-ancestors 'none'"
     )
-    response.headers["Referrer-Policy"] = "no-referrer"
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    response.set_cookie(
-        FORM_COOKIE_NAME, form_token, max_age=600, path="/",
-        secure=_secure_cookie(request), httponly=True, samesite="strict",
-    )
-    return response
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.set_cookie(
@@ -195,17 +213,30 @@ def _logout_origin_allowed(request: Request) -> bool:
     return parsed.scheme in {"http", "https"} and parsed.netloc.lower() in hosts
 
 
+def _root_app_enabled() -> bool:
+    return os.getenv("GOALCAL_ROOT_APP", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _is_app_target(next_value: str | None) -> bool:
+    if next_value is not None and next_value != "":
+        return next_value == "/app/"
+    return _root_app_enabled()
+
+
 async def login(request: Request) -> Response:
+    if request.method == "GET":
+        return _login_page(request, app_login=_is_app_target(request.query_params.get("next")))
     if not await _small_form(request):
         return PlainTextResponse("Invalid form submission", status_code=403)
     form = await request.form()
     if not _valid_form_token(request, form):
         return PlainTextResponse("Invalid form submission", status_code=403)
+    app_login = _is_app_target(str(form.get("next")) if form.get("next") is not None else None)
     try:
         token = auth.login(str(form.get("username", "")), str(form.get("password", "")))
     except auth.AuthError as exc:
-        return _login_page(request, english_auth_error(str(exc)))
-    response = RedirectResponse("/", status_code=303)
+        return _login_page(request, english_auth_error(str(exc)), app_login=app_login)
+    response = RedirectResponse("/app/" if app_login else "/", status_code=303)
     response.set_cookie(
         COOKIE_NAME, token, max_age=SESSION_SECONDS, path="/",
         secure=_secure_cookie(request), httponly=True, samesite="lax",
@@ -216,20 +247,22 @@ async def login(request: Request) -> Response:
 
 async def register(request: Request) -> Response:
     if request.method == "GET":
-        return _login_page(request, register=True)
+        return _login_page(request, register=True, app_login=_is_app_target(request.query_params.get("next")))
     if not await _small_form(request):
         return PlainTextResponse("Invalid form submission", status_code=403)
     form = await request.form()
     if not _valid_form_token(request, form):
         return PlainTextResponse("Invalid form submission", status_code=403)
+    app_login = _is_app_target(str(form.get("next")) if form.get("next") is not None else None)
     try:
         auth.create_user(
             str(form.get("username", "")), str(form.get("password", "")),
             str(form.get("tz", "Asia/Shanghai")), str(form.get("invitation", "")),
+            email=str(form.get("email", "")) if form.get("email") is not None else None,
         )
     except auth.AuthError as exc:
-        return _login_page(request, english_auth_error(str(exc)), register=True)
-    return _login_page(request, "Account created. Please log in.")
+        return _login_page(request, english_auth_error(str(exc)), register=True, app_login=app_login)
+    return _login_page(request, "Account created. Please log in.", app_login=app_login)
 
 
 async def logout(request: Request) -> Response:
@@ -239,13 +272,18 @@ async def logout(request: Request) -> Response:
     token = _browser_token(request)
     if token is not None:
         auth.logout(token)
-    response = RedirectResponse("/", status_code=303)
+    target = "/_goalcal/login?next=/app/" if _is_app_target(request.query_params.get("next")) else "/"
+    response = RedirectResponse(target, status_code=303)
     response.delete_cookie(COOKIE_NAME, path="/")
     response.headers["Cache-Control"] = "no-store"
     return response
 
 
 async def proxy_http(request: Request) -> Response:
+    if _root_app_enabled() and request.url.path == "/" and request.method in {"GET", "HEAD"}:
+        if _browser_token(request) is None:
+            return _login_page(request, app_login=True)
+        return RedirectResponse("/app/", status_code=307)
     if request.method not in {"GET", "HEAD", "OPTIONS"} and _browser_token(request) is None:
         return PlainTextResponse("Authentication required", status_code=401)
     if request.method == "GET" and request.headers.get("accept", "").find("text/html") >= 0:
@@ -332,8 +370,14 @@ async def proxy_websocket(websocket: WebSocket) -> None:
         await websocket.close(code=1011)
 
 
+from .web.http import api as web_api, frontend as web_frontend
+
+
 app = Starlette(routes=[
-    Route("/_goalcal/login", login, methods=["POST"]),
+    Mount("/api/v1", app=web_api),
+    Route("/app/{path:path}", web_frontend, methods=["GET"]),
+    Route("/app", lambda request: RedirectResponse("/app/", status_code=307)),
+    Route("/_goalcal/login", login, methods=["GET", "POST"]),
     Route("/_goalcal/register", register, methods=["GET", "POST"]),
     Route("/_goalcal/logout", logout, methods=["POST"]),
     Route("/{path:path}", proxy_http, methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]),

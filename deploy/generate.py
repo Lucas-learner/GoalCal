@@ -4,9 +4,11 @@ from pathlib import Path
 import plistlib
 import re
 import shutil
+import sys
 import json
 
 root = Path(__file__).resolve().parents[1]
+default_python = str(root / '.venv' / 'bin' / 'python') if (root / '.venv' / 'bin' / 'python').exists() else sys.executable
 parser = argparse.ArgumentParser()
 parser.add_argument('--local-only', action='store_true', help='Generate app and backup services before a domain is available')
 parser.add_argument('--provider', choices=['cloudflare', 'ngrok'], default='cloudflare')
@@ -17,9 +19,18 @@ parser.add_argument('--domain')
 parser.add_argument('--tunnel-id')
 parser.add_argument('--credentials', type=Path)
 parser.add_argument('--cloudflared', default=shutil.which('cloudflared') or '/opt/homebrew/bin/cloudflared')
+parser.add_argument('--gateway-port', type=int, default=8501)
+parser.add_argument('--label-prefix', default='local.goalcal')
+parser.add_argument('--env-file', type=Path, default=root / '.env.production')
+parser.add_argument('--output-dir', type=Path, default=root / 'deploy' / 'generated')
+parser.add_argument('--python', default=default_python)
+parser.add_argument('--protocol', choices=['auto', 'quic', 'http2'], default='auto')
 args = parser.parse_args()
-output = root / 'deploy' / 'generated'
+if not re.fullmatch(r'[a-zA-Z0-9._-]+', args.label_prefix):
+    parser.error('Invalid --label-prefix')
+output = args.output_dir.expanduser().resolve()
 output.mkdir(parents=True, exist_ok=True, mode=0o700)
+env_file = args.env_file.expanduser().resolve()
 config = output / 'cloudflared.yml'
 if not args.local_only and args.provider == 'cloudflare':
     if not args.domain or not re.fullmatch(r'[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', args.domain):
@@ -29,11 +40,14 @@ if not args.local_only and args.provider == 'cloudflare':
     if not args.credentials:
         parser.error('--credentials is required for the tunnel')
     # JSON is valid YAML and avoids quoting/path injection issues.
-    config.write_text(json.dumps({'tunnel': args.tunnel_id, 'credentials-file': str(args.credentials.expanduser().resolve()),
-        'ingress': [{'hostname': args.domain, 'service': 'http://127.0.0.1:8501'}, {'service': 'http_status:404'}]}, indent=2))
+    tunnel_cfg = {'tunnel': args.tunnel_id, 'credentials-file': str(args.credentials.expanduser().resolve()),
+        'ingress': [{'hostname': args.domain, 'service': f'http://127.0.0.1:{args.gateway_port}'}, {'service': 'http_status:404'}]}
+    if args.protocol != 'auto':
+        tunnel_cfg['protocol'] = args.protocol
+    config.write_text(json.dumps(tunnel_cfg, indent=2))
 services = ('app', 'backup') if args.local_only else ('app', 'tunnel', 'backup')
 for service in services:
-    command = [str(root / '.venv' / 'bin' / 'python'), '-m', 'goalcal.service', service]
+    command = [args.python, '-m', 'goalcal.service', service]
     if service == 'tunnel':
         if args.provider == 'ngrok':
             if not args.ngrok_config.expanduser().is_file():
@@ -46,14 +60,14 @@ for service in services:
                 command += ['--url', args.ngrok_url]
         else:
             command += ['--cloudflared', args.cloudflared, '--config', str(config)]
-    content = {'Label': f'local.goalcal.{service}', 'ProgramArguments': command,
+    content = {'Label': f'{args.label_prefix}.{service}', 'ProgramArguments': command,
                'WorkingDirectory': str(root), 'RunAtLoad': True, 'Umask': 63,
-               'EnvironmentVariables': {'GOALCAL_ENV_FILE': str(root / '.env.production')}}
+               'EnvironmentVariables': {'GOALCAL_ENV_FILE': str(env_file)}}
     if service == 'backup':
         content['StartCalendarInterval'] = {'Hour': 3, 'Minute': 15}
     else:
         content['KeepAlive'] = True
         content['ThrottleInterval'] = 10
-    with (output / f'local.goalcal.{service}.plist').open('wb') as f:
+    with (output / f'{args.label_prefix}.{service}.plist').open('wb') as f:
         plistlib.dump(content, f)
 print(output)

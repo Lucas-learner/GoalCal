@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 
 # ---------------------------------------------------------------- 数据结构
 
@@ -51,6 +51,7 @@ class Preferences:
     lunch: tuple[int, int] = (12, 13)
     preferred_windows: tuple[tuple[int, int], ...] = ((9, 12), (14, 18), (20, 22))
     granularity: int = 15
+    web_availability: dict | None = None
 
 
 @dataclass
@@ -107,11 +108,16 @@ def energy_at(dt: datetime) -> int:
     return ENERGY_CURVE.get(dt.hour, 1)
 
 
+def _instant(value: datetime) -> datetime:
+    return value.astimezone(timezone.utc) if value.tzinfo is not None else value
+
+
 def _ceil_to(dt: datetime, granularity: int) -> datetime:
     """向上取整到最近的刻钟，避免把候选放在“过去”。"""
     discard = dt.minute % granularity
     base = dt.replace(second=0, microsecond=0)
-    return base + timedelta(minutes=(granularity - discard) % granularity)
+    return base + timedelta(minutes=((granularity - discard) % granularity
+                                       or (granularity if dt.second or dt.microsecond else 0)))
 
 
 # ---------------------------------------------------------------- 空闲计算
@@ -207,7 +213,11 @@ def _score(
         reasons.append("午饭后精力低谷，建议只做低强度任务")
 
     # 2) 用户偏好时段
-    in_pref = any(a <= start.hour < b for a, b in prefs.preferred_windows)
+    if prefs.web_availability is not None:
+        from ..web.availability import preferred
+        in_pref = preferred(start, end, prefs.web_availability)
+    else:
+        in_pref = any(a <= start.hour < b for a, b in prefs.preferred_windows)
     if in_pref:
         score += 0.10
 
@@ -218,7 +228,7 @@ def _score(
         reasons.append(_kind_reason(req.kind, start.hour))
 
     # 4) 越早越好（避免拖到截止日前）
-    score -= min(days_from_now, 7) * 0.035
+    score -= min(days_from_now, 7) * 0.06
 
     # 5) 截止压力
     if deadline:
@@ -295,14 +305,14 @@ def propose(
         first_day = today
         span_days = days
 
-    for offset in range(span_days):
+    for offset in range(min(span_days, 94)):
         day = first_day + timedelta(days=offset)
         window_start = datetime.combine(
-            day, time(hour=prefs.day_start_hour), tzinfo=now.tzinfo
+            day, time(hour=0 if prefs.web_availability is not None else prefs.day_start_hour), tzinfo=now.tzinfo
         )
         window_end = datetime.combine(
-            day + timedelta(days=prefs.day_end_hour // 24),
-            time(hour=prefs.day_end_hour % 24),
+            day + timedelta(days=1 if prefs.web_availability is not None else prefs.day_end_hour // 24),
+            time(hour=0 if prefs.web_availability is not None else prefs.day_end_hour % 24),
             tzinfo=now.tzinfo,
         )
         if window is not None:
@@ -314,17 +324,56 @@ def propose(
 
         days_from_now = (day - today).days
         day_busy = [b for b in busy if b.end > window_start and b.start < window_end]
-        goal_minutes = sum(
-            b.minutes for b in day_busy
-            if b.kind == "block" and b.start >= window_start and b.start < window_end
-        )
-        gaps = free_intervals(
-            day_busy, window_start, window_end,
-            buffer_minutes=prefs.buffer_minutes, min_minutes=req.min_chunk,
-        )
+        if prefs.web_availability is not None:
+            day_start = datetime.combine(day, time(), tzinfo=now.tzinfo)
+            day_end = datetime.combine(day + timedelta(days=1), time(), tzinfo=now.tzinfo)
+            goal_minutes = sum(
+                max(0, (_instant(min(b.end, day_end)) - _instant(max(b.start, day_start))).total_seconds()) / 60
+                for b in busy if b.kind == "block" and b.end > day_start and b.start < day_end
+            )
+        else:
+            goal_minutes = sum(
+                b.minutes for b in day_busy
+                if b.kind == "block" and b.start >= window_start and b.start < window_end
+            )
+        if prefs.web_availability is not None and now.tzinfo is not None:
+            # Busy padding and task lengths are elapsed durations across DST.
+            absolute_busy = [BusyBlock(b.start.astimezone(timezone.utc), b.end.astimezone(timezone.utc), b.kind) for b in busy]
+            absolute_gaps = free_intervals(
+                absolute_busy, window_start.astimezone(timezone.utc), window_end.astimezone(timezone.utc),
+                buffer_minutes=prefs.buffer_minutes, min_minutes=req.min_chunk,
+            )
+            gaps = [Interval(g.start.astimezone(now.tzinfo), g.end.astimezone(now.tzinfo)) for g in absolute_gaps]
+        else:
+            gaps = free_intervals(
+                day_busy, window_start, window_end,
+                buffer_minutes=prefs.buffer_minutes, min_minutes=req.min_chunk,
+            )
         for gap in gaps:
-            for start in _aligned_starts(gap, req.est_min, prefs.granularity):
+            if prefs.web_availability is not None and now.tzinfo is not None:
+                starts = []
+                cur = _ceil_to(gap.start, prefs.granularity).astimezone(timezone.utc)
+                while cur + timedelta(minutes=req.est_min) <= gap.end.astimezone(timezone.utc) and len(starts) < 200:
+                    starts.append(cur.astimezone(now.tzinfo))
+                    cur += timedelta(minutes=prefs.granularity)
+            else:
+                starts = _aligned_starts(gap, req.est_min, prefs.granularity)
+            for start in starts:
                 end = start + timedelta(minutes=req.est_min)
+                if prefs.web_availability is not None and start.tzinfo is not None:
+                    # Civil-time stepping can produce nonexistent spring-forward times.
+                    # Actual task duration must remain correct across either DST boundary.
+                    normalized = start.astimezone(timezone.utc).astimezone(start.tzinfo)
+                    if normalized.replace(tzinfo=None) != start.replace(tzinfo=None):
+                        continue
+                    end = (start.astimezone(timezone.utc) + timedelta(minutes=req.est_min)).astimezone(start.tzinfo)
+                    if end.astimezone(timezone.utc) > gap.end.astimezone(timezone.utc):
+                        continue
+                if prefs.web_availability is not None:
+                    from ..web.availability import allows
+                    if (not allows(start, end, prefs.web_availability)
+                            or goal_minutes + req.est_min > prefs.max_goal_minutes_per_day):
+                        continue
                 adjacent = any(
                     abs((start - b.end).total_seconds()) <= 20 * 60 for b in day_busy
                 )
@@ -333,14 +382,49 @@ def propose(
                 )
                 pool.append(Candidate(start=start, end=end, score=score, reasons=reasons))
 
-    pool.sort(key=lambda c: (-c.score, c.start))
-    # 同一小时内只保留一个，避免三个候选其实是同一个空档
-    picked: list[Candidate] = []
+    pool.sort(key=lambda c: (-c.score, _instant(c.start)))
+    if not pool:
+        return []
+
+    def _can_pick(cand: Candidate, chosen: list[Candidate]) -> bool:
+        return all(abs((_instant(cand.start) - _instant(p.start)).total_seconds()) >= 3600 for p in chosen)
+
+    def _daypart(dt: datetime) -> str:
+        if dt.hour < 12:
+            return "morning"
+        if dt.hour < 18:
+            return "afternoon"
+        return "evening"
+
+    picked: list[Candidate] = [pool[0]]
+    # Multi-slot default recommendations surface today's available dayparts (including afternoon)
+    # instead of filling every slot with tomorrow morning when today has free time.
+    if top_n >= 4 and (window is None or (window[1] - window[0]) >= timedelta(hours=12)):
+        floor = pool[0].score - 0.15
+        seen_dayparts = {_daypart(pool[0].start)} if pool[0].start.date() == today else set()
+        for part in ("morning", "afternoon", "evening"):
+            if part in seen_dayparts or len(picked) >= top_n:
+                continue
+            cand = next(
+                (
+                    c for c in pool
+                    if c.start.date() == today
+                    and _daypart(c.start) == part
+                    and c.score >= floor
+                    and _can_pick(c, picked)
+                ),
+                None,
+            )
+            if cand is not None:
+                picked.append(cand)
+                seen_dayparts.add(part)
+
+    # 同一小时内只保留一个，避免多个候选其实是同一个空档
     for c in pool:
-        if all(abs((c.start - p.start).total_seconds()) >= 3600 for p in picked):
-            picked.append(c)
         if len(picked) >= top_n:
             break
+        if c not in picked and _can_pick(c, picked):
+            picked.append(c)
     return picked
 
 

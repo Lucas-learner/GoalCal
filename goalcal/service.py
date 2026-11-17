@@ -39,12 +39,14 @@ def main():
                            '--server.enableXsrfProtection=true']),
             ('gateway', [sys.executable, '-m', 'uvicorn', 'goalcal.auth_proxy:app',
                          '--host', '127.0.0.1', '--port', gateway_port,
+                         '--proxy-headers', '--forwarded-allow-ips', '127.0.0.1',
                          '--no-access-log', '--log-level', 'warning']),
         ]
     elif args.provider == 'ngrok':
         if not args.ngrok or not args.config:
             parser.error('ngrok requires --ngrok and --config')
-        command = [args.ngrok, 'http', 'http://127.0.0.1:8501',
+        gateway_port = os.getenv('GOALCAL_GATEWAY_PORT', '8501')
+        command = [args.ngrok, 'http', f'http://127.0.0.1:{gateway_port}',
                    '--config', args.config, '--inspect=false',
                    '--log', 'stdout', '--log-format', 'json', '--log-level', 'warn']
         if args.url:

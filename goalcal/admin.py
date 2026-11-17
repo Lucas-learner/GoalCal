@@ -61,7 +61,7 @@ def import_legacy(source, source_user, username):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='command', required=True)
-    create = sub.add_parser('create-user'); create.add_argument('username'); create.add_argument('--tz', default='Asia/Shanghai')
+    create = sub.add_parser('create-user'); create.add_argument('username'); create.add_argument('--tz', default='Asia/Shanghai'); create.add_argument('--email')
     inv = sub.add_parser('invite'); inv.add_argument('--days', type=int, default=7, help='有效期天数，0 表示永久有效')
     inv.add_argument('--max-uses', type=int, default=1, help='可使用次数，0 表示不限次数')
     for name in ('disable', 'enable', 'reset-password'):
@@ -82,10 +82,10 @@ def main():
         return
     init_db()
     if args.command == 'create-user':
-        password = getpass.getpass('Password (12+ characters): ')
+        password = getpass.getpass('Password (6+ characters): ')
         if password != getpass.getpass('Repeat password: '):
             raise ValueError('Passwords do not match')
-        auth.create_user(args.username, password, args.tz, admin=True)
+        auth.create_user(args.username, password, args.tz, admin=True, email=args.email)
     elif args.command == 'invite':
         print(auth.invite(args.days, args.max_uses))
     elif args.command in ('disable', 'enable'):

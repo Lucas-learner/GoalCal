@@ -122,7 +122,7 @@ UPCOMING_SYSTEM = """You are GoalCal's rolling planner.
 The goal has a phase outline; earlier steps are done and the user needs the next
 batch. Plan the NEXT 2-3 concrete steps, continuing the current phase or opening
 the next one. Return ONE JSON object:
-{"steps":[{"milestone":"...","title":"...","est_min":30,"energy":1,"kind":"deep"}]}
+{"steps":[{"milestone":"...","title":"...","outcome":"...","est_min":30,"energy":1,"kind":"deep"}]}
 
 Rules:
 1. milestone must be one of the given outline phases.
@@ -151,11 +151,16 @@ Rules:
    changes this time (more distance/duration/intensity, a higher quality bar, or
    an explicit consolidation purpose). Never emit a step essentially identical
    to an existing one.
-6. Use the same language as the goal title. Output only JSON, no markdown.
+6. Readability & format rules:
+   - title: clear verb-object phrase, 8-26 Chinese characters (or <=14 English words). Put ONLY the core action in title; NO parenthetical explanations, NO nested quotes, and NO multi-clause "after A, do B (note C)" sentences.
+   - outcome: one crisp verifiable result in 10-24 Chinese characters; NO slash lists in parentheses.
+7. Use the same language as the goal title. Output only JSON, no markdown.
 """
 
 
-def _phase_stats(goal: Goal, outline: list[str]) -> list[dict[str, Any]]:
+def _phase_stats(
+    goal: Goal, outline: list[str], completing: Step | None = None
+) -> list[dict[str, Any]]:
     """各阶段的已拆分进度，供模型按剩余天数分配阶段预算。"""
     stats = []
     for name in outline:
@@ -163,8 +168,8 @@ def _phase_stats(goal: Goal, outline: list[str]) -> list[dict[str, Any]]:
         stats.append(
             {
                 "name": name,
-                "done_steps": sum(1 for s in steps if s.status == "done"),
-                "todo_steps": sum(1 for s in steps if s.status == "todo"),
+                "done_steps": sum(1 for s in steps if s.status == "done" or s is completing),
+                "todo_steps": sum(1 for s in steps if s.status == "todo" and s is not completing),
             }
         )
     return stats
@@ -195,7 +200,7 @@ def _miss_reasons(session: Session, goal: Goal) -> list[str]:
 
 
 def _upcoming_llm_defs(
-    session: Session, goal: Goal, today: date | None = None
+    session: Session, goal: Goal, today: date | None = None, completing: Step | None = None
 ) -> list[dict[str, Any]] | None:
     """让 LLM 按大纲 + 完成历史 + 错过原因 + 剩余天数生成下一批；失败返回 None。"""
     client = _plan_llm_client()
@@ -205,18 +210,18 @@ def _upcoming_llm_defs(
     today = today or date.today()
     outline = outline_phases(goal)
     done_steps = [
-        {"title": s.title, "est_min": s.est_min, "actual_min": s.minutes_spent}
+        {"title": s.title, "est_min": s.est_min, "actual_min": s.minutes_spent or s.est_min}
         for s in goal.steps
-        if s.status == "done"
+        if s.status == "done" or s is completing
     ]
     payload = {
         "goal_title": goal.title,
         "outline": outline,
         "days_left": (goal.deadline - today).days if goal.deadline else None,
-        "phases": _phase_stats(goal, outline),
+        "phases": _phase_stats(goal, outline, completing=completing),
         "phase_stall": _phase_stall(goal, outline),
         "done_steps": done_steps,
-        "remaining_steps": [s.title for s in goal.steps if s.status == "todo"],
+        "remaining_steps": [s.title for s in goal.steps if s.status == "todo" and s is not completing],
         "miss_reasons": _miss_reasons(session, goal),
     }
     try:
@@ -254,6 +259,7 @@ def _upcoming_llm_defs(
                 {
                     "milestone": str(s.get("milestone", "")).strip()[:120],
                     "title": title,
+                    "outcome": str(s.get("outcome", "")).strip()[:500],
                     "est_min": max(5, est),
                     "energy": max(0, min(int(s.get("energy", 1)), 2)),
                     "kind": str(s.get("kind", "deep")),
@@ -334,13 +340,14 @@ def plan_upcoming_defs(
     *,
     use_llm: bool = True,
     today: date | None = None,
+    completing: Step | None = None,
 ) -> list[dict[str, Any]]:
     """只读地算出下一批 2–3 步的定义（LLM 优先，模板/大纲兜底），不写库。
 
     完成步骤的路径必须先调它、再写库：flush 之后写事务守卫会拒绝 LLM 调用
     （见 llm/client.py 的 write_transaction 保护），非模板目标只剩占位兜底。
     """
-    return (_upcoming_llm_defs(session, goal, today) if use_llm else None) or _template_upcoming_defs(goal)
+    return (_upcoming_llm_defs(session, goal, today, completing=completing) if use_llm else None) or _template_upcoming_defs(goal)
 
 
 def refine_upcoming(

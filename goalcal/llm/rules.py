@@ -20,7 +20,7 @@ from .natdate import extract_time, extract_window, find_dates
 
 GOAL_MARKERS = re.compile(
     r"\b(i want to|i'd like to|i plan to|i'm going to|my goal|help me (to )?|goal is)\b|"
-    r"我想|我想要|我的目标|目标是|希望|"
+    r"我想|我想要|我的目标|目标是|希望|(?:新建|创建)(?:一个)?目标|新目标\s*[:：]|"
     r"我要[^。，,;；]{0,15}?(?:学|练|跑|写|做|读|弹|通过|考|减|完成|掌握|成为)",
     re.I,
 )
@@ -406,7 +406,7 @@ def parse_with_rules(text: str, now: datetime) -> Action:
             deadline = (now + timedelta(days=days)).date()
         title = re.sub(
             r"^(i want to|i'd like to|i plan to|i'm going to|help me (to )?|my goal is|"
-            r"我想|我想要|我要|希望|我的目标是)\s*",
+            r"我想|我想要|我要|希望|我的目标是|(?:(?:新建|创建)(?:一个)?目标|新目标)\s*[:：]?)\s*",
             "",
             raw,
             flags=re.I,

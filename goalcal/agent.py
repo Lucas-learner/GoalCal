@@ -532,7 +532,9 @@ def plan_refill(
     pending = [s for s in goal.steps if s.status == "todo" and s is not completing]
     if len(pending) >= 2:
         return []
-    return refine.plan_upcoming_defs(session, goal, use_llm=use_llm, today=now.date())
+    return refine.plan_upcoming_defs(
+        session, goal, use_llm=use_llm, today=now.date(), completing=completing
+    )
 
 
 def apply_refill(

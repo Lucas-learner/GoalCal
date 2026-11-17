@@ -197,7 +197,9 @@ def test_login_page_matches_app_shell_style():
         transport = httpx2.ASGITransport(app=app)
         async with httpx2.AsyncClient(transport=transport, base_url="https://goalcal.example") as client:
             page = await client.get("/", headers={"Accept": "text/html"})
-            assert "📅 GoalCal" in page.text
+            assert 'class="brand-mark"' in page.text
+            assert "GoalCal" in page.text
+            assert "📅" not in page.text
             assert 'aria-current="page">Log in' in page.text
             assert 'href="/_goalcal/register"' in page.text
             register = await client.get("/_goalcal/register")
