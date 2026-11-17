@@ -3,45 +3,47 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+from ..i18n import pick
 
-def minute(value: str, *, end: bool = False) -> int:
+
+def minute(value: str, *, end: bool = False, lang: str = "zh") -> int:
     if not isinstance(value, str) or len(value) != 5 or value[2] != ":":
-        raise ValueError("时间必须为 HH:MM")
+        raise ValueError(pick(lang, "时间必须为 HH:MM", "Time must be in HH:MM format"))
     if not value[:2].isdigit() or not value[3:].isdigit():
-        raise ValueError("时间必须为 HH:MM")
+        raise ValueError(pick(lang, "时间必须为 HH:MM", "Time must be in HH:MM format"))
     h, m = int(value[:2]), int(value[3:])
     if h == 24 and m == 0 and end:
         return 1440
     if not (0 <= h < 24 and 0 <= m < 60):
-        raise ValueError("时间超出范围")
+        raise ValueError(pick(lang, "时间超出范围", "Time is out of range"))
     return h * 60 + m
 
 
-def validate_availability(value: dict) -> dict:
+def validate_availability(value: dict, *, lang: str = "zh") -> dict:
     if not isinstance(value, dict):
-        raise ValueError("可用时间必须是对象")
+        raise ValueError(pick(lang, "可用时间必须是对象", "Availability must be an object"))
     out = {}
     for name in ("available_windows", "protected_windows", "preferred_windows"):
         windows = value.get(name)
         if not isinstance(windows, list) or len(windows) > 100:
-            raise ValueError(f"{name} 必须是至多 100 个时段的列表")
+            raise ValueError(pick(lang, f"{name} 必须是至多 100 个时段的列表", f"{name} must be a list of at most 100 windows"))
         clean = []
         for w in windows:
             if not isinstance(w, dict):
-                raise ValueError("时段必须是对象")
+                raise ValueError(pick(lang, "时段必须是对象", "Each time window must be an object"))
             days = w.get("days")
             if (not isinstance(days, list) or not days or len(days) > 7
                     or any(type(d) is not int or not 0 <= d <= 6 for d in days)
                     or len(set(days)) != len(days)):
-                raise ValueError("时段必须指定 0 至 6 的星期")
-            if minute(w.get("start")) >= minute(w.get("end"), end=True):
-                raise ValueError("时段结束必须晚于开始")
+                raise ValueError(pick(lang, "时段必须指定 0 至 6 的星期", "Days must list unique weekday indices from 0 to 6"))
+            if minute(w.get("start"), lang=lang) >= minute(w.get("end"), end=True, lang=lang):
+                raise ValueError(pick(lang, "时段结束必须晚于开始", "Window end must be later than start"))
             clean.append({"days": sorted(days), "start": w["start"], "end": w["end"]})
         out[name] = clean
     for name, low, high in (("buffer_minutes", 0, 120), ("max_goal_minutes_per_day", 1, 1440)):
         n = value.get(name)
         if type(n) is not int or not low <= n <= high:
-            raise ValueError(f"{name} 必须为 {low} 至 {high} 的整数")
+            raise ValueError(pick(lang, f"{name} 必须为 {low} 至 {high} 的整数", f"{name} must be an integer between {low} and {high}"))
         out[name] = n
     return out
 

@@ -4,6 +4,7 @@ import { api } from '../api/client';
 import { invalidateAfterWrite } from '../api/queryKeys';
 import { datetimeLocalToUtcIso } from '../lib/datetime';
 import { useIdempotentAction } from '../lib/useIdempotentMutation';
+import { useI18n } from '../i18n';
 import { useAppState } from '../state/AppStateContext';
 import { Modal } from './Modal';
 import { ErrorBanner } from './StateFeedback';
@@ -23,6 +24,7 @@ export function NewEventDialog({
 }: NewEventDialogProps) {
   const queryClient = useQueryClient();
   const { recordMutationResult } = useAppState();
+  const { t } = useI18n();
 
   const [title, setTitle] = useState('');
   const [startLocal, setStartLocal] = useState(initialStartLocal);
@@ -48,17 +50,17 @@ export function NewEventDialog({
     setValidationError(null);
     const trimmed = title.trim();
     if (!trimmed) {
-      setValidationError('请输入日程名称。');
+      setValidationError(t('请输入日程名称。', 'Please enter an event title.'));
       return;
     }
     const startUtc = datetimeLocalToUtcIso(startLocal, timezone);
     const endUtc = datetimeLocalToUtcIso(endLocal, timezone);
     if (!startUtc || !endUtc) {
-      setValidationError('请填写完整的开始和结束时间。');
+      setValidationError(t('请填写完整的开始和结束时间。', 'Please fill in both start and end time.'));
       return;
     }
     if (endUtc <= startUtc) {
-      setValidationError('结束时间必须晚于开始时间。');
+      setValidationError(t('结束时间必须晚于开始时间。', 'End time must be after start time.'));
       return;
     }
     void createAction.run({ title: trimmed, start: startUtc, end: endUtc });
@@ -67,18 +69,21 @@ export function NewEventDialog({
   const isDirty = title.trim().length > 0;
 
   return (
-    <Modal title="新建日程" onClose={onClose} hasUnsavedChanges={isDirty}>
+    <Modal title={t('新建日程', 'New event')} onClose={onClose} hasUnsavedChanges={isDirty}>
       <ErrorBanner error={createAction.actionError} />
+      <div className="muted" style={{ fontSize: 11, marginBottom: 10 }}>
+        {t('时区', 'Time zone')}: {timezone}
+      </div>
       <form onSubmit={handleSubmit} noValidate>
         <div className="field">
           <label className="field-label" htmlFor="new-event-title">
-            日程名称
+            {t('名称', 'Title')}
           </label>
           <input
             id="new-event-title"
             type="text"
             className="input"
-            placeholder="例如：产品周会"
+            placeholder={t('例如：产品周会', 'e.g. Weekly sync')}
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             disabled={createAction.isPending}
@@ -87,7 +92,7 @@ export function NewEventDialog({
 
         <div className="field">
           <label className="field-label" htmlFor="new-event-start">
-            开始时间（{timezone}）
+            {t('开始', 'Start')}
           </label>
           <input
             id="new-event-start"
@@ -101,7 +106,7 @@ export function NewEventDialog({
 
         <div className="field">
           <label className="field-label" htmlFor="new-event-end">
-            结束时间（{timezone}）
+            {t('结束', 'End')}
           </label>
           <input
             id="new-event-end"
@@ -126,10 +131,10 @@ export function NewEventDialog({
             onClick={onClose}
             disabled={createAction.isPending}
           >
-            取消
+            {t('取消', 'Cancel')}
           </button>
           <button type="submit" className="btn primary" disabled={createAction.isPending}>
-            {createAction.isPending ? '保存中…' : '创建日程'}
+            {createAction.isPending ? t('保存中…', 'Saving…') : t('创建', 'Create')}
           </button>
         </div>
       </form>

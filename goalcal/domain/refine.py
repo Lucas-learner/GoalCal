@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..data.goal_templates import TEMPLATES, first_batch, full_steps
+from ..i18n import normalize_lang
 from ..llm.router import plan_client
 from ..models import Checkin, Goal, Step
 from .goals import outline_phases
@@ -153,8 +154,8 @@ Rules:
    to an existing one.
 6. Readability & format rules:
    - title: clear verb-object phrase, 8-26 Chinese characters (or <=14 English words). Put ONLY the core action in title; NO parenthetical explanations, NO nested quotes, and NO multi-clause "after A, do B (note C)" sentences.
-   - outcome: one crisp verifiable result in 10-24 Chinese characters; NO slash lists in parentheses.
-7. Use the same language as the goal title. Output only JSON, no markdown.
+   - outcome: one crisp verifiable result in 10-24 Chinese characters (or <=16 English words); NO slash lists in parentheses.
+7. Output language MUST follow target_language ("Simplified Chinese" -> Chinese titles and outcomes; "English" -> English titles and outcomes). When target_language is "auto", match the goal title's language. Output only JSON, no markdown.
 """
 
 
@@ -200,7 +201,11 @@ def _miss_reasons(session: Session, goal: Goal) -> list[str]:
 
 
 def _upcoming_llm_defs(
-    session: Session, goal: Goal, today: date | None = None, completing: Step | None = None
+    session: Session,
+    goal: Goal,
+    today: date | None = None,
+    completing: Step | None = None,
+    lang: str | None = None,
 ) -> list[dict[str, Any]] | None:
     """让 LLM 按大纲 + 完成历史 + 错过原因 + 剩余天数生成下一批；失败返回 None。"""
     client = _plan_llm_client()
@@ -209,6 +214,12 @@ def _upcoming_llm_defs(
 
     today = today or date.today()
     outline = outline_phases(goal)
+    resolved_lang = normalize_lang(lang)
+    target_language = (
+        "Simplified Chinese" if resolved_lang == "zh"
+        else "English" if resolved_lang == "en"
+        else "auto"
+    )
     done_steps = [
         {"title": s.title, "est_min": s.est_min, "actual_min": s.minutes_spent or s.est_min}
         for s in goal.steps
@@ -216,6 +227,7 @@ def _upcoming_llm_defs(
     ]
     payload = {
         "goal_title": goal.title,
+        "target_language": target_language,
         "outline": outline,
         "days_left": (goal.deadline - today).days if goal.deadline else None,
         "phases": _phase_stats(goal, outline, completing=completing),
@@ -230,7 +242,10 @@ def _upcoming_llm_defs(
         )
         defs = []
         days_left = (goal.deadline - today).days if goal.deadline else None
-        _POST_EVENT_RE = re.compile(r"(赛后|考后|活动后|比赛复盘|赛后恢复|赛后首次)")
+        _POST_EVENT_RE = re.compile(
+            r"(赛后|考后|活动后|比赛复盘|赛后恢复|赛后首次|post-?race|post-?exam|post-?event|after the race)",
+            re.I,
+        )
         for s in data.get("steps") or []:
             title = str(s.get("title", "")).strip()[:200]
             if not title:
@@ -271,8 +286,9 @@ def _upcoming_llm_defs(
     return defs[:3] if defs else None
 
 
-def _template_upcoming_defs(goal: Goal) -> list[dict[str, Any]]:
+def _template_upcoming_defs(goal: Goal, *, lang: str | None = None) -> list[dict[str, Any]]:
     """模板目标按模板顺序取下一批（模板步骤本来有序，天然适合滚动）。"""
+    resolved = normalize_lang(lang) or "en"
     if goal.template_key not in TEMPLATES:
         # AI-created outlines still need a usable next phase when the provider
         # is unavailable, over quota, or this transaction already holds a write
@@ -281,6 +297,15 @@ def _template_upcoming_defs(goal: Goal) -> list[dict[str, Any]]:
         phase = next((name for name in outline_phases(goal) if name not in existing), None)
         if not phase:
             return []
+        if resolved == "zh":
+            return [
+                {"milestone": phase, "title": f"明确「{phase}」的首个具体动作"[:200],
+                 "outcome": "写下一条具体行动与完成标准",
+                 "est_min": 15, "energy": 1, "kind": "admin"},
+                {"milestone": phase, "title": f"完成「{phase}」的第一项推进"[:200],
+                 "outcome": "记录完成结果与下一步要点",
+                 "est_min": 30, "energy": 1, "kind": "deep"},
+            ]
         return [
             {"milestone": phase, "title": f"Define the next action for {phase}"[:200],
              "outcome": "Write one concrete action and its completion criterion",
@@ -289,7 +314,7 @@ def _template_upcoming_defs(goal: Goal) -> list[dict[str, Any]]:
              "outcome": "Record the result and what needs to happen next",
              "est_min": 30, "energy": 1, "kind": "deep"},
         ]
-    full = full_steps(goal.template_key)
+    full = full_steps(goal.template_key, lang=resolved)
     used = {s.title for s in goal.steps}
     idx = 0
     while idx < len(full) and full[idx]["title"] in used:
@@ -341,13 +366,18 @@ def plan_upcoming_defs(
     use_llm: bool = True,
     today: date | None = None,
     completing: Step | None = None,
+    lang: str | None = None,
 ) -> list[dict[str, Any]]:
     """只读地算出下一批 2–3 步的定义（LLM 优先，模板/大纲兜底），不写库。
 
     完成步骤的路径必须先调它、再写库：flush 之后写事务守卫会拒绝 LLM 调用
     （见 llm/client.py 的 write_transaction 保护），非模板目标只剩占位兜底。
     """
-    return (_upcoming_llm_defs(session, goal, today, completing=completing) if use_llm else None) or _template_upcoming_defs(goal)
+    return (
+        _upcoming_llm_defs(session, goal, today, completing=completing, lang=lang)
+        if use_llm
+        else None
+    ) or _template_upcoming_defs(goal, lang=lang)
 
 
 def refine_upcoming(
@@ -357,6 +387,7 @@ def refine_upcoming(
     use_llm: bool = True,
     defs: list[dict[str, Any]] | None = None,
     today: date | None = None,
+    lang: str | None = None,
 ) -> list[Step]:
     """剩余步骤不足时追加下一批 2–3 步，返回新步骤（追加在末尾）。
 
@@ -367,7 +398,7 @@ def refine_upcoming(
     与已有步骤近似重复的标题会被丢弃，不进库。
     """
     if defs is None:
-        defs = plan_upcoming_defs(session, goal, use_llm=use_llm, today=today)
+        defs = plan_upcoming_defs(session, goal, use_llm=use_llm, today=today, lang=lang)
     defs = _drop_duplicate_titles(defs, [s.title for s in goal.steps])
     if not defs:
         return []

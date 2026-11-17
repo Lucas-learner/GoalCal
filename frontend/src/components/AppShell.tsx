@@ -5,6 +5,7 @@ import { api } from '../api/client';
 import { invalidateAfterWrite, queryKeys } from '../api/queryKeys';
 import type { User } from '../api/types';
 import { useIdempotentAction } from '../lib/useIdempotentMutation';
+import { useI18n } from '../i18n';
 import { useAppState } from '../state/AppStateContext';
 import { AssistantDrawer } from './AssistantDrawer';
 import { CalendarIcon, HomeIcon, SettingsIcon, TargetIcon } from './Icons';
@@ -40,6 +41,7 @@ export function AppShell({
   const location = useLocation();
   const queryClient = useQueryClient();
   const wideDesktop = useWideDesktopForDockedAssistant();
+  const { t } = useI18n();
 
   const {
     authExpired,
@@ -54,6 +56,19 @@ export function AppShell({
   const timezone = user?.timezone || 'UTC';
   const isToday = location.pathname === '/' || location.pathname === '/today';
   const isDocked = assistantOpen && wideDesktop;
+  const [toastPaused, setToastPaused] = useState(false);
+
+  useEffect(() => {
+    setToastPaused(false);
+  }, [undoEntry?.key]);
+
+  useEffect(() => {
+    if (!undoEntry || toastPaused) return undefined;
+    const timer = window.setTimeout(() => {
+      dismissUndo();
+    }, 5000);
+    return () => window.clearTimeout(timer);
+  }, [undoEntry, toastPaused, dismissUndo]);
 
   const undoFn = useCallback(
     async (operationId: string, key: string) => api.undoOperation(operationId, key),
@@ -62,7 +77,7 @@ export function AppShell({
 
   const undoAction = useIdempotentAction(undoFn, {
     onSuccess: async (res) => {
-      markUndoCompleted(res.message || '已撤销刚才的操作');
+      markUndoCompleted(res.message || t('已撤销刚才的操作', 'Undid last action'));
       await invalidateAfterWrite(queryClient);
     },
     onError: async (err) => {
@@ -82,14 +97,14 @@ export function AppShell({
   };
 
   const navItems = [
-    { to: '/', label: '今天', icon: <HomeIcon />, end: true },
-    { to: '/goals', label: '目标', icon: <TargetIcon />, end: false },
-    { to: '/calendar', label: '日历', icon: <CalendarIcon />, end: false },
+    { to: '/', label: t('今天', 'Today'), icon: <HomeIcon />, end: true },
+    { to: '/goals', label: t('目标', 'Goals'), icon: <TargetIcon />, end: false },
+    { to: '/calendar', label: t('日历', 'Calendar'), icon: <CalendarIcon />, end: false },
   ];
 
   return (
     <div className={isDocked ? 'app-shell assistant-docked' : 'app-shell'}>
-      <aside className="sidebar" aria-label="主导航">
+      <aside className="sidebar" aria-label={t('主导航', 'Primary navigation')}>
         <NavLink to="/" className="brand">
           <span className="brand-mark" aria-hidden="true" />
           <span>GoalCal</span>
@@ -118,8 +133,8 @@ export function AppShell({
               {getInitials(user?.name || 'GoalCal')}
             </div>
             <div style={{ minWidth: 0 }}>
-              <div className="profile-name">{user?.name || '账号'}</div>
-              <div className="profile-meta">设置与偏好</div>
+              <div className="profile-name">{user?.name || t('账号', 'Account')}</div>
+              <div className="profile-meta">{t('设置', 'Settings')}</div>
             </div>
           </NavLink>
         </div>
@@ -130,17 +145,20 @@ export function AppShell({
           {authExpired ? (
             <div className="status-banner" role="alert">
               <div className="status-banner-body">
-                <div className="status-banner-title">登录状态已失效</div>
+                <div className="status-banner-title">{t('登录已过期', 'Session expired')}</div>
                 <div>
-                  你的会话已过期。当前页面上未提交的输入和编辑内容已保留，请重新登录后再继续操作。
+                  {t(
+                    '当前未保存的输入已保留，请重新登录。',
+                    'Unsaved inputs are preserved — log in again to continue.',
+                  )}
                 </div>
               </div>
               <div className="status-banner-actions">
                 <a className="btn small primary" href="/_goalcal/login?next=/app/" target="_blank" rel="noreferrer">
-                  前往登录页
+                  {t('重新登录', 'Log in')}
                 </a>
                 <button type="button" className="btn small" onClick={() => void handleRecheckSession()}>
-                  已重新登录，继续
+                  {t('继续', 'Continue')}
                 </button>
               </div>
             </div>
@@ -162,7 +180,13 @@ export function AppShell({
 
       {undoEntry ? (
         <div className="undo-toast-region" aria-live="polite">
-          <div className="undo-toast">
+          <div
+            className="undo-toast"
+            onMouseEnter={() => setToastPaused(true)}
+            onMouseLeave={() => setToastPaused(false)}
+            onFocus={() => setToastPaused(true)}
+            onBlur={() => setToastPaused(false)}
+          >
             <span>{undoEntry.message}</span>
             <div className="undo-toast-actions">
               {!undoEntry.undone && undoEntry.operationId ? (
@@ -172,13 +196,13 @@ export function AppShell({
                   disabled={undoAction.isPending}
                   onClick={() => void undoAction.run(undoEntry.operationId)}
                 >
-                  {undoAction.isPending ? '撤销中…' : '撤销'}
+                  {undoAction.isPending ? t('撤销中…', 'Undoing…') : t('撤销', 'Undo')}
                 </button>
               ) : null}
               <button
                 type="button"
                 className="undo-close"
-                aria-label="关闭提示"
+                aria-label={t('关闭提示', 'Dismiss notice')}
                 onClick={dismissUndo}
               >
                 ×
@@ -188,35 +212,35 @@ export function AppShell({
         </div>
       ) : null}
 
-      <nav className="mobile-nav" aria-label="移动导航">
+      <nav className="mobile-nav" aria-label={t('移动导航', 'Mobile navigation')}>
         <NavLink
           to="/"
           end
           className={({ isActive }) => `mobile-nav-item${isActive ? ' active' : ''}`}
         >
           <HomeIcon />
-          <span>今天</span>
+          <span>{t('今天', 'Today')}</span>
         </NavLink>
         <NavLink
           to="/goals"
           className={({ isActive }) => `mobile-nav-item${isActive ? ' active' : ''}`}
         >
           <TargetIcon />
-          <span>目标</span>
+          <span>{t('目标', 'Goals')}</span>
         </NavLink>
         <NavLink
           to="/calendar"
           className={({ isActive }) => `mobile-nav-item${isActive ? ' active' : ''}`}
         >
           <CalendarIcon />
-          <span>日历</span>
+          <span>{t('日历', 'Calendar')}</span>
         </NavLink>
         <NavLink
           to="/settings"
           className={({ isActive }) => `mobile-nav-item${isActive ? ' active' : ''}`}
         >
           <SettingsIcon />
-          <span>设置</span>
+          <span>{t('设置', 'Settings')}</span>
         </NavLink>
       </nav>
 

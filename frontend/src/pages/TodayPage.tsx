@@ -11,23 +11,27 @@ import {
   durationMinutes,
   formatDateTimeLabel,
   formatEyebrowDate,
+  formatRelativeEventDay,
   formatTimeHHmm,
   formatTimeRange,
+  isEventOnIsoDate,
   isExecutionWaitingCheckin,
 } from '../lib/datetime';
 import { useIdempotentAction } from '../lib/useIdempotentMutation';
+import { useI18n } from '../i18n';
 import { useAppState } from '../state/AppStateContext';
 
-const EVENT_STATUS_TEXT: Record<string, string> = {
-  done: '已完成',
-  partial: '部分完成',
-  missed: '未完成',
-  moved: '已调整',
+const EVENT_STATUS_TEXT: Record<string, [string, string]> = {
+  done: ['已完成', 'Done'],
+  partial: ['部分完成', 'Partial'],
+  missed: ['未完成', 'Missed'],
+  moved: ['已调整', 'Moved'],
 };
 
 export function TodayPage({ fallbackTimezone }: { fallbackTimezone: string }) {
   const queryClient = useQueryClient();
   const { openAssistant, openProposalModal, recordMutationResult } = useAppState();
+  const { lang, t } = useI18n();
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
 
   const todayQuery = useQuery({
@@ -151,50 +155,49 @@ export function TodayPage({ fallbackTimezone }: { fallbackTimezone: string }) {
   return (
     <div>
       <div className="topbar">
-        <div>
-          <div className="eyebrow">
-            {data?.date ? formatEyebrowDate(data.date, tz) : '今日视图'}
-          </div>
-          <h1>今天</h1>
-        </div>
+        <h1>{t('今天', 'Today')}</h1>
         <button
           type="button"
           className="assistant-trigger"
           onClick={(e) => openAssistant(e.currentTarget)}
         >
           <SparkleIcon />
-          <span>问 GoalCal</span>
+          <span>{t('问 GoalCal', 'Ask GoalCal')}</span>
         </button>
       </div>
 
+      <p className="subtitle">
+        {data?.date ? formatEyebrowDate(data.date, tz, lang) : t('今日视图', 'Today view')}
+      </p>
+
       {todayQuery.isLoading ? (
-        <SkeletonCard label="正在加载今日安排" />
+        <SkeletonCard label={t('正在加载今日安排', 'Loading today')} />
       ) : todayQuery.isError ? (
-        <div style={{ marginTop: 24 }}>
-          <ErrorBanner error={todayQuery.error} onRetry={() => void todayQuery.refetch()} />
-        </div>
+        <ErrorBanner error={todayQuery.error} onRetry={() => void todayQuery.refetch()} />
       ) : data ? (
         <>
-          <div style={{ marginTop: 16 }}>
-            <ErrorBanner error={anyError} onRefresh={() => void todayQuery.refetch()} />
-          </div>
+          <ErrorBanner error={anyError} onRefresh={() => void todayQuery.refetch()} />
 
           {execution ? (
-            <section className="focus-card" aria-label="当前执行">
+            <section className="focus-card" aria-label={t('当前执行', 'Active session')}>
               <div className="section-label">
-                {waitingCheckin ? '进行中 · 已到预期结束时间，等待签到' : '进行中'}
+                {waitingCheckin
+                  ? t('进行中 · 已到预期结束时间，等待签到', 'In progress · Expected finish passed, check in')
+                  : t('进行中', 'In progress')}
               </div>
               <div className="focus-heading">
                 <div style={{ minWidth: 0 }}>
                   <div className="goal-name">{execution.goal_title}</div>
                   <div className="focus-title">{execution.step_title}</div>
                   <div className="focus-meta tabular-nums">
-                    开始于 {formatTimeHHmm(execution.started_at, tz)} · 预计结束{' '}
+                    {t('开始于 ', 'Started at ')}
+                    {formatTimeHHmm(execution.started_at, tz)}
+                    {t(' · 预计结束 ', ' · Expected end ')}
                     {formatTimeHHmm(execution.expected_end_at, tz)}
                   </div>
                 </div>
                 <span className="focus-time">
-                  {waitingCheckin ? '等待签到' : formatTimeHHmm(execution.expected_end_at, tz)}
+                  {waitingCheckin ? t('等待签到', 'Check in') : formatTimeHHmm(execution.expected_end_at, tz)}
                 </span>
               </div>
               <div className="actions">
@@ -210,7 +213,7 @@ export function TodayPage({ fallbackTimezone }: { fallbackTimezone: string }) {
                     })
                   }
                 >
-                  完成
+                  {t('完成', 'Done')}
                 </button>
                 <button
                   type="button"
@@ -224,7 +227,7 @@ export function TodayPage({ fallbackTimezone }: { fallbackTimezone: string }) {
                     })
                   }
                 >
-                  延长 15 分钟
+                  {t('延长 15 分钟', 'Extend 15m')}
                 </button>
                 <button
                   type="button"
@@ -238,84 +241,103 @@ export function TodayPage({ fallbackTimezone }: { fallbackTimezone: string }) {
                     })
                   }
                 >
-                  调整 / 暂停
+                  {t('调整 / 暂停', 'Pause / adjust')}
                 </button>
               </div>
             </section>
-          ) : data.next ? (
-            <section className="focus-card" aria-label="下一步焦点">
-              <div className="section-label">接下来</div>
-              <div className="focus-heading">
-                <div style={{ minWidth: 0 }}>
-                  <div className="goal-name">{data.next.goal.title}</div>
-                  <div className="focus-title">{data.next.step.title}</div>
-                  <div className="focus-meta">
-                    {data.next.step.est_min} 分钟
-                    {data.next.step.milestone ? ` · ${data.next.step.milestone}` : ''}
-                    {data.next.event
-                      ? ` · 已安排 ${formatTimeRange(data.next.event.start, data.next.event.end, tz)}`
-                      : ' · 尚未安排时间'}
-                  </div>
+          ) : data.next ? (() => {
+            const nextEvent = data.next.event;
+            const isFutureScheduled = Boolean(
+              nextEvent && !isEventOnIsoDate(nextEvent.start, data.date, tz),
+            );
+            const futureDayLabel =
+              nextEvent && isFutureScheduled
+                ? formatRelativeEventDay(nextEvent.start, data.date, tz, lang)
+                : '';
+            const scheduledRange = nextEvent
+              ? formatTimeRange(nextEvent.start, nextEvent.end, tz)
+              : '';
+            return (
+              <section className="focus-card" aria-label={t('下一步焦点', 'Up next')}>
+                <div className="section-label">
+                  {futureDayLabel
+                    ? `${t('接下来', 'Up next')} · ${futureDayLabel}`
+                    : t('接下来', 'Up next')}
                 </div>
-                <span className="focus-time">
-                  {data.next.event ? formatTimeHHmm(data.next.event.start, tz) : '未排期'}
-                </span>
-              </div>
-              <div className="actions">
-                <button
-                  type="button"
-                  className="btn primary"
-                  disabled={
-                    startFocusAction.isPending ||
-                    completeNextAction.isPending ||
-                    proposeAction.isPending
-                  }
-                  onClick={() => void startFocusAction.run(data.next!)}
-                >
-                  {startFocusAction.isPending ? '开始中…' : '开始'}
-                </button>
-                <button
-                  type="button"
-                  className="btn"
-                  disabled={
-                    startFocusAction.isPending ||
-                    completeNextAction.isPending ||
-                    proposeAction.isPending
-                  }
-                  onClick={() => void completeNextAction.run(data.next!)}
-                >
-                  {completeNextAction.isPending ? '保存中…' : '完成'}
-                </button>
-                <button
-                  type="button"
-                  className="btn"
-                  disabled={
-                    startFocusAction.isPending ||
-                    completeNextAction.isPending ||
-                    proposeAction.isPending
-                  }
-                  onClick={() => void proposeAction.run(data.next!.step.id)}
-                >
-                  {proposeAction.isPending
-                    ? '查找中…'
-                    : data.next.event
-                      ? '调整时间'
-                      : '找时间'}
-                </button>
-              </div>
-            </section>
-          ) : (
+                <div className="focus-heading">
+                  <div style={{ minWidth: 0 }}>
+                    <div className="goal-name">{data.next.goal.title}</div>
+                    <div className="focus-title">{data.next.step.title}</div>
+                    <div className="focus-meta">
+                      {data.next.step.est_min} {t('分钟', 'min')}
+                      {data.next.step.milestone ? ` · ${data.next.step.milestone}` : ''}
+                      {nextEvent
+                        ? `${t(' · 已安排 ', ' · Scheduled ')}${futureDayLabel ? `${futureDayLabel} ` : ''}${scheduledRange}`
+                        : t(' · 尚未安排时间', ' · Unscheduled')}
+                    </div>
+                  </div>
+                  <span className="focus-time">
+                    {nextEvent
+                      ? `${futureDayLabel ? `${futureDayLabel} ` : ''}${formatTimeHHmm(nextEvent.start, tz)}`
+                      : t('未排期', 'Unscheduled')}
+                  </span>
+                </div>
+                <div className="actions">
+                  <button
+                    type="button"
+                    className={nextEvent && !isFutureScheduled ? 'btn primary' : 'btn'}
+                    disabled={
+                      startFocusAction.isPending ||
+                      completeNextAction.isPending ||
+                      proposeAction.isPending
+                    }
+                    onClick={() => void startFocusAction.run(data.next!)}
+                  >
+                    {startFocusAction.isPending ? t('开始中…', 'Starting…') : t('开始', 'Start')}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={
+                      startFocusAction.isPending ||
+                      completeNextAction.isPending ||
+                      proposeAction.isPending
+                    }
+                    onClick={() => void completeNextAction.run(data.next!)}
+                  >
+                    {completeNextAction.isPending ? t('保存中…', 'Saving…') : t('完成', 'Complete')}
+                  </button>
+                  <button
+                    type="button"
+                    className={nextEvent ? 'btn' : 'btn primary'}
+                    disabled={
+                      startFocusAction.isPending ||
+                      completeNextAction.isPending ||
+                      proposeAction.isPending
+                    }
+                    onClick={() => void proposeAction.run(data.next!.step.id)}
+                  >
+                    {proposeAction.isPending
+                      ? t('查找中…', 'Finding…')
+                      : nextEvent
+                        ? t('调整时间', 'Reschedule')
+                        : t('找时间', 'Find time')}
+                  </button>
+                </div>
+              </section>
+            );
+          })() : (
             <div style={{ marginTop: 29 }}>
               <EmptyState
-                title="今天还没有待推进步骤"
-                copy="你可以查看现有目标继续拆解，或创建一个新的目标。"
+                title={t('今天还没有待推进步骤', 'Nothing pending for today')}
+                copy={t('你可以查看现有目标继续拆解，或创建一个新的目标。', 'Review existing goals for next steps, or create a new goal.')}
                 actions={
                   <>
                     <Link to="/goals" className="btn">
-                      查看目标
+                      {t('查看目标', 'View goals')}
                     </Link>
                     <Link to="/goals/new" className="btn primary">
-                      + 新目标
+                      {t('+ 新目标', '+ New goal')}
                     </Link>
                   </>
                 }
@@ -324,17 +346,17 @@ export function TodayPage({ fallbackTimezone }: { fallbackTimezone: string }) {
           )}
 
           {data.recovery.length > 0 ? (
-            <section className="attention-list" aria-label="待恢复与逾期签到">
+            <section className="attention-list" aria-label={t('待恢复与逾期签到', 'Pending check-ins')}>
               {data.recovery.map((ev) => (
                 <div key={ev.id} className="attention">
                   <div className="attention-text">
                     <span>
                       <strong>{ev.title}</strong>
-                      {ev.goal_title ? `（${ev.goal_title}）` : ''} ·{' '}
+                      {ev.goal_title ? ` (${ev.goal_title})` : ''} ·{' '}
                       <span className="tabular-nums">
-                        {formatDateTimeLabel(ev.start, ev.end, tz)}
+                        {formatDateTimeLabel(ev.start, ev.end, tz, lang)}
                       </span>{' '}
-                      尚未签到
+                      {t('尚未签到', 'needs check-in')}
                     </span>
                   </div>
                   <div className="attention-actions">
@@ -351,7 +373,7 @@ export function TodayPage({ fallbackTimezone }: { fallbackTimezone: string }) {
                         })
                       }
                     >
-                      已完成
+                      {t('已完成', 'Done')}
                     </button>
                     <button
                       type="button"
@@ -366,7 +388,7 @@ export function TodayPage({ fallbackTimezone }: { fallbackTimezone: string }) {
                         })
                       }
                     >
-                      部分完成
+                      {t('部分完成', 'Partial')}
                     </button>
                     <button
                       type="button"
@@ -381,7 +403,7 @@ export function TodayPage({ fallbackTimezone }: { fallbackTimezone: string }) {
                         })
                       }
                     >
-                      没来得及
+                      {t('没来得及', 'Missed')}
                     </button>
                     {ev.step_id != null ? (
                       <button
@@ -390,7 +412,7 @@ export function TodayPage({ fallbackTimezone }: { fallbackTimezone: string }) {
                         disabled={checkinRecoveryAction.isPending || proposeAction.isPending}
                         onClick={() => void proposeAction.run(ev.step_id!)}
                       >
-                        重新安排
+                        {t('重新安排', 'Reschedule')}
                       </button>
                     ) : null}
                   </div>
@@ -400,30 +422,31 @@ export function TodayPage({ fallbackTimezone }: { fallbackTimezone: string }) {
           ) : null}
 
           <div className="section-head">
-            <span className="section-title">今日安排</span>
+            <span className="section-title">{t('今日安排', "Today's schedule")}</span>
             <Link className="section-link" to="/calendar">
-              查看日历
+              {t('查看日历', 'View calendar')}
             </Link>
           </div>
 
           {visibleEvents.length === 0 ? (
             <EmptyState
-              title="今天还没有日程安排"
-              copy="你可以在日历中添加固定日程，或为待办步骤寻找合适时间。"
+              title={t('今天还没有日程安排', 'No events scheduled today')}
+              copy={t('你可以在日历中添加固定日程，或为待办步骤寻找合适时间。', 'Add fixed events on the calendar or schedule a goal step.')}
               actions={
                 <Link to="/calendar" className="btn">
-                  打开日历
+                  {t('打开日历', 'Open calendar')}
                 </Link>
               }
             />
           ) : (
-            <section className="timeline" aria-label="今日时间线">
+            <section className="timeline" aria-label={t('今日时间线', "Today's timeline")}>
               {visibleEvents.map((ev) => {
                 const isCurrent =
                   execution?.event_id === ev.id || data.next?.event?.id === ev.id;
                 const isResolved =
                   ev.status === 'done' || ev.status === 'partial' || ev.status === 'missed';
-                const statusText = EVENT_STATUS_TEXT[ev.status];
+                const statusPair = EVENT_STATUS_TEXT[ev.status];
+                const statusText = statusPair ? t(statusPair[0], statusPair[1]) : undefined;
                 return (
                   <button
                     key={ev.id}
@@ -438,14 +461,14 @@ export function TodayPage({ fallbackTimezone }: { fallbackTimezone: string }) {
                       <div className="event-name">{ev.title}</div>
                       {ev.goal_title || ev.kind === 'buffer' ? (
                         <div className="event-sub">
-                          {ev.kind === 'buffer' ? '缓冲时间' : ev.goal_title}
+                          {ev.kind === 'buffer' ? t('缓冲时间', 'Buffer') : ev.goal_title}
                         </div>
                       ) : null}
                     </div>
                     <div className="event-right">
                       {statusText ? <span className="chip">{statusText}</span> : null}
                       <span className="event-duration">
-                        {durationMinutes(ev.start, ev.end)} 分钟
+                        {durationMinutes(ev.start, ev.end)} {t('分钟', 'min')}
                       </span>
                     </div>
                   </button>

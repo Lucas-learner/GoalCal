@@ -7,24 +7,28 @@ new connections; it never sends a session token into page JavaScript or a URL.
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 import html
 import os
 import secrets
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 import zoneinfo
 
 import httpx2
 import websockets
 from starlette.applications import Starlette
+from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from starlette.routing import Route, WebSocketRoute, Mount
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from . import auth
+from .i18n import normalize_lang, parse_accept_language
 
 COOKIE_NAME = "goalcal_session"
 FORM_COOKIE_NAME = "goalcal_form"
+LANG_COOKIE_NAME = "goalcal_lang"
 SESSION_SECONDS = 12 * 60 * 60
 UPSTREAM_PORT = int(os.getenv("GOALCAL_UPSTREAM_PORT", "8502"))
 UPSTREAM_HTTP = f"http://127.0.0.1:{UPSTREAM_PORT}"
@@ -83,36 +87,94 @@ def english_auth_error(message: str) -> str:
     }.get(message, message)
 
 
+def localize_auth_error(message: str, lang: str) -> str:
+    return message if lang == "zh" else english_auth_error(message)
+
+
+def _request_lang(request: Request) -> str:
+    cookie_lang = normalize_lang(request.cookies.get(LANG_COOKIE_NAME))
+    if cookie_lang:
+        return cookie_lang
+    return parse_accept_language(request.headers.get("accept-language"), default="en")
+
+
+_AUTH_COPY = {
+    "zh": {
+        "html_lang": "zh-CN",
+        "subtitle": "让计划适应你的生活节奏",
+        "nav_label": "登录与注册",
+        "tab_login": "登录",
+        "tab_register": "注册",
+        "username": "用户名",
+        "username_or_email": "用户名或邮箱",
+        "email": "邮箱",
+        "invitation": "邀请码",
+        "password": "密码",
+        "password_new": "密码（至少 6 位）",
+        "timezone": "时区",
+        "btn_login": "登录",
+        "btn_register": "注册",
+        "created": "账号已创建，请登录。",
+        "switch_label": "语言",
+    },
+    "en": {
+        "html_lang": "en",
+        "subtitle": "Plans that adapt to the rhythm of your life",
+        "nav_label": "Authentication",
+        "tab_login": "Log in",
+        "tab_register": "Create account",
+        "username": "Username",
+        "username_or_email": "Username or email",
+        "email": "Email",
+        "invitation": "Invitation code",
+        "password": "Password",
+        "password_new": "Password (at least 6 characters)",
+        "timezone": "Time zone",
+        "btn_login": "Log in",
+        "btn_register": "Register",
+        "created": "Account created. Please log in.",
+        "switch_label": "Language",
+    },
+}
+
+
 def _login_page(request: Request, message: str = "", *, register: bool = False, app_login: bool = False) -> HTMLResponse:
+    lang = _request_lang(request)
+    copy = _AUTH_COPY[lang]
     form_token = secrets.token_urlsafe(32)
     script_nonce = secrets.token_urlsafe(32)
     notice = f'<p class="notice" role="alert">{html.escape(message)}</p>' if message else ""
     open_reg = auth.open_registration_enabled()
     if register:
         extra = (
-            '<label>Email<input name="email" type="email" autocomplete="email" required></label>'
+            f'<label>{copy["email"]}<input name="email" type="email" autocomplete="email" required></label>'
             if open_reg
-            else '<label>Invitation code<input name="invitation" required></label>'
+            else f'<label>{copy["invitation"]}<input name="invitation" required></label>'
         )
-        fields = f"""<label>Username<input name="username" autocomplete="username" required></label>
+        fields = f"""<label>{copy["username"]}<input name="username" autocomplete="username" required></label>
 {extra}
-<label>Password (at least 6 characters)<input name="password" type="password" autocomplete="new-password" required></label>
-<label>Time zone<select name="tz" required>{_TZ_OPTIONS_HTML}</select></label>"""
-        action, button = "/_goalcal/register", "Register"
+<label>{copy["password_new"]}<input name="password" type="password" autocomplete="new-password" required></label>
+<label>{copy["timezone"]}<select name="tz" required>{_TZ_OPTIONS_HTML}</select></label>"""
+        action, button = "/_goalcal/register", copy["btn_register"]
         login_current, register_current = "", ' aria-current="page"'
         script = _DETECT_TZ_SCRIPT.format(nonce=script_nonce)
     else:
-        user_label = "Username or email" if open_reg else "Username"
+        user_label = copy["username_or_email"] if open_reg else copy["username"]
         fields = f"""<label>{user_label}<input name="username" autocomplete="username" required></label>
-<label>Password<input name="password" type="password" autocomplete="current-password" required></label>"""
-        action, button = "/_goalcal/login", "Log in"
+<label>{copy["password"]}<input name="password" type="password" autocomplete="current-password" required></label>"""
+        action, button = "/_goalcal/login", copy["btn_login"]
         login_current, register_current = ' aria-current="page"', ""
         script = ""
     return_field = '<input type="hidden" name="next" value="/app/">' if app_login else ""
     login_href = "/_goalcal/login?next=/app/" if app_login else "/"
     register_href = "/_goalcal/register?next=/app/" if app_login else "/_goalcal/register"
+    current_page = register_href if register else login_href
+    zh_href = f"/_goalcal/lang?lang=zh&next={quote(current_page, safe='/?=&')}"
+    en_href = f"/_goalcal/lang?lang=en&next={quote(current_page, safe='/?=&')}"
+    zh_cls = ' class="active"' if lang == "zh" else ""
+    en_cls = ' class="active"' if lang == "en" else ""
     brand_html = '<span class="brand-mark" aria-hidden="true"></span><span>GoalCal</span>'
-    body = f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+    body = f"""<!doctype html><html lang="{copy["html_lang"]}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GoalCal</title><style>
 :root{{--bg:#fafaf8;--surface:#fffefd;--surface-soft:#f4f4f1;--ink:#1d1d1f;--muted:#6e6e73;--faint:#a1a1a6;--line:rgba(29,29,31,0.08);--line-strong:rgba(29,29,31,0.16);--accent:#303638;--blue:#6b7f89;--radius:13px;--control:9px;--shadow:0 1px 2px rgba(20,22,24,0.02),0 8px 24px rgba(20,22,24,0.025)}}
@@ -132,18 +194,20 @@ nav a:hover{{color:var(--ink)}}
 nav a[aria-current="page"]{{background:var(--surface);color:var(--ink);font-weight:620;box-shadow:0 1px 2px rgba(20,22,24,0.06)}}
 label{{display:block;margin:0 0 15px;font-size:12px;font-weight:600;color:var(--ink)}}
 input,select{{display:block;width:100%;min-height:40px;margin-top:6px;padding:8px 12px;border:1px solid var(--line-strong);border-radius:var(--control);background:var(--surface);font:400 14px/1.4 inherit;color:var(--ink)}}
-input:focus,select:focus,button:focus-visible,nav a:focus-visible{{outline:2px solid var(--blue);outline-offset:2px}}
+input:focus,select:focus,button:focus-visible,nav a:focus-visible,.lang-switch a:focus-visible{{outline:2px solid var(--blue);outline-offset:2px}}
 button{{display:inline-flex;align-items:center;justify-content:center;width:100%;height:40px;margin-top:6px;padding:0 16px;border:1px solid var(--accent);border-radius:var(--control);background:var(--accent);color:#fff;font:600 13px/1 inherit;cursor:pointer;transition:background-color .15s}}
 button:hover{{background:#23282a}}
 .notice{{padding:10px 12px;background:#fdf3e7;border:1px solid rgba(180,120,40,0.2);border-radius:var(--control);color:#5c3d15;font-size:12.5px;margin:0 0 16px}}
-.disclosure{{font-size:11.5px;color:var(--faint);line-height:1.6;margin:16px 0 0;text-align:center}}
+.lang-switch{{display:flex;justify-content:center;align-items:center;gap:6px;margin-top:16px;font-size:11.5px;color:var(--faint)}}
+.lang-switch a{{color:var(--muted);text-decoration:none;padding:2px 7px;border-radius:6px}}
+.lang-switch a.active{{color:var(--ink);font-weight:620;background:var(--surface-soft)}}
 </style></head><body><main><div class="shell">
-<div class="brand-wrap"><h1 class="brand">{brand_html}</h1><p class="subtitle">让计划适应你的生活节奏</p></div>
+<div class="brand-wrap"><h1 class="brand">{brand_html}</h1><p class="subtitle">{copy["subtitle"]}</p></div>
 <div class="card">
-<nav aria-label="Authentication"><a href="{login_href}"{login_current}>Log in</a><a href="{register_href}"{register_current}>Create account</a></nav>
+<nav aria-label="{copy["nav_label"]}"><a href="{login_href}"{login_current}>{copy["tab_login"]}</a><a href="{register_href}"{register_current}>{copy["tab_register"]}</a></nav>
 {notice}<form method="post" action="{action}"><input type="hidden" name="csrf" value="{form_token}">{return_field}{fields}<button type="submit">{button}</button></form>
 </div>
-<p class="disclosure">During the trial, we log action types, timing, and errors to improve the app. Passwords, chat messages, and calendar details are not automatically added to runtime logs.</p>
+<div class="lang-switch" aria-label="{copy["switch_label"]}"><a href="{zh_href}"{zh_cls}>中文</a><span>/</span><a href="{en_href}"{en_cls}>EN</a></div>
 </div></main>{script}</body></html>"""
     response = HTMLResponse(body)
     response.headers["Cache-Control"] = "no-store"
@@ -223,6 +287,18 @@ def _is_app_target(next_value: str | None) -> bool:
     return _root_app_enabled()
 
 
+def _apply_login_lang(token: str, lang: str) -> None:
+    if lang not in {"zh", "en"}:
+        return
+    from .web.core import Service
+    from .web.http import scoped
+
+    with scoped(token, write=True) as (session, principal):
+        Service(
+            session, principal.user_id, principal.tz, datetime.now(timezone.utc), lang=lang
+        ).update_me({"lang": lang})
+
+
 async def login(request: Request) -> Response:
     if request.method == "GET":
         return _login_page(request, app_login=_is_app_target(request.query_params.get("next")))
@@ -232,10 +308,14 @@ async def login(request: Request) -> Response:
     if not _valid_form_token(request, form):
         return PlainTextResponse("Invalid form submission", status_code=403)
     app_login = _is_app_target(str(form.get("next")) if form.get("next") is not None else None)
+    lang = _request_lang(request)
     try:
         token = auth.login(str(form.get("username", "")), str(form.get("password", "")))
     except auth.AuthError as exc:
-        return _login_page(request, english_auth_error(str(exc)), app_login=app_login)
+        return _login_page(request, localize_auth_error(str(exc), lang), app_login=app_login)
+    cookie_lang = normalize_lang(request.cookies.get(LANG_COOKIE_NAME))
+    if cookie_lang:
+        await run_in_threadpool(_apply_login_lang, token, cookie_lang)
     response = RedirectResponse("/app/" if app_login else "/", status_code=303)
     response.set_cookie(
         COOKIE_NAME, token, max_age=SESSION_SECONDS, path="/",
@@ -254,6 +334,7 @@ async def register(request: Request) -> Response:
     if not _valid_form_token(request, form):
         return PlainTextResponse("Invalid form submission", status_code=403)
     app_login = _is_app_target(str(form.get("next")) if form.get("next") is not None else None)
+    lang = _request_lang(request)
     try:
         auth.create_user(
             str(form.get("username", "")), str(form.get("password", "")),
@@ -261,8 +342,33 @@ async def register(request: Request) -> Response:
             email=str(form.get("email", "")) if form.get("email") is not None else None,
         )
     except auth.AuthError as exc:
-        return _login_page(request, english_auth_error(str(exc)), register=True, app_login=app_login)
-    return _login_page(request, "Account created. Please log in.", app_login=app_login)
+        return _login_page(request, localize_auth_error(str(exc), lang), register=True, app_login=app_login)
+    return _login_page(request, _AUTH_COPY[lang]["created"], app_login=app_login)
+
+
+def _safe_auth_next(target: str | None) -> str:
+    if not target:
+        return "/"
+    parsed = urlsplit(target)
+    if parsed.scheme or parsed.netloc or not parsed.path.startswith("/") or parsed.path.startswith("//"):
+        return "/"
+    return parsed.path + (f"?{parsed.query}" if parsed.query else "")
+
+
+async def set_language(request: Request) -> Response:
+    raw_lang = request.query_params.get("lang", "")
+    lang = normalize_lang(raw_lang)
+    target = _safe_auth_next(request.query_params.get("next"))
+    response = RedirectResponse(target, status_code=303)
+    if lang:
+        response.set_cookie(
+            LANG_COOKIE_NAME, lang, max_age=365 * 24 * 60 * 60, path="/",
+            secure=_secure_cookie(request), httponly=False, samesite="lax",
+        )
+    else:
+        response.delete_cookie(LANG_COOKIE_NAME, path="/")
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 async def logout(request: Request) -> Response:
@@ -380,6 +486,7 @@ app = Starlette(routes=[
     Route("/_goalcal/login", login, methods=["GET", "POST"]),
     Route("/_goalcal/register", register, methods=["GET", "POST"]),
     Route("/_goalcal/logout", logout, methods=["POST"]),
+    Route("/_goalcal/lang", set_language, methods=["GET"]),
     Route("/{path:path}", proxy_http, methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]),
     WebSocketRoute("/{path:path}", proxy_websocket),
 ])

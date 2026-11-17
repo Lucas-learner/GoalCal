@@ -11,8 +11,8 @@ class Version(Input):
     version: str = Field(min_length=1, max_length=128)
 
 
-class DraftInput(Input):
-    title: str = Field(min_length=1, max_length=200)
+class IntakeInput(Input):
+    description: str = Field(min_length=1, max_length=2000)
     deadline: str | None = Field(default=None, min_length=10, max_length=10)
 
 
@@ -23,6 +23,17 @@ class StepDefinition(Input):
     energy: int = Field(default=1, ge=0, le=2)
     kind: Literal['deep','admin','physical','social','research'] = 'deep'
     milestone: str = Field(default='', max_length=120)
+
+
+class DraftInput(Input):
+    title: str = Field(min_length=1, max_length=200)
+    raw: str | None = Field(default=None, max_length=2000)
+    level: str | None = Field(default=None, max_length=120)
+    target: str | None = Field(default=None, max_length=400)
+    instruction: str | None = Field(default=None, max_length=600)
+    current_steps: list[StepDefinition] | None = Field(default=None, max_length=60)
+    current_outline: list[str] | None = Field(default=None, max_length=10)
+    deadline: str | None = Field(default=None, min_length=10, max_length=10)
 
 
 class CreateGoal(Version, DraftInput):
@@ -97,3 +108,13 @@ class Turn(Version):
 
 class ImportCalendar(Input):
     ics: str = Field(min_length=1, max_length=5*1024*1024)
+
+
+class UpdateMe(Input):
+    lang: Literal['', 'zh', 'en']
+
+
+class SubmitFeedback(Input):
+    category: Literal['功能问题', 'AI 理解或计划问题', '速度或连接问题', '建议或其他']
+    message: str = Field(min_length=5, max_length=2000)
+    operation_id: str | None = Field(default=None, max_length=16)

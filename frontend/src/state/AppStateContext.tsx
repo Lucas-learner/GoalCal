@@ -1,8 +1,10 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { setUnauthorizedHandler } from '../api/client';
 import type { CreateGoalIntent, Proposal } from '../api/types';
+import { I18nProvider, getActiveLang, pickText } from '../i18n';
 
 export interface UndoEntry {
+  key: number;
   operationId: string;
   message: string;
   undone: boolean;
@@ -48,6 +50,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [statusAnnouncement, setStatusAnnouncement] = useState('');
 
   const assistantTriggerRef = useRef<HTMLElement | null>(null);
+  const toastSeqRef = useRef(0);
 
   const markAuthExpired = useCallback(() => {
     setAuthExpired(true);
@@ -70,13 +73,15 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
 
   const recordMutationResult = useCallback(
     (res: { message?: string; operation_id?: string }) => {
-      const msg = res.message || '操作已完成';
+      const msg = res.message || pickText(getActiveLang(), '操作已完成', 'Completed');
       setStatusAnnouncement(msg);
-      if (res.operation_id) {
+      if (res.message || res.operation_id) {
+        toastSeqRef.current += 1;
         setUndoEntry({
-          operationId: res.operation_id,
+          key: toastSeqRef.current,
+          operationId: res.operation_id || '',
           message: msg,
-          undone: false,
+          undone: !res.operation_id,
         });
       }
     },
@@ -85,10 +90,11 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
 
   const markUndoCompleted = useCallback((message: string) => {
     setStatusAnnouncement(message);
+    toastSeqRef.current += 1;
     setUndoEntry((prev) =>
       prev
-        ? { ...prev, message, undone: true }
-        : { operationId: '', message, undone: true },
+        ? { ...prev, key: toastSeqRef.current, message, undone: true }
+        : { key: toastSeqRef.current, operationId: '', message, undone: true },
     );
   }, []);
 
@@ -122,31 +128,33 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <AppStateContext.Provider
-      value={{
-        authExpired,
-        clearAuthExpired,
-        markAuthExpired,
-        undoEntry,
-        recordMutationResult,
-        markUndoCompleted,
-        dismissUndo,
-        assistantOpen,
-        openAssistant,
-        closeAssistant,
-        pageGoalId,
-        setPageGoalId,
-        activeProposal,
-        openProposalModal,
-        closeProposalModal,
-        prefillNewGoal,
-        setPrefillNewGoal,
-        statusAnnouncement,
-        announceStatus,
-      }}
-    >
-      {children}
-    </AppStateContext.Provider>
+    <I18nProvider>
+      <AppStateContext.Provider
+        value={{
+          authExpired,
+          clearAuthExpired,
+          markAuthExpired,
+          undoEntry,
+          recordMutationResult,
+          markUndoCompleted,
+          dismissUndo,
+          assistantOpen,
+          openAssistant,
+          closeAssistant,
+          pageGoalId,
+          setPageGoalId,
+          activeProposal,
+          openProposalModal,
+          closeProposalModal,
+          prefillNewGoal,
+          setPrefillNewGoal,
+          statusAnnouncement,
+          announceStatus,
+        }}
+      >
+        {children}
+      </AppStateContext.Provider>
+    </I18nProvider>
   );
 }
 

@@ -70,7 +70,7 @@ Rules:
    executes the intent after you. Your reply acknowledges or answers only.
 2. Do NOT compute dates. Copy the time phrase verbatim into when_text
    ("tomorrow 10am", "明天下午", "in 30 days"); a deterministic parser resolves it.
-3. reply: 1-3 short sentences, in the user's language, structured as
+3. reply: 1-3 short sentences, in the user's language (or preferred_language when unclear), structured as
    acknowledge (respond to what they actually said) → anchor (tie it to their
    words or the current context) → at most ONE optional offer. If you make an
    offer, copy it into "offer" verbatim. Use Markdown: blank lines between
@@ -211,6 +211,7 @@ def decide(
     *,
     client=None,
     breaker: CircuitBreaker | None = None,
+    lang: str | None = None,
 ) -> TurnDecision | None:
     """返回本轮决定；不可用/失败/非法一律 None（调用方走降级路径）。"""
     if client is None:
@@ -220,8 +221,15 @@ def decide(
         telemetry.emit("llm_skipped", user_id=user_id, layer="turn", reason="circuit_open")
         return None
     try:
+        from ..i18n import normalize_lang
+        resolved_lang = normalize_lang(lang)
         payload = {
             "message": text,
+            "preferred_language": (
+                "Simplified Chinese" if resolved_lang == "zh"
+                else "English" if resolved_lang == "en"
+                else "auto"
+            ),
             "dialog": {
                 "kind": dialog_ctx.kind,
                 "stage": dialog_ctx.stage,

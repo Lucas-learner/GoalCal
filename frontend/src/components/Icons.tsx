@@ -53,3 +53,15 @@ export function SettingsIcon() {
     </span>
   );
 }
+
+export function LogOutIcon() {
+  return (
+    <span className="icon" aria-hidden="true">
+      <svg viewBox="0 0 24 24">
+        <path d="M9 21H5.5A1.5 1.5 0 0 1 4 19.5v-15A1.5 1.5 0 0 1 5.5 3H9" />
+        <path d="m16 17 5-5-5-5" />
+        <path d="M21 12H9" />
+      </svg>
+    </span>
+  );
+}

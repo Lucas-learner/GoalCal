@@ -9,6 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
 
+from ..i18n import pick
+
 # ---------------------------------------------------------------- 数据结构
 
 
@@ -193,6 +195,7 @@ def _score(
     deadline: date | None,
     today: date,
     adjacent_before: bool,
+    lang: str = "zh",
 ) -> tuple[float, list[str]]:
     score = 0.5
     reasons: list[str] = []
@@ -205,12 +208,12 @@ def _score(
     elif req.energy >= 1 and slot_energy >= req.energy:
         score += 0.12
         if req.energy == 2 and 9 <= start.hour <= 11:
-            reasons.append("上午 9–11 点是你精力最好的整块时间，适合深度任务")
+            reasons.append(pick(lang, "上午 9–11 点是你精力最好的整块时间，适合深度任务", "9–11 AM matches your peak energy for deep work"))
         elif req.energy <= 1:
-            reasons.append("任务强度不高，低谷时段也能推进")
+            reasons.append(pick(lang, "任务强度不高，低谷时段也能推进", "Light-to-medium effort fits easily into this slot"))
     if slot_energy == 0 and req.energy >= 1:
         score -= 0.15
-        reasons.append("午饭后精力低谷，建议只做低强度任务")
+        reasons.append(pick(lang, "午饭后精力低谷，建议只做低强度任务", "Post-lunch energy dip; better suited for lighter tasks"))
 
     # 2) 用户偏好时段
     if prefs.web_availability is not None:
@@ -225,7 +228,7 @@ def _score(
     lo, hi = KIND_TIME_BONUS.get(req.kind, (0, 24))
     if lo <= start.hour < hi:
         score += 0.08
-        reasons.append(_kind_reason(req.kind, start.hour))
+        reasons.append(_kind_reason(req.kind, start.hour, lang=lang))
 
     # 4) 越早越好（避免拖到截止日前）
     score -= min(days_from_now, 7) * 0.06
@@ -235,19 +238,19 @@ def _score(
         days_left = (deadline - today).days
         if days_left <= 7:
             score += 0.10
-            reasons.append(f"距离截止还有 {days_left} 天，建议尽早推进")
+            reasons.append(pick(lang, f"距离截止还有 {days_left} 天，建议尽早推进", f"{days_left} day(s) left before the deadline; better to start early"))
         elif days_left <= 14:
             score += 0.05
 
     # 6) 当日过载
     if goal_minutes_that_day + req.est_min > prefs.max_goal_minutes_per_day:
         score -= 0.45
-        reasons.append("当天目标时间已接近上限，不建议再加块")
+        reasons.append(pick(lang, "当天目标时间已接近上限，不建议再加块", "Near your daily goal-time limit; adding another block isn't recommended"))
 
     # 7) 切换成本 / 缓冲
     if adjacent_before:
         score -= 0.07
-        reasons.append("紧接在另一个日程之后，已自动留出缓冲")
+        reasons.append(pick(lang, "紧接在另一个日程之后，已自动留出缓冲", "Right after another event; buffer time has been reserved"))
 
     # 8) 午饭保护
     if prefs.lunch[0] <= start.hour < prefs.lunch[1]:
@@ -259,14 +262,22 @@ def _score(
 
     if not reasons:
         if in_pref:
-            reasons.append("落在你通常状态较好的时段")
+            reasons.append(pick(lang, "落在你通常状态较好的时段", "Falls within your preferred focus window"))
         else:
-            reasons.append("这是附近唯一能放下的完整时间块")
+            reasons.append(pick(lang, "这是附近唯一能放下的完整时间块", "Only nearby open block that fits the full duration"))
 
     return max(0.0, min(1.0, score)), reasons
 
 
-def _kind_reason(kind: str, hour: int) -> str:
+def _kind_reason(kind: str, hour: int, *, lang: str = "zh") -> str:
+    if pick(lang, "zh", "en") == "en":
+        return {
+            "deep": "Focused thinking tasks tend to go smoother in the morning",
+            "research": "Afternoon works well for reading and research without heavy willpower",
+            "admin": "Light admin tasks fit the afternoon without crowding your peak hours",
+            "physical": "Morning workouts are less likely to be crowded out later in the day",
+            "social": "Late afternoon feels natural for calls and collaboration",
+        }.get(kind, "Time of day fits this task type")
     return {
         "deep": "这类需要连续思考的任务放在上午更稳",
         "research": "下午适合查资料、看参考，不需要太多意志力",
@@ -288,6 +299,7 @@ def propose(
     top_n: int = 3,
     deadline: date | None = None,
     window: tuple[datetime, datetime] | None = None,
+    lang: str = "zh",
 ) -> list[Candidate]:
     """在 now 之后的 days 天内，给出 top_n 个候选时段（按分数降序）。
 
@@ -378,7 +390,7 @@ def propose(
                     abs((start - b.end).total_seconds()) <= 20 * 60 for b in day_busy
                 )
                 score, reasons = _score(
-                    start, end, req, prefs, goal_minutes, days_from_now, deadline, today, adjacent
+                    start, end, req, prefs, goal_minutes, days_from_now, deadline, today, adjacent, lang=lang
                 )
                 pool.append(Candidate(start=start, end=end, score=score, reasons=reasons))
 

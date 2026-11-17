@@ -11,7 +11,11 @@ import type {
 } from '@fullcalendar/core';
 import zhCnLocale from '@fullcalendar/core/locales/zh-cn';
 import dayGridPlugin from '@fullcalendar/daygrid';
-import interactionPlugin, { type DateClickArg } from '@fullcalendar/interaction';
+import interactionPlugin, {
+  Draggable,
+  type DateClickArg,
+  type EventReceiveArg,
+} from '@fullcalendar/interaction';
 import luxonPlugin from '@fullcalendar/luxon3';
 import timeGridPlugin from '@fullcalendar/timegrid';
 import { DateTime } from 'luxon';
@@ -25,24 +29,26 @@ import { EmptyState, ErrorBanner } from '../components/StateFeedback';
 import {
   calendarStrToUtcIso,
   formatTimeRange,
-  formatWeekRangeLabel,
   getRangeBoundsUtc,
   todayIsoDateInZone,
 } from '../lib/datetime';
 import { useIdempotentAction } from '../lib/useIdempotentMutation';
+import { useI18n } from '../i18n';
 import { useAppState } from '../state/AppStateContext';
 
-const STATUS_BADGE: Record<string, string> = {
-  moved: '已调整',
-  done: '已完成',
-  partial: '部分完成',
-  missed: '未完成',
+const STATUS_BADGE: Record<string, [string, string]> = {
+  moved: ['已调整', 'Moved'],
+  done: ['已完成', 'Done'],
+  partial: ['部分完成', 'Partial'],
+  missed: ['未完成', 'Missed'],
 };
 
 export function CalendarPage({ timezone }: { timezone: string }) {
   const queryClient = useQueryClient();
   const { openAssistant, openProposalModal, recordMutationResult } = useAppState();
+  const { lang, t } = useI18n();
   const calendarRef = useRef<FullCalendar | null>(null);
+  const backlogRef = useRef<HTMLElement | null>(null);
 
   const [isMobile, setIsMobile] = useState(() =>
     typeof window !== 'undefined' ? window.innerWidth <= 720 : false,
@@ -57,7 +63,10 @@ export function CalendarPage({ timezone }: { timezone: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
-  const [range, setRange] = useState(initialBounds);
+  const [range, setRange] = useState(() => ({
+    startUtc: initialBounds.startUtc,
+    endUtc: initialBounds.endUtc,
+  }));
 
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
   const [newEventRange, setNewEventRange] = useState<{
@@ -127,6 +136,58 @@ export function CalendarPage({ timezone }: { timezone: string }) {
     },
   });
 
+  const scheduleStepFn = useCallback(
+    async (
+      args: {
+        stepId: number;
+        version: string;
+        goalId: number;
+        startUtc: string;
+        removeTempEvent: () => void;
+      },
+      key: string,
+    ) => api.scheduleStep(args.stepId, { version: args.version, start: args.startUtc }, key),
+    [],
+  );
+
+  const scheduleStepAction = useIdempotentAction(scheduleStepFn, {
+    onSuccess: async (res, args) => {
+      recordMutationResult(res);
+      await invalidateAfterWrite(queryClient, { goalId: args.goalId });
+      args.removeTempEvent();
+    },
+    onError: async (err, args) => {
+      args.removeTempEvent();
+      if (err.status === 409) {
+        await invalidateAfterWrite(queryClient, { goalId: args.goalId });
+      }
+    },
+  });
+
+  useEffect(() => {
+    const containerEl = backlogRef.current;
+    if (!containerEl) return;
+    const draggable = new Draggable(containerEl, {
+      itemSelector: '.backlog-item',
+      minDistance: 5,
+      eventData: (el) => {
+        const estMin = Math.max(5, Number(el.dataset.estMin) || 30);
+        return {
+          title: el.dataset.title || t('待办步骤', 'Todo step'),
+          duration: { minutes: estMin },
+          create: true,
+          classNames: ['gc-ev-block'],
+          extendedProps: {
+            backlogStepId: Number(el.dataset.stepId),
+            backlogStepVersion: el.dataset.stepVersion ?? '',
+            backlogGoalId: Number(el.dataset.goalId),
+          },
+        };
+      },
+    });
+    return () => draggable.destroy();
+  }, []);
+
   const visibleEvents = useMemo(
     () => (eventsQuery.data?.events ?? []).filter((ev) => ev.status !== 'skipped'),
     [eventsQuery.data?.events],
@@ -150,7 +211,7 @@ export function CalendarPage({ timezone }: { timezone: string }) {
     const protectedBg: EventInput[] = (availabilityQuery.data?.protected_windows ?? []).map(
       (win, idx) => ({
         id: `protected-${idx}`,
-        title: '保护时段',
+        title: t('保护时段', 'Protected'),
         display: 'background',
         daysOfWeek: win.days.map((d) => (d + 1) % 7),
         startTime: `${win.start}:00`,
@@ -160,7 +221,7 @@ export function CalendarPage({ timezone }: { timezone: string }) {
     );
 
     return [...protectedBg, ...normalEvents];
-  }, [visibleEvents, availabilityQuery.data?.protected_windows]);
+  }, [visibleEvents, availabilityQuery.data?.protected_windows, t]);
 
   const scheduledStepIds = useMemo(() => {
     const ids = new Set<number>();
@@ -176,6 +237,7 @@ export function CalendarPage({ timezone }: { timezone: string }) {
     const items: Array<{
       stepId: number;
       stepTitle: string;
+      stepVersion: string;
       estMin: number;
       goalId: number;
       goalTitle: string;
@@ -187,6 +249,7 @@ export function CalendarPage({ timezone }: { timezone: string }) {
           items.push({
             stepId: step.id,
             stepTitle: step.title,
+            stepVersion: step.version,
             estMin: step.est_min,
             goalId: goal.id,
             goalTitle: goal.title,
@@ -203,8 +266,7 @@ export function CalendarPage({ timezone }: { timezone: string }) {
     const nextAnchor = DateTime.fromISO(arg.startStr, { zone: timezone }).toISODate();
     if (nextAnchor) setAnchorDate(nextAnchor);
     if (startUtc && endUtc) {
-      const label = formatWeekRangeLabel(arg.startStr, arg.endStr, viewMode, timezone);
-      setRange({ startUtc, endUtc, label });
+      setRange({ startUtc, endUtc });
     }
   };
 
@@ -275,18 +337,48 @@ export function CalendarPage({ timezone }: { timezone: string }) {
     void moveAction.run({ event: raw, startUtc, endUtc, revert: info.revert });
   };
 
+  const handleEventReceive = (info: EventReceiveArg) => {
+    const props = info.event.extendedProps as {
+      backlogStepId?: number;
+      backlogStepVersion?: string;
+      backlogGoalId?: number;
+    };
+    if (
+      scheduleStepAction.isPending ||
+      !props.backlogStepId ||
+      !props.backlogStepVersion ||
+      !props.backlogGoalId
+    ) {
+      info.revert();
+      return;
+    }
+    const startUtc = calendarStrToUtcIso(info.event.startStr, timezone);
+    if (!startUtc) {
+      info.revert();
+      return;
+    }
+    void scheduleStepAction.run({
+      stepId: props.backlogStepId,
+      version: props.backlogStepVersion,
+      goalId: props.backlogGoalId,
+      startUtc,
+      removeTempEvent: () => info.event.remove(),
+    });
+  };
+
   const renderEventContent = (arg: EventContentArg) => {
     const raw = arg.event.extendedProps?.rawEvent as CalendarEvent | undefined;
     if (!raw) {
       return <div>{arg.event.title}</div>;
     }
-    const statusText = STATUS_BADGE[raw.status];
+    const statusPair = STATUS_BADGE[raw.status];
+    const statusText = statusPair ? t(statusPair[0], statusPair[1]) : undefined;
     const timeText = formatTimeRange(raw.start, raw.end, timezone);
     return (
       <div>
         <div style={{ fontWeight: 620, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {statusText ? `[${statusText}] ` : ''}
-          {raw.kind === 'buffer' ? `缓冲 · ${raw.title}` : raw.title}
+          {raw.kind === 'buffer' ? `${t('缓冲', 'Buffer')} · ${raw.title}` : raw.title}
         </div>
         <div className="tabular-nums" style={{ opacity: 0.85, fontSize: 9 }}>
           {timeText}
@@ -298,32 +390,27 @@ export function CalendarPage({ timezone }: { timezone: string }) {
   return (
     <div className="calendar-page">
       <div className="topbar">
-        <div>
-          <div className="eyebrow">
-            {range.label} · {timezone}
-          </div>
-          <h1>日历</h1>
-        </div>
+        <h1>{t('日历', 'Calendar')}</h1>
         <div className="calendar-controls">
           <button type="button" className="btn small" onClick={() => handleNav('prev')}>
-            {viewMode === 'day' ? '上一天' : '上一周'}
+            {viewMode === 'day' ? t('上一天', 'Prev day') : t('上一周', 'Prev week')}
           </button>
           <button type="button" className="btn small" onClick={() => handleNav('today')}>
-            今天
+            {t('今天', 'Today')}
           </button>
           <button type="button" className="btn small" onClick={() => handleNav('next')}>
-            {viewMode === 'day' ? '下一天' : '下一周'}
+            {viewMode === 'day' ? t('下一天', 'Next day') : t('下一周', 'Next week')}
           </button>
 
           {isMobile ? (
             <label className="sr-only" htmlFor="calendar-mobile-date">
-              选择日期
+              {t('选择日期', 'Pick date')}
             </label>
           ) : null}
           <input
             id="calendar-mobile-date"
             type="date"
-            aria-label="跳转日期"
+            aria-label={t('跳转日期', 'Jump to date')}
             className="input"
             style={{ width: 'auto', minHeight: 31, padding: '4px 8px', fontSize: 12 }}
             value={anchorDate}
@@ -335,16 +422,24 @@ export function CalendarPage({ timezone }: { timezone: string }) {
             className={`btn small${viewMode === 'week' ? ' primary' : ''}`}
             onClick={() => switchView('week')}
           >
-            周
+            {t('周', 'Week')}
           </button>
           <button
             type="button"
             className={`btn small${viewMode === 'day' ? ' primary' : ''}`}
             onClick={() => switchView('day')}
           >
-            日
+            {t('日', 'Day')}
           </button>
 
+          <button
+            type="button"
+            className="assistant-trigger"
+            onClick={(e) => openAssistant(e.currentTarget)}
+          >
+            <SparkleIcon />
+            <span>{t('问 GoalCal', 'Ask GoalCal')}</span>
+          </button>
           <button
             type="button"
             className="btn primary small"
@@ -353,24 +448,21 @@ export function CalendarPage({ timezone }: { timezone: string }) {
               openNewEventAt(now);
             }}
           >
-            + 新日程
-          </button>
-          <button
-            type="button"
-            className="assistant-trigger"
-            onClick={(e) => openAssistant(e.currentTarget)}
-          >
-            <SparkleIcon />
-            <span>问 GoalCal</span>
+            {t('+ 新日程', '+ New event')}
           </button>
         </div>
       </div>
 
-      <p className="subtitle">固定日程与目标时间块放在一起，但保留不同的调整自由度。</p>
+      <p className="subtitle">
+        {t('固定日程与目标时间块', 'Fixed events & goal blocks')}
+      </p>
 
       <ErrorBanner
         error={
-          eventsQuery.error ?? moveAction.actionError ?? proposeAction.actionError
+          eventsQuery.error ??
+          moveAction.actionError ??
+          scheduleStepAction.actionError ??
+          proposeAction.actionError
         }
         onRetry={eventsQuery.isError ? () => void eventsQuery.refetch() : undefined}
         onRefresh={() => void invalidateAfterWrite(queryClient)}
@@ -381,8 +473,9 @@ export function CalendarPage({ timezone }: { timezone: string }) {
           {!eventsQuery.isLoading && !eventsQuery.isError && visibleEvents.length === 0 ? (
             <div className="status-banner info" role="status">
               <div className="status-banner-body">
-                {viewMode === 'day' ? '这一天还没有安排。' : '这一周还没有日程安排。'}
-                点击空白时段可新建日程，或从待安排列表中找时间。
+                {viewMode === 'day'
+                  ? t('当天暂无日程，点击空白处新建或从右侧拖入。', 'No events today — click a slot to add or drag from Unscheduled.')
+                  : t('本周暂无日程，点击空白处新建或从右侧拖入。', 'No events this week — click a slot to add or drag from Unscheduled.')}
               </div>
             </div>
           ) : null}
@@ -394,7 +487,7 @@ export function CalendarPage({ timezone }: { timezone: string }) {
               initialView={viewMode === 'day' ? 'timeGridDay' : 'timeGridWeek'}
               initialDate={anchorDate}
               timeZone={timezone}
-              locale={zhCnLocale}
+              locale={lang === 'zh' ? zhCnLocale : 'en'}
               firstDay={1}
               headerToolbar={false}
               allDaySlot={false}
@@ -409,6 +502,7 @@ export function CalendarPage({ timezone }: { timezone: string }) {
               selectable
               selectMirror
               editable
+              droppable
               eventInteractive
               events={fcEvents}
               datesSet={handleDatesSet}
@@ -417,56 +511,65 @@ export function CalendarPage({ timezone }: { timezone: string }) {
               eventClick={handleEventClick}
               eventDrop={handleEventChange}
               eventResize={handleEventChange}
+              eventReceive={handleEventReceive}
               eventContent={renderEventContent}
             />
           </div>
 
-          <div className="legend" aria-label="日历图例">
+          <div className="legend" aria-label={t('日历图例', 'Calendar legend')}>
             <span className="legend-item">
               <i className="legend-swatch goal" aria-hidden="true" />
-              目标时间块
+              {t('目标时间块', 'Goal block')}
             </span>
             <span className="legend-item">
               <i className="legend-swatch" aria-hidden="true" />
-              固定日程
+              {t('固定日程', 'Fixed event')}
             </span>
             <span className="legend-item">
               <i className="legend-swatch protected" aria-hidden="true" />
-              保护时段
+              {t('保护时段', 'Protected')}
             </span>
-            <span className="legend-item">点击日程可查看或键盘调整时间，支持拖拽改期</span>
           </div>
         </div>
 
-        <aside className="card-flat backlog" aria-label="尚未安排的步骤">
-          <div className="backlog-title">尚未安排</div>
-          <div className="backlog-copy">选择一个待办步骤，让 GoalCal 为你推荐不冲突的时间段。</div>
+        <aside ref={backlogRef} className="card-flat backlog" aria-label={t('尚未安排的步骤', 'Unscheduled steps')}>
+          <div className="backlog-title">{t('尚未安排', 'Unscheduled')}</div>
+          <div className="backlog-copy">
+            {t('拖入日历，或点找时间', 'Drag to calendar, or click Find time')}
+          </div>
 
           {goalsQuery.isLoading ? (
             <div className="muted" style={{ fontSize: 11 }}>
-              正在加载待办步骤…
+              {t('加载中…', 'Loading…')}
             </div>
           ) : goalsQuery.isError ? (
             <ErrorBanner error={goalsQuery.error} onRetry={() => void goalsQuery.refetch()} />
           ) : backlogSteps.length === 0 ? (
-            <EmptyState
-              title="所有待办步骤都已有时间"
-              copy="当前活跃目标的待办步骤都已安排在当前日历视图中。"
-            />
+            <EmptyState title={t('暂无待安排步骤', 'Nothing unscheduled')} />
           ) : (
             backlogSteps.map((item) => (
-              <div key={item.stepId} className="backlog-item">
+              <div
+                key={item.stepId}
+                className="backlog-item"
+                data-step-id={item.stepId}
+                data-step-version={item.stepVersion}
+                data-goal-id={item.goalId}
+                data-est-min={item.estMin}
+                data-title={item.stepTitle}
+              >
                 <div className="backlog-item-title">{item.stepTitle}</div>
                 <div className="backlog-item-meta">
-                  {item.estMin} 分钟 · {item.goalTitle}
+                  {item.estMin} {t('分钟', 'min')} · {item.goalTitle}
                 </div>
                 <button
                   type="button"
                   className="btn small"
-                  disabled={proposeAction.isPending}
+                  disabled={proposeAction.isPending || scheduleStepAction.isPending}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onMouseDown={(e) => e.stopPropagation()}
                   onClick={() => void proposeAction.run(item.stepId)}
                 >
-                  找时间 →
+                  {t('找时间 →', 'Find time →')}
                 </button>
               </div>
             ))

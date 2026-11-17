@@ -544,3 +544,258 @@ def test_open_registration_requires_unique_email_and_allows_email_login(accounts
             assert logged_in2.status_code == 303
 
     asyncio.run(run())
+
+
+def test_bilingual_api_me_draft_scheduler_and_assistant(accounts, monkeypatch):
+    from goalcal.llm import plan as llm_plan
+
+    _, tokens = accounts
+    seen_target_langs = []
+
+    class _MockPlanClient:
+        ready = True
+
+        def complete_json(self, system, user_prompt, **_kwargs):
+            payload = json.loads(user_prompt)
+            seen_target_langs.append(payload["target_language"])
+            if payload["target_language"] == "English":
+                return {
+                    "outline": ["Foundation", "Practice"],
+                    "steps": [
+                        {"milestone": "Foundation", "title": "Learn chord shapes", "outcome": "Play 3 chords", "est_min": 25, "energy": 1, "kind": "deep"}
+                    ],
+                }
+            return {
+                "outline": ["基础准备", "上手练习"],
+                "steps": [
+                    {"milestone": "基础准备", "title": "熟悉基础和弦指法", "outcome": "能按出3个和弦", "est_min": 25, "energy": 1, "kind": "deep"}
+                ],
+            }
+
+    monkeypatch.setattr(llm_plan, 'settings', replace(llm_plan.settings, llm_enabled=True))
+    monkeypatch.setattr(llm_plan, 'plan_client', lambda: _MockPlanClient())
+
+    async def run():
+        async with httpx2.AsyncClient(
+            transport=httpx2.ASGITransport(app=app),
+            base_url=ORIGIN,
+            cookies={'goalcal_session': tokens[0]},
+        ) as c:
+            r = await c.patch('/api/v1/me', json={'lang': 'en'}, headers={'Origin': ORIGIN, 'Idempotency-Key': 'lang-en-1234'})
+            assert r.status_code == 200
+            assert r.json()['lang'] == 'en'
+
+            draft_en = await c.post('/api/v1/goal-drafts', json={'title': 'Learn guitar', 'deadline': None},
+                                    headers={'Origin': ORIGIN, 'Idempotency-Key': 'draft-en-1234', 'X-GoalCal-Lang': 'en'})
+            assert draft_en.status_code == 200
+            assert draft_en.json()['outline'] == ['Foundation', 'Practice']
+            assert draft_en.json()['steps'][0]['title'] == 'Learn chord shapes'
+
+            bad_ev = await c.post('/api/v1/calendar/events', json={'title': ' ', 'start': 'bad', 'end': 'bad'},
+                                  headers={'Origin': ORIGIN, 'Idempotency-Key': 'bad-ev-1234', 'X-GoalCal-Lang': 'en'})
+            assert bad_ev.status_code == 422
+            assert 'Title must be' in bad_ev.json()['error']['message']
+
+            turn_en = await c.post('/api/v1/assistant/turns', json={'text': 'find time', 'version': '0'},
+                                   headers={'Origin': ORIGIN, 'Idempotency-Key': 'turn-en-1234', 'X-GoalCal-Lang': 'en'})
+            assert turn_en.status_code == 200
+            assert 'Create a goal first' in turn_en.json()['messages'][-1]['content']
+
+            draft_zh = await c.post('/api/v1/goal-drafts', json={'title': '学吉他', 'deadline': None},
+                                    headers={'Origin': ORIGIN, 'Idempotency-Key': 'draft-zh-1234', 'X-GoalCal-Lang': 'zh'})
+            assert draft_zh.status_code == 200
+            assert draft_zh.json()['outline'] == ['基础准备', '上手练习']
+
+            fb_bad = await c.post('/api/v1/feedback', json={'category': '建议或其他', 'message': '   hi  '},
+                                  headers={'Origin': ORIGIN, 'Idempotency-Key': 'fb-bad-1234', 'X-GoalCal-Lang': 'en'})
+            assert fb_bad.status_code == 422
+
+            fb_ok = await c.post('/api/v1/feedback', json={'category': '建议或其他', 'message': 'Great calendar drag UX!'},
+                                 headers={'Origin': ORIGIN, 'Idempotency-Key': 'fb-ok-1234', 'X-GoalCal-Lang': 'en'})
+            assert fb_ok.status_code == 200
+            assert fb_ok.json()['id'] >= 1
+            assert 'Feedback saved' in fb_ok.json()['message']
+
+    asyncio.run(run())
+    assert seen_target_langs == ['English', 'Simplified Chinese']
+
+
+def test_assistant_clear_and_cross_day_6h_auto_reset(accounts):
+    from goalcal.web.assistant import _is_stale_thread
+
+    _, tokens = accounts
+
+    # Auto-clear helper checks BOTH cross-day AND >=6h in user's timezone (Asia/Shanghai = UTC+8)
+    nov16_1500_sh = [{'id': '1', 'role': 'user', 'content': 'hi', 'ts': '2026-11-16T07:00:00+00:00'}]
+    # Same local day, 8h elapsed -> keep!
+    assert _is_stale_thread(nov16_1500_sh, datetime(2026, 11, 16, 15, 0, tzinfo=timezone.utc), 'Asia/Shanghai') is False
+    # Crossed midnight (23:30 Nov 16 -> 01:00 Nov 17), only 1.5h elapsed -> keep!
+    nov16_2330_sh = [{'id': '1', 'role': 'user', 'content': 'hi', 'ts': '2026-11-16T15:30:00+00:00'}]
+    assert _is_stale_thread(nov16_2330_sh, datetime(2026, 11, 16, 17, 0, tzinfo=timezone.utc), 'Asia/Shanghai') is False
+    # Crossed midnight AND >=6h elapsed (21:00 Nov 16 -> 08:00 Nov 17 = 11h) -> auto-clear!
+    nov16_2100_sh = [{'id': '1', 'role': 'user', 'content': 'hi', 'ts': '2026-11-16T13:00:00+00:00'}]
+    assert _is_stale_thread(nov16_2100_sh, datetime(2026, 11, 17, 0, 0, tzinfo=timezone.utc), 'Asia/Shanghai') is True
+
+    async def run():
+        async with httpx2.AsyncClient(
+            transport=httpx2.ASGITransport(app=app),
+            base_url=ORIGIN,
+            cookies={'goalcal_session': tokens[0]},
+        ) as c:
+            turn_res = await c.post(
+                '/api/v1/assistant/turns',
+                json={'text': '今天有什么安排？', 'version': '0'},
+                headers={'Origin': ORIGIN, 'Idempotency-Key': 'turn-clr-1234', 'X-GoalCal-Lang': 'zh'},
+            )
+            assert turn_res.status_code == 200
+            ver = turn_res.json()['version']
+            assert len(turn_res.json()['messages']) >= 2
+
+            stale_clr = await c.post(
+                '/api/v1/assistant/clear',
+                json={'version': '0'},
+                headers={'Origin': ORIGIN, 'Idempotency-Key': 'clr-stale-1234', 'X-GoalCal-Lang': 'zh'},
+            )
+            assert stale_clr.status_code == 409
+
+            cleared = await c.post(
+                '/api/v1/assistant/clear',
+                json={'version': ver},
+                headers={'Origin': ORIGIN, 'Idempotency-Key': 'clr-ok-1234', 'X-GoalCal-Lang': 'zh'},
+            )
+            assert cleared.status_code == 200
+            assert cleared.json()['messages'] == []
+            assert cleared.json()['message'] == '对话已清空'
+
+            draft = await c.post('/api/v1/goal-drafts', json={'title': '学吉他', 'deadline': None},
+                                 headers={'Origin': ORIGIN, 'Idempotency-Key': 'prop-draft-1234', 'X-GoalCal-Lang': 'zh'})
+            created = await c.post('/api/v1/goals', json={
+                'draft_id': draft.json()['id'],
+                'version': draft.json()['version'],
+                'title': draft.json()['title'],
+                'deadline': draft.json()['deadline'],
+                'steps': draft.json()['steps'],
+            }, headers={'Origin': ORIGIN, 'Idempotency-Key': 'prop-goal-1234'})
+            step_data = created.json()['goal']['steps'][0]
+            step_id = step_data['id']
+            prop = await c.post(f'/api/v1/steps/{step_id}/proposals', json={},
+                                headers={'Origin': ORIGIN, 'Idempotency-Key': 'prop-sort-1234'})
+            assert prop.status_code == 200
+            starts = [cand['start'] for cand in prop.json()['candidates']]
+            assert starts == sorted(starts)
+
+            accepted = await c.post(
+                f"/api/v1/proposals/{prop.json()['id']}/accept",
+                json={'index': 0, 'version': prop.json()['version']},
+                headers={'Origin': ORIGIN, 'Idempotency-Key': 'prop-accept-title-1234'},
+            )
+            assert accepted.status_code == 200
+            ev = accepted.json()['event']
+            assert ev['title'] == step_data['title']
+            assert ev['goal_title'] == '学吉他'
+
+            # Legacy goal-prefixed block titles in DB also serialize without the redundant goal prefix
+            from goalcal import db
+            from goalcal.models import Event
+            with db.session_scope() as s:
+                row = s.get(Event, ev['id'])
+                row.title = f"学吉他 · {step_data['title']}"
+            cal_res = await c.get(
+                f"/api/v1/calendar/events?start={ev['start']}&end={ev['end']}",
+            )
+            assert cal_res.status_code == 200
+            matched = next(e for e in cal_res.json()['events'] if e['id'] == ev['id'])
+            assert matched['title'] == step_data['title']
+            assert matched['goal_title'] == '学吉他'
+
+    asyncio.run(run())
+
+
+def test_today_next_prioritizes_today_then_unscheduled_pinned_then_future_fallback(accounts):
+    from zoneinfo import ZoneInfo
+    from goalcal import db
+    from goalcal.domain import goals as goal_svc
+    from goalcal.models import Event, User
+
+    user_ids, tokens = accounts
+    uid = user_ids[0]
+    with db.session_scope() as s:
+        user = s.get(User, uid)
+        user.timezone = 'Asia/Shanghai'
+        pinned_goal = goal_svc.create_goal(
+            s,
+            uid,
+            title='置顶英语学习',
+            step_defs=[{'title': '背 20 个词', 'est_min': 20, 'milestone': '基础', 'seq': 0}],
+        )
+        pinned_goal.pinned = True
+        unpinned_goal = goal_svc.create_goal(
+            s,
+            uid,
+            title='普通阅读目标',
+            step_defs=[{'title': '读第一章', 'est_min': 30, 'milestone': '开始', 'seq': 0}],
+        )
+        pinned_step_id = pinned_goal.steps[0].id
+        unpinned_step_id = unpinned_goal.steps[0].id
+
+        now_utc = datetime.now(timezone.utc)
+        tomorrow_local = (now_utc.astimezone(ZoneInfo('Asia/Shanghai')) + timedelta(days=1)).replace(
+            hour=10, minute=0, second=0, microsecond=0,
+        )
+        tomorrow_start = tomorrow_local.astimezone(timezone.utc).replace(tzinfo=None)
+        s.add(
+            Event(
+                user_id=uid,
+                title='读第一章',
+                start_utc=tomorrow_start,
+                end_utc=tomorrow_start + timedelta(minutes=30),
+                kind='block',
+                status='planned',
+                source='web',
+                step_id=unpinned_step_id,
+            )
+        )
+
+    # 1) Unpinned goal scheduled tomorrow must NOT displace an unscheduled pinned goal on Today
+    t1 = request(tokens[0], 'GET', '/today').json()
+    assert t1['next']['goal']['title'] == '置顶英语学习'
+    assert t1['next']['step']['id'] == pinned_step_id
+    assert t1['next']['event'] is None
+
+    # 2) Once the pinned goal is also scheduled in the future (even further out), Today falls back to earliest future event
+    with db.session_scope() as s:
+        later_start = tomorrow_start + timedelta(days=2)
+        s.add(
+            Event(
+                user_id=uid,
+                title='背 20 个词',
+                start_utc=later_start,
+                end_utc=later_start + timedelta(minutes=20),
+                kind='block',
+                status='planned',
+                source='web',
+                step_id=pinned_step_id,
+            )
+        )
+    t2 = request(tokens[0], 'GET', '/today').json()
+    assert t2['next']['step']['id'] == unpinned_step_id
+    assert t2['next']['event'] is not None
+
+    # 3) A block within today always takes top priority on Today
+    with db.session_scope() as s:
+        today_start = (datetime.now(timezone.utc) + timedelta(minutes=15)).replace(tzinfo=None)
+        # Ensure today_start stays before local midnight in test by placing it at least inside [now, now+15m] or near future if before 23:45
+        ev_today = s.query(Event).filter(Event.step_id == pinned_step_id).one()
+        local_now = datetime.now(timezone.utc).astimezone(ZoneInfo('Asia/Shanghai'))
+        local_end = (local_now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        if (local_end - local_now).total_seconds() > 1200:
+            ev_today.start_utc = today_start
+            ev_today.end_utc = today_start + timedelta(minutes=15)
+            check_today = True
+        else:
+            check_today = False
+
+    if check_today:
+        t3 = request(tokens[0], 'GET', '/today').json()
+        assert t3['next']['step']['id'] == pinned_step_id
+        assert t3['next']['event'] is not None

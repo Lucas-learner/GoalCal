@@ -1,13 +1,14 @@
 """Conversation understanding proposes intentions; Service owns every write."""
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 import json
 import re
 import uuid
 from zoneinfo import ZoneInfo
 from sqlalchemy import select
 
+from ..i18n import normalize_lang, pick
 from ..models import Goal, Event, Step
 from ..dialog import DialogContext
 from ..llm import turn as turn_engine
@@ -17,40 +18,102 @@ from ..llm.natdate import extract_window
 from .transport_models import WebThread
 
 
+def _is_stale_thread(messages: list[dict], now: datetime, tz: str) -> bool:
+    """Auto-clear only when BOTH a new local calendar day AND >=6h have elapsed since last turn."""
+    if not messages:
+        return False
+    raw_ts = None
+    for msg in reversed(messages):
+        if isinstance(msg, dict) and msg.get('ts'):
+            raw_ts = msg['ts']
+            break
+    if not raw_ts:
+        return False
+    try:
+        last_dt = datetime.fromisoformat(str(raw_ts).replace('Z', '+00:00'))
+    except ValueError:
+        return False
+    if last_dt.tzinfo is None:
+        last_dt = last_dt.replace(tzinfo=timezone.utc)
+    now_utc = now if now.tzinfo is not None else now.replace(tzinfo=timezone.utc)
+    if now_utc - last_dt < timedelta(hours=6):
+        return False
+    zone = ZoneInfo(tz)
+    return last_dt.astimezone(zone).date() < now_utc.astimezone(zone).date()
+
+
 def thread(session, uid):
     return session.scalar(select(WebThread).where(WebThread.user_id == uid))
 
 
-def prepare_turn(session, principal, body, now):
+def prepare_turn(session, principal, body, now, *, lang: str = 'zh'):
     """Read-only LLM inference; the later transaction checks this context version."""
     from .core import ApiError
+    lang = normalize_lang(lang) or 'zh'
     row = thread(session, principal.user_id)
     if body['version'] != str(row.version if row else 0):
-        raise ApiError('stale_conversation', '对话已更新，请刷新后继续。')
+        raise ApiError(
+            'stale_conversation',
+            pick(lang, '对话已更新，请刷新后继续。', 'Conversation updated elsewhere; please refresh to continue.'),
+        )
     local = now.astimezone(ZoneInfo(principal.tz))
-    focus = session.get(Goal, row.focus_goal_id) if row and row.focus_goal_id else None
-    ctx = DialogContext(kind='pending_candidates' if row and row.proposal_id else 'idle',
+    raw_messages = json.loads(row.messages_json) if row else []
+    stale = _is_stale_thread(raw_messages, now, principal.tz)
+    focus = session.get(Goal, row.focus_goal_id) if row and row.focus_goal_id and not stale else None
+    ctx = DialogContext(kind='pending_candidates' if row and row.proposal_id and not stale else 'idle',
                         subject={'goal_title': focus.title} if focus else {})
     # Preserve recent references without copying internal legacy state into the browser.
-    if row:
-        ctx.subject['recent_messages'] = json.loads(row.messages_json)[-8:]
+    if row and not stale:
+        ctx.subject['recent_messages'] = raw_messages[-8:]
     decision = turn_engine.decide(session, principal.user_id, body['text'], local,
-                                  principal.tz, ctx, client=turn_client())
+                                  principal.tz, ctx, client=turn_client(), lang=lang)
     return decision.model_dump() if decision else None
 
 
 def read_state(svc):
     from .models import WebProposal
     row = thread(svc.session, svc.user_id)
+    raw_messages = json.loads(row.messages_json) if row else []
+    if _is_stale_thread(raw_messages, svc.now, svc.tz):
+        return {'messages': [], 'version': str(row.version if row else 0), 'proposal': None}
     proposal = None
     if row and row.proposal_id:
         candidate = svc.session.get(WebProposal, row.proposal_id)
         if candidate and candidate.status == 'open' and candidate.expires_at > svc.now.replace(tzinfo=None):
             proposal = svc.serialize_proposal(candidate)
-    messages = json.loads(row.messages_json) if row else []
-    creation = messages[-1].get('create_goal') if messages else None
-    return {'messages': messages, 'version': str(row.version if row else 0),
+    creation = raw_messages[-1].get('create_goal') if raw_messages else None
+    return {'messages': raw_messages, 'version': str(row.version if row else 0),
             'proposal': proposal, **({'create_goal': creation} if creation else {})}
+
+
+def clear_thread(svc, body):
+    from .core import ApiError
+    from .models import WebProposal
+    lang = getattr(svc, 'lang', 'zh')
+    row = thread(svc.session, svc.user_id)
+    if body['version'] != str(row.version if row else 0):
+        raise ApiError(
+            'stale_conversation',
+            pick(lang, '对话已更新，请刷新后继续。', 'Conversation updated elsewhere; please refresh to continue.'),
+        )
+    if row is None:
+        row = WebThread(user_id=svc.user_id, version=0, messages_json='[]', choices_json='[]')
+        svc.session.add(row)
+    if row.proposal_id:
+        prop = svc.session.get(WebProposal, row.proposal_id)
+        if prop and prop.status == 'open':
+            prop.status = 'superseded'
+            prop.version += 1
+    row.messages_json = '[]'
+    row.choices_json = '[]'
+    row.proposal_id = None
+    row.focus_goal_id = None
+    row.version += 1
+    svc.session.flush()
+    return {
+        **read_state(svc),
+        'message': pick(lang, '对话已清空', 'Conversation cleared'),
+    }
 
 
 def _number(text):
@@ -61,20 +124,37 @@ def _number(text):
     return int(token)-1 if token.isdigit() else '一二三四五六'.index(token)
 
 
+def _disambiguate(named, lang: str) -> str:
+    if lang == 'en':
+        joined = ' or '.join(f'"{g.title}"' for g in named)
+        return f'Which goal did you mean: {joined}?'
+    return '你指的是' + '还是'.join(f'「{g.title}」' for g in named) + '？'
+
+
 def turn(svc, body):
     from .core import ApiError
     from .models import WebProposal
+    lang = getattr(svc, 'lang', 'zh')
     row = thread(svc.session, svc.user_id)
     if body['version'] != str(row.version if row else 0):
-        raise ApiError('stale_conversation', '对话已更新，请刷新后继续。')
+        raise ApiError(
+            'stale_conversation',
+            pick(lang, '对话已更新，请刷新后继续。', 'Conversation updated elsewhere; please refresh to continue.'),
+        )
     if row is None:
         row = WebThread(user_id=svc.user_id, version=0, messages_json='[]', choices_json='[]')
         svc.session.add(row)
     text = body['text'].strip()
     if not text:
-        raise ApiError('empty_message', '请输入想说的话。', 422)
+        raise ApiError('empty_message', pick(lang, '请输入想说的话。', 'Please enter a message.'), 422)
     messages = json.loads(row.messages_json)
-    messages.append({'id':uuid.uuid4().hex, 'role':'user', 'content':text})
+    if _is_stale_thread(messages, svc.now, svc.tz):
+        messages = []
+        row.proposal_id = None
+        row.focus_goal_id = None
+        row.choices_json = '[]'
+    now_iso = svc.now.isoformat()
+    messages.append({'id':uuid.uuid4().hex, 'role':'user', 'content':text, 'ts': now_iso})
     local = svc.now.astimezone(ZoneInfo(svc.tz))
     old_proposal = svc.session.get(WebProposal, row.proposal_id) if row.proposal_id else None
     choices = json.loads(row.choices_json)
@@ -121,47 +201,82 @@ def turn(svc, body):
             wants_schedule = True
         if len(named) > 1:
             row.choices_json = json.dumps([g.id for g in named])
-            reply = '你指的是' + '还是'.join(f'「{g.title}」' for g in named) + '？'
+            reply = _disambiguate(named, lang)
         elif action.intent == 'create_goal':
             title = action.title or text
             extra['create_goal'] = {'title':title}
             if action.deadline:
                 extra['create_goal']['deadline'] = action.deadline.isoformat()
-            reply = f'可以，一起把「{title}」拆成可推进的步骤。打开新目标流程后，可以编辑计划再保存。'
+            reply = pick(
+                lang,
+                f'可以，一起把「{title}」拆成可推进的步骤。打开新目标流程后，可以编辑计划再保存。',
+                f'Sure — let\'s break "{title}" into actionable steps. Open the New Goal flow to review and save the plan.',
+            )
         elif wants_schedule:
             if goal is None:
                 row.choices_json = json.dumps([g.id for g in goals[:6]])
-                reply = ('你指的是' + '还是'.join(f'「{g.title}」' for g in goals[:6]) + '？') if goals else '先创建一个目标，就可以为第一步找时间。'
+                reply = (
+                    _disambiguate(goals[:6], lang)
+                    if goals
+                    else pick(lang, '先创建一个目标，就可以为第一步找时间。', 'Create a goal first, then I can find time for its first step.')
+                )
             else:
                 step = next((s for s in sorted(goal.steps, key=lambda x:x.seq) if s.status == 'todo'), None)
                 exact_steps = [s for s in goal.steps if s.status == 'todo' and s.title in text]
                 if len(exact_steps) == 1:
                     step = exact_steps[0]
                 if step is None:
-                    reply = f'「{goal.title}」目前没有待安排的步骤。'
+                    reply = pick(
+                        lang,
+                        f'「{goal.title}」目前没有待安排的步骤。',
+                        f'"{goal.title}" currently has no pending steps to schedule.',
+                    )
                 else:
                     params = {'window_start':window[0].isoformat(),'window_end':window[1].isoformat()} if window else {}
                     proposal = svc.propose(step.id, params)
                     row.proposal_id = proposal['id']
                     row.focus_goal_id = goal.id
-                    reply = (f'为「{goal.title}」的「{step.title}」找到了这些时间，选一个就能安排。'
-                             if proposal['candidates'] else f'「{goal.title}」在这个范围没有足够空档，可以换个时间或调整可安排时间。')
+                    if proposal['candidates']:
+                        reply = pick(
+                            lang,
+                            f'为「{goal.title}」的「{step.title}」找到了这些时间，选一个就能安排。',
+                            f'Found these slots for "{goal.title}" · "{step.title}". Pick one to book it.',
+                        )
+                    else:
+                        reply = pick(
+                            lang,
+                            f'「{goal.title}」在这个范围没有足够空档，可以换个时间或调整可安排时间。',
+                            f'No open slots fit "{goal.title}" in that range. Try another window or adjust your availability.',
+                        )
         elif action.intent == 'add_event':
             if action.start and action.end and action.title:
                 result = svc.create_event({'title':action.title,'start':action.start.isoformat(),'end':action.end.isoformat()})
                 reply = result['message']; extra.update({k:v for k,v in result.items() if k != 'message'})
             else:
-                reply = '请告诉我日程名称、开始时间和时长，例如“明天 10 点开会一小时”。'
+                reply = pick(
+                    lang,
+                    '请告诉我日程名称、开始时间和时长，例如“明天 10 点开会一小时”。',
+                    'Please share the event title, start time, and duration — e.g. "Meeting tomorrow at 10am for 1 hour".',
+                )
         elif action.intent == 'query_events':
             start = action.start or local.replace(hour=0,minute=0,second=0,microsecond=0)
             events = svc.events(start.isoformat(), (start+timedelta(days=1)).isoformat())['events']
-            reply = '这个时间范围没有安排。' if not events else '\n'.join(f'「{e["title"]}」：{e["start"]} — {e["end"]}' for e in events)
+            if not events:
+                reply = pick(lang, '这个时间范围没有安排。', 'Nothing is scheduled in that time range.')
+            elif lang == 'en':
+                reply = '\n'.join(f'"{e["title"]}": {e["start"]} — {e["end"]}' for e in events)
+            else:
+                reply = '\n'.join(f'「{e["title"]}」：{e["start"]} — {e["end"]}' for e in events)
         elif action.intent in {'move_event','delete_event'}:
             hint = action.target or action.title or ''
             matches = list(svc.session.scalars(select(Event).where(Event.user_id == svc.user_id,
                            Event.title == hint, Event.status.in_(['planned','moved']))))
             if len(matches) != 1:
-                reply = '请在日历中选中要修改的日程，或告诉我准确名称和日期。'
+                reply = pick(
+                    lang,
+                    '请在日历中选中要修改的日程，或告诉我准确名称和日期。',
+                    'Please select the event on the calendar or share its exact title and date.',
+                )
             else:
                 ev = matches[0]; version = svc.serialize_event(ev)['version']
                 if action.intent == 'delete_event':
@@ -171,20 +286,33 @@ def turn(svc, body):
                     result = svc.move_event(ev.id, {'version':version,'start':action.start.isoformat(),
                                                    'end':(action.start+duration).isoformat()})
                 else:
-                    result = {'message':f'想把「{ev.title}」移到什么时间？'}
+                    result = {'message': pick(lang, f'想把「{ev.title}」移到什么时间？', f'When would you like to move "{ev.title}" to?')}
                 reply = result['message']; extra.update({k:v for k,v in result.items() if k != 'message'})
         elif action.intent == 'log_progress':
-            reply = '在“今天”选择正在执行的步骤，即可记录完成情况；也可以在目标详情中标记步骤完成。'
+            reply = pick(
+                lang,
+                '在“今天”选择正在执行的步骤，即可记录完成情况；也可以在目标详情中标记步骤完成。',
+                'Check in from the running session on Today, or mark the step done in Goals.',
+            )
         else:
             if named:
                 row.focus_goal_id = named[0].id
             # Free text cannot claim an unexecuted mutation. LLM chat is only advisory.
-            reply = decision.reply if decision and decision.intent == 'chat' else '我可以帮你为目标找时间、调整日程，或把新目标带入计划流程。你想先推进哪一步？'
+            fallback_chat = pick(
+                lang,
+                '我可以帮你为目标找时间、调整日程，或把新目标带入计划流程。你想先推进哪一步？',
+                'I can find time for your goal steps, adjust events, or help turn a new goal into a plan. What would you like to work on?',
+            )
+            reply = decision.reply if decision and decision.intent == 'chat' else fallback_chat
             if re.search(r'已(?:经)?(?:安排|创建|删除|完成|取消|修改)|\b(?:booked|scheduled|deleted|created)\b', reply, re.I):
-                reply = '可以继续告诉我你希望怎样安排；执行结果会在完成操作后明确显示。'
-    messages.append({'id':uuid.uuid4().hex, 'role':'assistant', 'content':reply,
+                reply = pick(
+                    lang,
+                    '可以继续告诉我你希望怎样安排；执行结果会在完成操作后明确显示。',
+                    'Tell me how you would like to schedule or adjust it — changes only take effect once confirmed.',
+                )
+    messages.append({'id':uuid.uuid4().hex, 'role':'assistant', 'content':reply, 'ts': now_iso,
                      **({'create_goal': extra['create_goal']} if 'create_goal' in extra else {})})
-    row.messages_json = json.dumps(messages[-100:], ensure_ascii=False)
+    row.messages_json = json.dumps(messages[-40:], ensure_ascii=False)
     row.version += 1
     svc.session.flush()
     return {**read_state(svc), **extra}

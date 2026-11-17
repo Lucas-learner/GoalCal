@@ -6,6 +6,7 @@ import { invalidateAfterWrite, queryKeys } from '../api/queryKeys';
 import type { AssistantState, Proposal } from '../api/types';
 import { formatDateTimeLabel, isIsoExpired } from '../lib/datetime';
 import { useIdempotentAction } from '../lib/useIdempotentMutation';
+import { useI18n } from '../i18n';
 import { useAppState } from '../state/AppStateContext';
 import { SparkleIcon } from './Icons';
 import { ErrorBanner, SkeletonCard } from './StateFeedback';
@@ -32,6 +33,7 @@ export function AssistantDrawer({
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const titleId = useId();
+  const { lang, t } = useI18n();
 
   const {
     assistantOpen,
@@ -68,12 +70,12 @@ export function AssistantDrawer({
     }
   }, [assistantQuery.data?.version]);
 
-  // Auto-resize composer up to ~5 lines.
+  // Auto-resize composer up to ~5 lines, keeping single-line vertically centered with send button.
   useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
+    el.style.height = '44px';
+    el.style.height = `${Math.min(Math.max(el.scrollHeight, 44), 120)}px`;
   }, [composerText]);
 
   // Scroll to bottom when new messages arrive.
@@ -171,7 +173,7 @@ export function AssistantDrawer({
               : new ApiError({
                   status: 0,
                   code: 'unknown_error',
-                  message: rawErr instanceof Error ? rawErr.message : '发送失败，请重试。',
+                  message: rawErr instanceof Error ? rawErr.message : t('发送失败，请重试。', 'Failed to send. Please retry.'),
                   idempotencyKey: nextItem.idempotencyKey,
                   unknownOutcome: true,
                 });
@@ -290,6 +292,34 @@ export function AssistantDrawer({
     },
   });
 
+  const clearFn = useCallback(
+    async (version: string, key: string) => api.clearAssistantThread({ version }, key),
+    [],
+  );
+
+  const clearAction = useIdempotentAction(clearFn, {
+    onSuccess: async (res) => {
+      acceptAction.clearError();
+      latestVersionRef.current = res.version;
+      queryClient.setQueryData<AssistantState>(queryKeys.assistant, {
+        messages: res.messages,
+        proposal: res.proposal,
+        version: res.version,
+        create_goal: res.create_goal,
+      });
+      setFailedTurn(null);
+      if (res.message) {
+        recordMutationResult({ message: res.message });
+      }
+      await invalidateAfterWrite(queryClient);
+    },
+    onError: async (err) => {
+      if (err.status === 409) {
+        await queryClient.invalidateQueries({ queryKey: queryKeys.assistant });
+      }
+    },
+  });
+
   if (!assistantOpen) return null;
 
   const state = assistantQuery.data;
@@ -301,27 +331,43 @@ export function AssistantDrawer({
     <aside
       ref={panelRef}
       className="assistant-panel"
-      aria-label="GoalCal 助手"
+      aria-label={t('GoalCal 助手', 'GoalCal Assistant')}
       {...(isModalOverlay ? { role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': titleId } : {})}
     >
       <div className="assistant-header">
         <div id={titleId} className="assistant-title">
           <SparkleIcon />
-          <span>GoalCal 助手</span>
+          <span>{t('GoalCal 助手', 'GoalCal Assistant')}</span>
         </div>
-        <button
-          type="button"
-          className="icon-close-btn"
-          aria-label="关闭助手"
-          onClick={closeAssistant}
-        >
-          ×
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          {(state?.messages?.length ?? 0) > 0 || proposal != null || state?.create_goal != null ? (
+            <button
+              type="button"
+              className="btn small"
+              disabled={isSendingTurn || clearAction.isPending}
+              onClick={() => void clearAction.run(state?.version ?? latestVersionRef.current ?? '0')}
+            >
+              {clearAction.isPending ? t('清空中…', 'Clearing…') : t('清空', 'Clear')}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="icon-close-btn"
+            aria-label={t('关闭助手', 'Close assistant')}
+            onClick={closeAssistant}
+          >
+            ×
+          </button>
+        </div>
       </div>
 
       <div className="messages">
+        <ErrorBanner
+          error={clearAction.actionError}
+          onRefresh={() => void queryClient.invalidateQueries({ queryKey: queryKeys.assistant })}
+        />
         {assistantQuery.isLoading ? (
-          <SkeletonCard label="正在加载助手对话" />
+          <SkeletonCard label={t('正在加载助手对话', 'Loading conversation')} />
         ) : assistantQuery.isError ? (
           <ErrorBanner
             error={assistantQuery.error}
@@ -333,9 +379,9 @@ export function AssistantDrawer({
         !assistantQuery.isError &&
         (!state?.messages || state.messages.length === 0) ? (
           <div className="empty-state" style={{ padding: 18 }}>
-            <div className="empty-state-title">需要我帮你做什么？</div>
+            <div className="empty-state-title">{t('有什么可以帮你？', 'How can I help?')}</div>
             <div className="empty-state-copy" style={{ marginBottom: 0 }}>
-              你可以让我帮你安排目标的下一步、调整已有日程，或把一个新想法整理成结构化目标。
+              {t('安排步骤、调整日程或创建目标', 'Schedule steps, adjust events, or create goals')}
             </div>
           </div>
         ) : null}
@@ -351,11 +397,8 @@ export function AssistantDrawer({
 
         {state?.create_goal ? (
           <div className="proposal-card" style={{ marginTop: 6 }}>
-            <div className="proposal-goal">新建目标草稿</div>
+            <div className="proposal-goal">{t('新目标草稿', 'New goal draft')}</div>
             <div className="proposal-step">{state.create_goal.title}</div>
-            <div className="field-help" style={{ marginTop: 4 }}>
-              将进入结构化目标草稿页，确认并编辑步骤后才会保存。
-            </div>
             <div className="actions" style={{ marginTop: 12 }}>
               <button
                 type="button"
@@ -366,14 +409,14 @@ export function AssistantDrawer({
                   navigate('/goals/new');
                 }}
               >
-                前往编辑计划草稿
+                {t('编辑草稿', 'Edit draft')}
               </button>
             </div>
           </div>
         ) : null}
 
         {proposal ? (
-          <div className="proposal-card" aria-label="时间候选">
+          <div className="proposal-card" aria-label={t('时间候选', 'Suggested time slots')}>
             <div className="proposal-head">
               <div className="proposal-goal">{proposal.goal_title}</div>
               <div className="proposal-step">{proposal.step_title}</div>
@@ -387,8 +430,8 @@ export function AssistantDrawer({
             {proposalExpired ? (
               <div className="status-banner info" role="status" style={{ marginBottom: 8 }}>
                 <div className="status-banner-body">
-                  <div className="status-banner-title">该候选已过期或已被取代</div>
-                  <div>请重新查找可用时段，或在下方继续告诉我你的偏好。</div>
+                  <div className="status-banner-title">{t('该候选已过期或已被取代', 'These slots expired or were replaced')}</div>
+                  <div>{t('请重新查找可用时段，或在下方继续告诉我你的偏好。', 'Search again for open slots, or tell me your preference below.')}</div>
                 </div>
                 <div className="status-banner-actions">
                   <button
@@ -397,7 +440,7 @@ export function AssistantDrawer({
                     disabled={regenerateAction.isPending}
                     onClick={() => void regenerateAction.run(proposal.step_id)}
                   >
-                    {regenerateAction.isPending ? '生成中…' : '重新找时间'}
+                    {regenerateAction.isPending ? t('生成中…', 'Finding…') : t('重新找时间', 'Find new slots')}
                   </button>
                 </div>
               </div>
@@ -405,7 +448,10 @@ export function AssistantDrawer({
 
             {proposal.candidates.length === 0 ? (
               <div className="field-help">
-                当前没有找到合适空档。你可以点击重新找时间，或在下方说明期望的时间范围。
+                {t(
+                  '当前没有找到合适空档。你可以点击重新找时间，或在下方说明期望的时间范围。',
+                  'No open slots fit right now. Try finding slots again or tell me a preferred time window below.',
+                )}
                 <div style={{ marginTop: 8 }}>
                   <button
                     type="button"
@@ -413,14 +459,14 @@ export function AssistantDrawer({
                     disabled={regenerateAction.isPending}
                     onClick={() => void regenerateAction.run(proposal.step_id)}
                   >
-                    {regenerateAction.isPending ? '生成中…' : '重新找时间'}
+                    {regenerateAction.isPending ? t('生成中…', 'Finding…') : t('重新找时间', 'Find new slots')}
                   </button>
                 </div>
               </div>
             ) : (
               <div>
                 {proposal.candidates.map((cand, index) => {
-                  const label = formatDateTimeLabel(cand.start, cand.end, timezone);
+                  const label = formatDateTimeLabel(cand.start, cand.end, timezone, lang);
                   return (
                     <button
                       key={`${cand.start}-${index}`}
@@ -434,7 +480,7 @@ export function AssistantDrawer({
                     >
                       <div className="slot-time">
                         {label}
-                        {acceptAction.isPending && acceptingIndex === index ? '（安排中…）' : ''}
+                        {acceptAction.isPending && acceptingIndex === index ? t('（安排中…）', ' (Scheduling…)') : ''}
                       </div>
                     </button>
                   );
@@ -448,7 +494,7 @@ export function AssistantDrawer({
                       disabled={regenerateAction.isPending}
                       onClick={() => void regenerateAction.run(proposal.step_id)}
                     >
-                      {regenerateAction.isPending ? '生成中…' : '重新找时间'}
+                      {regenerateAction.isPending ? t('生成中…', 'Finding…') : t('重新找时间', 'Find new slots')}
                     </button>
                   </div>
                 ) : null}
@@ -459,7 +505,8 @@ export function AssistantDrawer({
 
         {isSendingTurn ? (
           <div className="muted" style={{ fontSize: 11 }} role="status">
-            正在处理回复{queuedCount > 0 ? `（另有 ${queuedCount} 条待发送）` : '…'}
+            {t('正在处理回复', 'Thinking')}
+            {queuedCount > 0 ? t(`（另有 ${queuedCount} 条待发送）`, ` (${queuedCount} more queued)`) : '…'}
           </div>
         ) : null}
 
@@ -467,7 +514,9 @@ export function AssistantDrawer({
           <div className="status-banner" role="alert">
             <div className="status-banner-body">
               <div className="status-banner-title">
-                {failedTurn.error.status === 409 ? '对话已更新，已刷新最新状态' : '消息发送失败'}
+                {failedTurn.error.status === 409
+                  ? t('对话已更新，已刷新最新状态', 'Conversation updated; refreshed latest state')
+                  : t('消息发送失败', 'Failed to send message')}
               </div>
               <div>{failedTurn.error.message}</div>
             </div>
@@ -487,14 +536,14 @@ export function AssistantDrawer({
                   );
                 }}
               >
-                {failedTurn.error.status === 409 ? '使用最新状态重发' : '重试发送'}
+                {failedTurn.error.status === 409 ? t('使用最新状态重发', 'Resend with latest state') : t('重试发送', 'Retry')}
               </button>
               <button
                 type="button"
                 className="btn small"
                 onClick={() => setFailedTurn(null)}
               >
-                关闭
+                {t('关闭', 'Dismiss')}
               </button>
             </div>
           </div>
@@ -505,7 +554,7 @@ export function AssistantDrawer({
 
       <form className="composer-wrap" onSubmit={handleSubmit}>
         <label className="sr-only" htmlFor="assistant-composer-input">
-          向 GoalCal 助手发送消息
+          {t('向 GoalCal 助手发送消息', 'Message GoalCal Assistant')}
         </label>
         <div className="composer">
           <textarea
@@ -513,7 +562,7 @@ export function AssistantDrawer({
             ref={textareaRef}
             className="composer-textarea"
             rows={1}
-            placeholder="问问、安排或调整…"
+            placeholder={t('问问、安排或调整…', 'Ask, schedule, or adjust…')}
             value={composerText}
             onChange={(e) => setComposerText(e.target.value)}
             onKeyDown={handleKeyDown}
@@ -521,7 +570,7 @@ export function AssistantDrawer({
           <button
             type="submit"
             className="send-hit"
-            aria-label="发送消息"
+            aria-label={t('发送消息', 'Send message')}
             disabled={!composerText.trim()}
           >
             <span className="send-circle" aria-hidden="true">

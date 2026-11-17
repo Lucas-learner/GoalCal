@@ -10,6 +10,7 @@ import {
   nowInZone,
 } from '../lib/datetime';
 import { useIdempotentAction } from '../lib/useIdempotentMutation';
+import { useI18n } from '../i18n';
 import { useAppState } from '../state/AppStateContext';
 import { Modal } from './Modal';
 import { EmptyState, ErrorBanner } from './StateFeedback';
@@ -52,6 +53,7 @@ function computeWindowBounds(
 export function ProposalModal({ timezone }: { timezone: string }) {
   const queryClient = useQueryClient();
   const { activeProposal, openProposalModal, closeProposalModal, recordMutationResult } = useAppState();
+  const { lang, t } = useI18n();
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [activePeriod, setActivePeriod] = useState<PeriodKey>('all');
   const [showCustomTime, setShowCustomTime] = useState(false);
@@ -148,11 +150,11 @@ export function ProposalModal({ timezone }: { timezone: string }) {
     setCustomError(null);
     const startIso = datetimeLocalToUtcIso(customStartLocal, timezone);
     if (!startIso) {
-      setCustomError('请选择有效的本地日期和时间。');
+      setCustomError(t('请选择有效的本地日期和时间。', 'Please select a valid local date and time.'));
       return;
     }
     if (!currentStep) {
-      setCustomError('正在读取步骤信息，请稍后再试。');
+      setCustomError(t('正在读取步骤信息，请稍后再试。', 'Loading step details; please try again in a moment.'));
       return;
     }
     void scheduleAction.run({
@@ -163,15 +165,15 @@ export function ProposalModal({ timezone }: { timezone: string }) {
   };
 
   const periodOptions: Array<{ key: PeriodKey; label: string }> = [
-    { key: 'all', label: '全部推荐' },
-    { key: 'morning', label: '上午' },
-    { key: 'afternoon', label: '下午' },
-    { key: 'evening', label: '晚上' },
-    { key: 'tomorrow', label: '明天' },
+    { key: 'all', label: t('全部', 'All') },
+    { key: 'morning', label: t('上午', 'Morning') },
+    { key: 'afternoon', label: t('下午', 'Afternoon') },
+    { key: 'evening', label: t('晚上', 'Evening') },
+    { key: 'tomorrow', label: t('明天', 'Tomorrow') },
   ];
 
   return (
-    <Modal title="选择合适时间" onClose={closeProposalModal}>
+    <Modal title={t('选择时间', 'Pick a time')} onClose={closeProposalModal}>
       <div style={{ marginBottom: 12 }}>
         <div className="proposal-goal">{activeProposal.goal_title}</div>
         <div className="proposal-step">{activeProposal.step_title}</div>
@@ -179,7 +181,7 @@ export function ProposalModal({ timezone }: { timezone: string }) {
 
       <div
         role="group"
-        aria-label="筛选推荐时段"
+        aria-label={t('筛选推荐时段', 'Filter candidate windows')}
         style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 14 }}
       >
         {periodOptions.map((opt) => (
@@ -203,8 +205,8 @@ export function ProposalModal({ timezone }: { timezone: string }) {
       {expired ? (
         <div className="status-banner info" role="status">
           <div className="status-banner-body">
-            <div className="status-banner-title">该时间提议已过期或已被取代</div>
-            <div>请重新生成可用时间候选后再选择。</div>
+            <div className="status-banner-title">{t('该时间提议已过期或已被取代', 'This proposal has expired or been replaced')}</div>
+            <div>{t('请重新生成可用时间候选后再选择。', 'Generate fresh slots before choosing.')}</div>
           </div>
           <div className="status-banner-actions">
             <button
@@ -213,7 +215,7 @@ export function ProposalModal({ timezone }: { timezone: string }) {
               disabled={isBusy}
               onClick={() => void regenerateAction.run({ stepId: activeProposal.step_id, period: activePeriod })}
             >
-              {regenerateAction.isPending ? '生成中…' : '重新找时间'}
+              {regenerateAction.isPending ? t('生成中…', 'Finding…') : t('重新找时间', 'Find new slots')}
             </button>
           </div>
         </div>
@@ -221,8 +223,7 @@ export function ProposalModal({ timezone }: { timezone: string }) {
 
       {activeProposal.candidates.length === 0 ? (
         <EmptyState
-          title="该时段没有足够空档"
-          copy="你可以切换上方的上午/下午/明天筛选，或直接在下方自己指定时间。"
+          title={t('该时段暂无空档', 'No open slots in this range')}
           actions={
             <button
               type="button"
@@ -230,17 +231,17 @@ export function ProposalModal({ timezone }: { timezone: string }) {
               disabled={isBusy}
               onClick={() => void regenerateAction.run({ stepId: activeProposal.step_id, period: 'all' })}
             >
-              {regenerateAction.isPending ? '生成中…' : '查看全部推荐'}
+              {regenerateAction.isPending ? t('查找中…', 'Finding…') : t('查看全部', 'Show all')}
             </button>
           }
         />
       ) : (
         <div>
           <div className="field-help" style={{ marginBottom: 8 }}>
-            点击任意候选时间将直接安排到日历，安排后可随时撤销。
+            {t('点击时段即可安排', 'Click any slot to schedule')}
           </div>
           {activeProposal.candidates.map((cand, index) => {
-            const label = formatDateTimeLabel(cand.start, cand.end, timezone);
+            const label = formatDateTimeLabel(cand.start, cand.end, timezone, lang);
             return (
               <button
                 key={`${cand.start}-${index}`}
@@ -258,7 +259,7 @@ export function ProposalModal({ timezone }: { timezone: string }) {
               >
                 <div className="slot-time">
                   {label}
-                  {acceptAction.isPending && selectedIndex === index ? '（安排中…）' : ''}
+                  {acceptAction.isPending && selectedIndex === index ? t('（安排中…）', ' (Scheduling…)') : ''}
                 </div>
               </button>
             );
@@ -279,12 +280,12 @@ export function ProposalModal({ timezone }: { timezone: string }) {
             className="inline-link-btn"
             onClick={() => setShowCustomTime(true)}
           >
-            都不合适？自己指定开始时间 →
+            {t('自定义时间 →', 'Custom time →')}
           </button>
         ) : (
           <form onSubmit={handleCustomSubmit} noValidate>
             <label className="field-label" htmlFor="custom-schedule-start">
-              自选开始时间（{timezone}）
+              {t(`开始时间（${timezone}）`, `Start time (${timezone})`)}
             </label>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
               <input
@@ -297,7 +298,7 @@ export function ProposalModal({ timezone }: { timezone: string }) {
                 disabled={isBusy}
               />
               <button type="submit" className="btn small primary" disabled={isBusy || !currentStep}>
-                {scheduleAction.isPending ? '安排中…' : '按此时间安排'}
+                {scheduleAction.isPending ? t('安排中…', 'Scheduling…') : t('安排', 'Schedule')}
               </button>
               <button
                 type="button"
@@ -308,7 +309,7 @@ export function ProposalModal({ timezone }: { timezone: string }) {
                   setCustomError(null);
                 }}
               >
-                收起
+                {t('收起', 'Cancel')}
               </button>
             </div>
             {customError ? <div className="field-error">{customError}</div> : null}

@@ -1,6 +1,9 @@
 import { DateTime } from 'luxon';
+import { getActiveLang, type Lang } from '../i18n';
 
 const WEEKDAY_ZH = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+const WEEKDAY_EN = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const MONTH_EN = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 export function toZoneDateTime(iso: string, zone: string): DateTime {
   return DateTime.fromISO(iso, { setZone: true }).setZone(zone);
@@ -24,11 +27,20 @@ export function addMonthsIsoDate(baseIsoDate: string, months: number, zone: stri
   return dt.plus({ months }).toISODate() ?? baseIsoDate;
 }
 
-export function formatEyebrowDate(isoDateOrDateTime: string, zone: string): string {
+export function formatEyebrowDate(
+  isoDateOrDateTime: string,
+  zone: string,
+  lang: Lang = getActiveLang(),
+): string {
   const dt = isoDateOrDateTime.includes('T')
     ? toZoneDateTime(isoDateOrDateTime, zone)
     : DateTime.fromISO(isoDateOrDateTime, { zone });
   if (!dt.isValid) return isoDateOrDateTime;
+  if (lang === 'en') {
+    const weekday = WEEKDAY_EN[dt.weekday - 1] ?? '';
+    const month = MONTH_EN[dt.month - 1] ?? String(dt.month);
+    return `${weekday}, ${month} ${dt.day}`;
+  }
   const weekday = WEEKDAY_ZH[dt.weekday - 1] ?? '';
   return `${dt.month} 月 ${dt.day} 日 · ${weekday}`;
 }
@@ -48,7 +60,38 @@ export function formatTimeRange(startIso: string, endIso: string, zone: string):
   return `${start.toFormat('MM/dd HH:mm')}–${end.toFormat('MM/dd HH:mm')}`;
 }
 
-export function formatDateTimeLabel(startIso: string, endIso: string, zone: string): string {
+export function isEventOnIsoDate(startIso: string, baseDateIso: string, zone: string): boolean {
+  const start = toZoneDateTime(startIso, zone);
+  if (!start.isValid) return false;
+  return start.toISODate() === baseDateIso;
+}
+
+export function formatRelativeEventDay(
+  startIso: string,
+  baseDateIso: string,
+  zone: string,
+  lang: Lang = getActiveLang(),
+): string {
+  const start = toZoneDateTime(startIso, zone).startOf('day');
+  const base = DateTime.fromISO(baseDateIso, { zone }).startOf('day');
+  if (!start.isValid || !base.isValid) return '';
+  const diffDays = Math.round(start.diff(base, 'days').days);
+  if (diffDays === 0) return '';
+  if (diffDays === 1) return lang === 'en' ? 'Tomorrow' : '明天';
+  if (diffDays === -1) return lang === 'en' ? 'Yesterday' : '昨天';
+  if (lang === 'en') {
+    const month = MONTH_EN[start.month - 1] ?? String(start.month);
+    return `${month} ${start.day}`;
+  }
+  return `${start.month}月${start.day}日`;
+}
+
+export function formatDateTimeLabel(
+  startIso: string,
+  endIso: string,
+  zone: string,
+  lang: Lang = getActiveLang(),
+): string {
   const start = toZoneDateTime(startIso, zone);
   const end = toZoneDateTime(endIso, zone);
   if (!start.isValid || !end.isValid) return startIso;
@@ -56,8 +99,18 @@ export function formatDateTimeLabel(startIso: string, endIso: string, zone: stri
   const today = nowInZone(zone).startOf('day');
   const startDay = start.startOf('day');
   const diffDays = Math.round(startDay.diff(today, 'days').days);
-  const weekday = WEEKDAY_ZH[start.weekday - 1] ?? '';
 
+  if (lang === 'en') {
+    const weekday = WEEKDAY_EN[start.weekday - 1] ?? '';
+    const month = MONTH_EN[start.month - 1] ?? String(start.month);
+    let dayLabel = `${weekday}, ${month} ${start.day}`;
+    if (diffDays === 0) dayLabel = `Today (${month} ${start.day})`;
+    else if (diffDays === 1) dayLabel = `Tomorrow (${weekday}, ${month} ${start.day})`;
+    else if (diffDays === -1) dayLabel = `Yesterday (${month} ${start.day})`;
+    return `${dayLabel} ${formatTimeRange(startIso, endIso, zone)}`;
+  }
+
+  const weekday = WEEKDAY_ZH[start.weekday - 1] ?? '';
   let dayLabel = `${start.month} 月 ${start.day} 日 ${weekday}`;
   if (diffDays === 0) dayLabel = `今天 (${start.month}/${start.day})`;
   else if (diffDays === 1) dayLabel = `明天 (${start.month}/${start.day} ${weekday})`;
@@ -66,10 +119,18 @@ export function formatDateTimeLabel(startIso: string, endIso: string, zone: stri
   return `${dayLabel} ${formatTimeRange(startIso, endIso, zone)}`;
 }
 
-export function formatShortDate(isoDate: string | null, zone: string): string {
-  if (!isoDate) return '没有明确期限';
+export function formatShortDate(
+  isoDate: string | null,
+  zone: string,
+  lang: Lang = getActiveLang(),
+): string {
+  if (!isoDate) return lang === 'en' ? 'No fixed deadline' : '没有明确期限';
   const dt = DateTime.fromISO(isoDate, { zone });
   if (!dt.isValid) return isoDate;
+  if (lang === 'en') {
+    const month = MONTH_EN[dt.month - 1] ?? String(dt.month);
+    return `${month} ${dt.day}`;
+  }
   return `${dt.month} 月 ${dt.day} 日`;
 }
 

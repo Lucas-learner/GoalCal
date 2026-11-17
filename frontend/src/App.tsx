@@ -1,4 +1,4 @@
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { ApiError, api } from './api/client';
@@ -6,6 +6,7 @@ import { queryKeys } from './api/queryKeys';
 import { AppShell } from './components/AppShell';
 import { ErrorBanner, SkeletonCard } from './components/StateFeedback';
 const CalendarPage = lazy(() => import('./pages/CalendarPage').then((module) => ({ default: module.CalendarPage })));
+import { useI18n } from './i18n';
 import { GoalsPage } from './pages/GoalsPage';
 import { NewGoalPage } from './pages/NewGoalPage';
 import { SettingsPage } from './pages/SettingsPage';
@@ -30,6 +31,7 @@ export function createAppQueryClient() {
 }
 
 export function AppContent() {
+  const { t, syncFromUser } = useI18n();
   const meQuery = useQuery({
     queryKey: queryKeys.me,
     queryFn: api.getMe,
@@ -38,16 +40,22 @@ export function AppContent() {
   const user = meQuery.data;
   const timezone = user?.timezone || 'UTC';
 
+  useEffect(() => {
+    if (user?.lang !== undefined) {
+      syncFromUser(user.lang);
+    }
+  }, [user?.lang, syncFromUser]);
+
   return (
     <AppShell user={user}>
       {meQuery.isLoading ? (
-        <SkeletonCard label="正在加载账号信息" />
+        <SkeletonCard label={t('正在加载账号信息', 'Loading account')} />
       ) : meQuery.isError ? (
         <div style={{ marginTop: 12 }}>
           <ErrorBanner error={meQuery.error} onRetry={() => void meQuery.refetch()} />
         </div>
       ) : (
-        <Suspense fallback={<SkeletonCard label="正在加载页面" />}><Routes>
+        <Suspense fallback={<SkeletonCard label={t('正在加载页面', 'Loading page')} />}><Routes>
           <Route path="/" element={<TodayPage fallbackTimezone={timezone} />} />
           <Route path="/today" element={<TodayPage fallbackTimezone={timezone} />} />
           <Route path="/goals" element={<GoalsPage timezone={timezone} />} />

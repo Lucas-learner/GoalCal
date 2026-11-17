@@ -86,13 +86,13 @@ test('responsive navigation and calendar have no horizontal overflow', async ({ 
 
 test('settings save persists and ICS import deduplicates', async ({ page }) => {
   await page.goto('/app/settings');
-  await page.getByRole('button', { name: '计划偏好', exact: true }).click();
+  await page.getByRole('button', { name: '时间偏好', exact: true }).click();
   await page.locator('#pref-max-minutes').fill('255');
   const saved = page.waitForResponse(r => r.url().endsWith('/preferences/availability') && r.request().method() === 'PUT');
   await page.getByRole('button', { name: '保存更改', exact: true }).click();
   expect((await saved).status()).toBe(200);
   await page.reload();
-  await page.getByRole('button', { name: '计划偏好', exact: true }).click();
+  await page.getByRole('button', { name: '时间偏好', exact: true }).click();
   await expect(page.locator('#pref-max-minutes')).toHaveValue('255');
   await page.getByRole('button', { name: '日历导入与指标', exact: true }).click();
   const file = { name:'qa.ics', mimeType:'text/calendar', buffer: Buffer.from('BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:goalcal-ui-qa\r\nDTSTART:20300101T020000Z\r\nDTEND:20300101T023000Z\r\nSUMMARY:导入验收日程\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n') };

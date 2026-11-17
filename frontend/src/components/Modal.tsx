@@ -1,4 +1,5 @@
 import React, { useEffect, useId, useRef } from 'react';
+import { useI18n } from '../i18n';
 
 const FOCUSABLE_SELECTOR =
   'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -11,14 +12,21 @@ interface ModalProps {
 }
 
 export function Modal({ title, onClose, hasUnsavedChanges = false, children }: ModalProps) {
+  const { t } = useI18n();
   const titleId = useId();
   const panelRef = useRef<HTMLDivElement | null>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const onCloseRef = useRef(onClose);
   const unsavedRef = useRef(hasUnsavedChanges);
+  const confirmDiscardText = t(
+    '当前有未保存的编辑内容，确定放弃并关闭吗？',
+    'You have unsaved edits. Discard them and close?',
+  );
+  const confirmDiscardRef = useRef(confirmDiscardText);
 
   onCloseRef.current = onClose;
   unsavedRef.current = hasUnsavedChanges;
+  confirmDiscardRef.current = confirmDiscardText;
 
   useEffect(() => {
     previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -39,7 +47,7 @@ export function Modal({ title, onClose, hasUnsavedChanges = false, children }: M
       if (e.key === 'Escape') {
         e.preventDefault();
         if (unsavedRef.current) {
-          if (window.confirm('当前有未保存的编辑内容，确定放弃并关闭吗？')) {
+          if (window.confirm(confirmDiscardRef.current)) {
             onCloseRef.current();
           }
           return;
@@ -80,7 +88,7 @@ export function Modal({ title, onClose, hasUnsavedChanges = false, children }: M
   }, []);
 
   const attemptClose = () => {
-    if (hasUnsavedChanges && !window.confirm('当前有未保存的编辑内容，确定放弃并关闭吗？')) {
+    if (hasUnsavedChanges && !window.confirm(confirmDiscardText)) {
       return;
     }
     onClose();
@@ -111,7 +119,7 @@ export function Modal({ title, onClose, hasUnsavedChanges = false, children }: M
           <button
             type="button"
             className="icon-close-btn"
-            aria-label="关闭对话框"
+            aria-label={t('关闭对话框', 'Close dialog')}
             onClick={attemptClose}
           >
             ×

@@ -521,6 +521,7 @@ def plan_refill(
     *,
     use_llm: bool = True,
     completing: Step | None = None,
+    lang: str | None = None,
 ) -> list[dict]:
     """写库前规划下一批步骤（只读）；completing 是本轮即将完成的步骤。
 
@@ -533,7 +534,7 @@ def plan_refill(
     if len(pending) >= 2:
         return []
     return refine.plan_upcoming_defs(
-        session, goal, use_llm=use_llm, today=now.date(), completing=completing
+        session, goal, use_llm=use_llm, today=now.date(), completing=completing, lang=lang
     )
 
 
@@ -623,6 +624,10 @@ def prepare_goal_draft(
     tz: str = "Asia/Shanghai",
     *,
     use_llm: bool = True,
+    lang: str | None = None,
+    instruction: str = "",
+    current_steps: list[dict] | None = None,
+    current_outline: list[str] | None = None,
 ) -> GoalDraft:
     brief = planner.fill_defaults(brief, today=now.date())
     deadline = brief.deadline or (now.date() + timedelta(days=90))
@@ -635,17 +640,31 @@ def prepare_goal_draft(
         complexity=brief.complexity,
         raw=brief.raw,
         tz=tz,
+        instruction=instruction,
+        current_steps=current_steps,
+        current_outline=current_outline,
+        lang=lang,
         use_llm=use_llm,
     )
     if plan:
         outline, step_defs = plan
         return GoalDraft(brief, deadline, outline, step_defs, "llm")
+    if instruction and current_steps:
+        revised = [dict(s) for s in current_steps]
+        if any(k in instruction.lower() for k in ("短", "shorter", "20", "15", "轻松", "gentler")):
+            for step in revised:
+                step["est_min"] = max(10, min(int(step.get("est_min", 30)), 20))
+        outline = list(current_outline or dict.fromkeys(s.get("milestone", "") for s in revised if s.get("milestone")))
+        if not outline:
+            outline = milestones(pick_template(brief.title), lang=lang or "en")
+        return GoalDraft(brief, deadline, outline, revised, "revised")
     template_key = pick_template(brief.title)
+    tpl_lang = lang or "en"
     return GoalDraft(
         brief,
         deadline,
-        milestones(template_key),
-        first_batch(full_steps(template_key)),
+        milestones(template_key, lang=tpl_lang),
+        first_batch(full_steps(template_key, lang=tpl_lang)),
         template_key,
     )
 
@@ -1267,7 +1286,7 @@ def accept(
     ev = cal.create_event(
         session,
         user_id,
-        f"{step.goal.title}: {step.title}",
+        step.title[:200],
         candidate.start,
         candidate.end,
         kind="block",
@@ -1300,7 +1319,7 @@ def accept_batch(
         cal.create_event(
             session,
             user_id,
-            f"{step.goal.title}: {step.title}",
+            step.title[:200],
             item["start"],
             item["end"],
             kind="block",
@@ -1887,7 +1906,7 @@ def accept_recovery(
         return Reply("That block is already gone.", Action(intent="chat", raw="", confidence=0.5),
                      "checkin", checkin_context=None)
     new_ev = cal.create_event(
-        session, user_id, f"{step.goal.title}: {step.title}",
+        session, user_id, step.title[:200],
         candidate.start, candidate.end,
         kind="block", source="proposal", step_id=step.id, tz=tz,
     )

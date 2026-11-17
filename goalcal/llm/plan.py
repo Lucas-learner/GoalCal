@@ -14,6 +14,7 @@ from typing import Any
 from pydantic import BaseModel, ValidationError, field_validator
 
 from ..config import settings
+from ..i18n import normalize_lang
 from .router import plan_client
 
 log = logging.getLogger(__name__)
@@ -45,10 +46,12 @@ Rules:
 5. Readability & format rules (strictly keep text concise and scannable):
    - outline phase names: 4-12 Chinese characters (or 2-5 English words); avoid long colon subtitles.
    - step title: clear verb-object phrase, 8-26 Chinese characters (or <=14 English words). Put ONLY the core action in title; NO parenthetical notes, NO nested quotes, and NO multi-clause "after doing A, do B (note C)" sentences.
-   - outcome: one crisp verifiable result in 10-24 Chinese characters; NO slash lists in parentheses.
-6. Use the same language as the goal title. Chinese goal -> Chinese outline and steps.
-7. Do not use placeholder labels such as "Topic A", "Part B", or "Step 1".
-8. Output only JSON, no markdown.
+   - outcome: one crisp verifiable result in 10-24 Chinese characters (or <=16 English words); NO slash lists in parentheses.
+6. Output language MUST follow target_language ("Simplified Chinese" -> all outline, titles, outcomes in Chinese; "English" -> all outline, titles, outcomes in English). When target_language is "auto", match the goal title's language.
+7. If original_user_text or target_outcome includes clarified user constraints (e.g. a fixed exam/event date, narrowed phase scope, or starting baseline), follow them strictly rather than proposing unrealistic leaps.
+8. If revision_request and current_steps (or current_outline) are provided, revise the existing plan instead of ignoring it: keep steps that still fit and explicitly apply revision_request (shorter steps, different focus, gentler pace, etc.).
+9. Do not use placeholder labels such as "Topic A", "Part B", or "Step 1".
+10. Output only JSON, no markdown.
 """
 
 PLAN_SYSTEM = """You are GoalCal's goal decomposition planner.
@@ -78,7 +81,7 @@ Rules:
    mistakes, then do a final recall/check.
 6. For skill-learning goals, include baseline, core drills, guided practice, independent
    performance, feedback, and a small final output.
-7. Use the same language as the goal title. Chinese goal -> Chinese steps.
+7. Output language MUST follow target_language ("Simplified Chinese" -> all milestones, titles, outcomes in Chinese; "English" -> all milestones, titles, outcomes in English). When target_language is "auto", match the goal title's language.
 8. seq must start at 1 and be contiguous. Output only JSON, no markdown.
 9. If current_steps is provided, revise that plan instead of starting from scratch. Keep
    steps that still fit; change only what the revision_request asks for.
@@ -155,6 +158,10 @@ def generate_outline_plan(
     complexity: str = "standard",
     raw: str = "",
     tz: str = "Asia/Shanghai",
+    instruction: str = "",
+    current_steps: list[dict[str, Any]] | None = None,
+    current_outline: list[str] | None = None,
+    lang: str | None = None,
     use_llm: bool = True,
 ) -> tuple[list[str], list[dict[str, Any]]] | None:
     """建目标的滚动拆解：3–5 个阶段的大纲 + 第一阶段 2–3 个具体步骤。
@@ -171,15 +178,25 @@ def generate_outline_plan(
     if not settings.llm_enabled or not getattr(client, "ready", True):
         return None
 
+    resolved_lang = normalize_lang(lang)
+    target_language = (
+        "Simplified Chinese" if resolved_lang == "zh"
+        else "English" if resolved_lang == "en"
+        else "auto"
+    )
     today = today or date.today()
     payload = {
         "goal_title": title,
+        "target_language": target_language,
         "deadline": deadline.isoformat() if deadline else None,
         "days_left": (deadline - today).days if deadline else None,
         "complexity": complexity,
         "current_level": level or "unspecified",
         "target_outcome": target or "unspecified",
         "original_user_text": raw,
+        "current_outline": current_outline or None,
+        "current_steps": current_steps or None,
+        "revision_request": instruction or None,
     }
     system = OUTLINE_SYSTEM.format(
         now=today.isoformat(), tz=tz, weekday=today.strftime("%A")
@@ -234,6 +251,7 @@ def generate_plan(
     tz: str = "Asia/Shanghai",
     instruction: str = "",
     current_steps: list[str] | None = None,
+    lang: str | None = None,
     use_llm: bool = True,
 ) -> list[dict[str, Any]] | None:
     """调用 LLM 生成计划；未启用、失败或校验不通过时返回 None。
@@ -248,10 +266,17 @@ def generate_plan(
     if not settings.llm_enabled or not getattr(client, "ready", True):
         return None
 
+    resolved_lang = normalize_lang(lang)
+    target_language = (
+        "Simplified Chinese" if resolved_lang == "zh"
+        else "English" if resolved_lang == "en"
+        else "auto"
+    )
     today = today or date.today()
     days_left = (deadline - today).days if deadline else None
     payload = {
         "goal_title": title,
+        "target_language": target_language,
         "deadline": deadline.isoformat() if deadline else None,
         "days_left": days_left,
         "complexity": complexity,

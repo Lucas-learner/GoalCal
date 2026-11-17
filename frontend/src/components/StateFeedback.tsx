@@ -1,5 +1,6 @@
 import React from 'react';
 import { ApiError } from '../api/client';
+import { useI18n } from '../i18n';
 import type { IdempotentActionError } from '../lib/useIdempotentMutation';
 
 interface ErrorBannerProps {
@@ -10,6 +11,7 @@ interface ErrorBannerProps {
 }
 
 export function ErrorBanner({ error, onRetry, onRefresh, onDismiss }: ErrorBannerProps) {
+  const { t } = useI18n();
   if (!error) return null;
 
   const isActionErr = 'canRetrySameKey' in error;
@@ -24,24 +26,28 @@ export function ErrorBanner({ error, onRetry, onRefresh, onDismiss }: ErrorBanne
     <div className="status-banner" role="alert">
       <div className="status-banner-body">
         <div className="status-banner-title">
-          {isConflict ? '状态已更新，请先确认最新内容' : showSameKeyNote ? '尚未确认完成' : '操作未能完成'}
+          {isConflict
+            ? t('状态已更新', 'Updated elsewhere')
+            : showSameKeyNote
+              ? t('尚未确认完成', 'Unconfirmed')
+              : t('操作失败', 'Action failed')}
         </div>
         <div>{message}</div>
       </div>
       <div className="status-banner-actions">
         {isConflict && onRefresh ? (
           <button type="button" className="btn small" onClick={onRefresh}>
-            刷新最新数据
+            {t('刷新', 'Refresh')}
           </button>
         ) : null}
         {retryFn ? (
           <button type="button" className="btn small primary" onClick={() => void retryFn()}>
-            {showSameKeyNote ? '重试（沿用原操作）' : '重试'}
+            {showSameKeyNote ? t('重试原操作', 'Retry same action') : t('重试', 'Retry')}
           </button>
         ) : null}
         {dismissFn ? (
           <button type="button" className="btn small" onClick={dismissFn}>
-            收起
+            {t('收起', 'Dismiss')}
           </button>
         ) : null}
       </div>
@@ -55,22 +61,24 @@ export function EmptyState({
   actions,
 }: {
   title: string;
-  copy: string;
+  copy?: string;
   actions?: React.ReactNode;
 }) {
   return (
     <div className="empty-state">
       <div className="empty-state-title">{title}</div>
-      <div className="empty-state-copy">{copy}</div>
+      {copy ? <div className="empty-state-copy">{copy}</div> : null}
       {actions ? <div className="actions">{actions}</div> : null}
     </div>
   );
 }
 
-export function SkeletonCard({ label = '正在加载内容' }: { label?: string }) {
+export function SkeletonCard({ label }: { label?: string }) {
+  const { t } = useI18n();
+  const displayLabel = label ?? t('正在加载内容', 'Loading');
   return (
-    <div className="card" style={{ padding: 24, marginTop: 20 }} aria-busy="true" aria-label={label}>
-      <div className="section-label">{label}</div>
+    <div className="card" style={{ padding: 24, marginTop: 20 }} aria-busy="true" aria-label={displayLabel}>
+      <div className="section-label">{displayLabel}</div>
       <div
         style={{
           height: 18,

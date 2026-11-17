@@ -1,3 +1,4 @@
+import { getActiveLang, pickText } from '../i18n';
 import type {
   AssistantState,
   AssistantTurnResponse,
@@ -69,8 +70,9 @@ function sleep(ms: number): Promise<void> {
 }
 
 async function parseErrorResponse(response: Response, idempotencyKey?: string): Promise<ApiError> {
+  const lang = getActiveLang();
   let code = `http_${response.status}`;
-  let message = response.statusText || `请求失败 (${response.status})`;
+  let message = response.statusText || pickText(lang, `请求失败 (${response.status})`, `Request failed (${response.status})`);
   try {
     const text = await response.text();
     if (text) {
@@ -114,6 +116,7 @@ async function fetchWithTimeout(
 }
 
 export async function apiGet<T>(path: string, timeoutMs = 20000): Promise<T> {
+  const lang = getActiveLang();
   let response: Response;
   try {
     response = await fetchWithTimeout(
@@ -121,7 +124,7 @@ export async function apiGet<T>(path: string, timeoutMs = 20000): Promise<T> {
       {
         method: 'GET',
         credentials: 'same-origin',
-        headers: { Accept: 'application/json' },
+        headers: { Accept: 'application/json', 'X-GoalCal-Lang': lang },
       },
       timeoutMs,
     );
@@ -130,7 +133,9 @@ export async function apiGet<T>(path: string, timeoutMs = 20000): Promise<T> {
     throw new ApiError({
       status: 0,
       code: isAbort ? 'timeout' : 'network_error',
-      message: isAbort ? '请求超时，请检查网络后重试。' : '网络连接失败，请检查网络后重试。',
+      message: isAbort
+        ? pickText(lang, '请求超时，请检查网络后重试。', 'Request timed out. Check your connection and retry.')
+        : pickText(lang, '网络连接失败，请检查网络后重试。', 'Network connection failed. Check your connection and retry.'),
       unknownOutcome: true,
     });
   }
@@ -155,6 +160,7 @@ export async function apiWrite<T>(
   body?: unknown,
   options: RequestOptions = {},
 ): Promise<T> {
+  const lang = getActiveLang();
   const key = options.idempotencyKey ?? generateIdempotencyKey();
   const timeoutMs = options.timeoutMs ?? 25000;
   const retryDelayMs = options.retryDelayMs ?? 180;
@@ -166,6 +172,7 @@ export async function apiWrite<T>(
       Accept: 'application/json',
       'Content-Type': 'application/json',
       'Idempotency-Key': key,
+      'X-GoalCal-Lang': lang,
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   };
@@ -200,7 +207,11 @@ export async function apiWrite<T>(
       throw new ApiError({
         status: 0,
         code: isAbort ? 'timeout' : 'network_error',
-        message: '请求超时或网络中断，尚未确认完成。你可以保留当前内容并使用原操作重试。',
+        message: pickText(
+          lang,
+          '请求超时或网络中断，尚未确认完成。你可以保留当前内容并使用原操作重试。',
+          'Request timed out or network interrupted; completion is unconfirmed. Your input is preserved — retry with the same operation.',
+        ),
         idempotencyKey: key,
         unknownOutcome: true,
       });
@@ -210,7 +221,7 @@ export async function apiWrite<T>(
   throw new ApiError({
     status: 0,
     code: 'network_error',
-    message: '尚未确认完成，请重试。',
+    message: pickText(lang, '尚未确认完成，请重试。', 'Outcome unconfirmed. Please retry.'),
     idempotencyKey: key,
     unknownOutcome: true,
   });
@@ -220,14 +231,32 @@ export async function apiWrite<T>(
 
 export const api = {
   getMe: () => apiGet<User>('/me'),
+  updateMe: (body: { lang: '' | 'zh' | 'en' }, idempotencyKey?: string) =>
+    apiWrite<User>('/me', 'PATCH', body, { idempotencyKey }),
   getToday: () => apiGet<TodayResponse>('/today'),
   getGoals: () => apiGet<GoalsListResponse>('/goals'),
   getGoalsWithArchived: () => apiGet<GoalsListResponse>('/goals?include_archived=1'),
   getGoal: (id: number, opts?: { includeArchived?: boolean }) =>
     apiGet<Goal>(opts?.includeArchived ? `/goals/${id}?include_archived=1` : `/goals/${id}`),
 
-  createGoalDraft: (body: { title: string; deadline: string | null }, idempotencyKey?: string) =>
-    apiWrite<Draft>('/goal-drafts', 'POST', body, { idempotencyKey }),
+  evaluateGoalIntake: (
+    body: { description: string; deadline: string | null },
+    idempotencyKey?: string,
+  ) => apiWrite<import('./types').GoalIntakeResponse>('/goal-intake', 'POST', body, { idempotencyKey }),
+
+  createGoalDraft: (
+    body: {
+      title: string;
+      raw?: string;
+      level?: string;
+      target?: string;
+      instruction?: string;
+      current_steps?: DraftStep[];
+      current_outline?: string[];
+      deadline: string | null;
+    },
+    idempotencyKey?: string,
+  ) => apiWrite<Draft>('/goal-drafts', 'POST', body, { idempotencyKey }),
 
   createGoal: (
     body: {
@@ -331,8 +360,18 @@ export const api = {
     idempotencyKey?: string,
   ) => apiWrite<AssistantTurnResponse>('/assistant/turns', 'POST', body, { idempotencyKey }),
 
+  clearAssistantThread: (
+    body: { version: string },
+    idempotencyKey?: string,
+  ) => apiWrite<AssistantTurnResponse>('/assistant/clear', 'POST', body, { idempotencyKey }),
+
   importCalendarIcs: (body: { ics: string }, idempotencyKey?: string) =>
     apiWrite<IcsImportResponse>('/calendar/import', 'POST', body, { idempotencyKey }),
 
   getMetrics: () => apiGet<MetricsResponse>('/metrics'),
+
+  submitFeedback: (
+    body: { category: import('./types').FeedbackCategory; message: string; operation_id?: string },
+    idempotencyKey?: string,
+  ) => apiWrite<import('./types').FeedbackResponse>('/feedback', 'POST', body, { idempotencyKey }),
 };

@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
 import { ApiError, generateIdempotencyKey } from '../api/client';
+import { getActiveLang, pickText } from '../i18n';
 
 export interface IdempotentActionError {
   error: ApiError;
@@ -48,7 +49,10 @@ export function useIdempotentAction<TArgs, TResult>(
             : new ApiError({
                 status: 0,
                 code: 'unknown_error',
-                message: rawErr instanceof Error ? rawErr.message : '操作失败，请重试。',
+                message:
+                  rawErr instanceof Error
+                    ? rawErr.message
+                    : pickText(getActiveLang(), '操作失败，请重试。', 'Action failed. Please retry.'),
                 idempotencyKey: key,
                 unknownOutcome: true,
               });

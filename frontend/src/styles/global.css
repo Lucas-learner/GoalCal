@@ -108,13 +108,15 @@ textarea:disabled {
 
 .brand-mark::before {
   content: "";
+  box-sizing: content-box;
   position: absolute;
   width: 9px;
   height: 9px;
   border: 2px solid var(--surface);
   border-radius: 50%;
-  left: 7px;
-  top: 7px;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
 }
 
 .nav {
@@ -215,11 +217,11 @@ textarea:disabled {
 
 .main {
   min-width: 0;
-  padding: 34px 38px 64px;
+  padding: 50px 38px 64px;
 }
 
 .main.today-main {
-  padding: 36px 42px 64px;
+  padding: 50px 42px 64px;
 }
 
 .content {
@@ -822,6 +824,40 @@ h1 {
   overflow-wrap: anywhere;
 }
 
+.goal-title-trigger {
+  border: 0;
+  background: transparent;
+  padding: 2px 7px;
+  margin: -2px -7px;
+  border-radius: 7px;
+  font: inherit;
+  letter-spacing: inherit;
+  color: inherit;
+  text-align: left;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: calc(100% + 14px);
+  transition: background-color 0.14s ease;
+}
+
+.goal-title-trigger:hover:not(:disabled),
+.goal-title-trigger:focus-visible {
+  background: var(--surface-soft);
+}
+
+.goal-title-edit-icon {
+  font-size: 13px;
+  color: var(--muted);
+  opacity: 0;
+  transition: opacity 0.14s ease;
+}
+
+.goal-title-trigger:hover .goal-title-edit-icon,
+.goal-title-trigger:focus-visible .goal-title-edit-icon {
+  opacity: 0.85;
+}
+
 .goal-meta {
   color: var(--muted);
   font-size: 11px;
@@ -1119,9 +1155,15 @@ h1 {
 
 .draft-step-grid {
   display: grid;
-  grid-template-columns: 1fr 110px 140px auto;
+  grid-template-columns: 1fr 92px auto;
   gap: 8px;
   align-items: end;
+}
+
+.draft-step-remove-btn {
+  height: 38px;
+  min-height: 38px;
+  padding: 0 14px;
 }
 
 /* Calendar Page */
@@ -1202,6 +1244,18 @@ h1 {
   border: 1px solid var(--line);
   border-radius: 9px;
   margin-top: 9px;
+  background: var(--surface);
+  cursor: grab;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.backlog-item:hover {
+  border-color: var(--ink);
+  box-shadow: 0 2px 8px rgba(17, 17, 17, 0.06);
+}
+
+.backlog-item:active {
+  cursor: grabbing;
 }
 
 .backlog-item-title {
@@ -1352,13 +1406,52 @@ h1 {
   overflow: hidden;
 }
 
+.settings-logout-form {
+  margin-top: 16px;
+}
+
+.settings-logout-btn {
+  width: 100%;
+  min-height: 50px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 17px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 590;
+  transition: background-color 0.14s ease, border-color 0.14s ease, transform 0.08s ease;
+}
+
+.settings-logout-btn .icon {
+  color: var(--muted);
+  transition: color 0.14s ease;
+}
+
+.settings-logout-btn:hover {
+  background: var(--surface-soft);
+  border-color: var(--line-strong);
+}
+
+.settings-logout-btn:hover .icon {
+  color: var(--ink);
+}
+
+.settings-logout-btn:active {
+  transform: scale(0.995);
+}
+
 .setting-row {
   display: grid;
   grid-template-columns: 1fr auto;
   gap: 18px;
   align-items: center;
-  min-height: 64px;
-  padding: 13px 17px;
+  min-height: 54px;
+  padding: 12px 17px;
   border-bottom: 1px solid var(--line);
 }
 
@@ -1382,14 +1475,14 @@ h1 {
 }
 
 .availability-card {
-  padding: 17px;
+  padding: 18px;
   display: grid;
-  gap: 16px;
+  gap: 18px;
 }
 
 .window-group {
   border-top: 1px solid var(--line);
-  padding-top: 14px;
+  padding-top: 16px;
 }
 
 .window-group:first-child {
@@ -1401,8 +1494,120 @@ h1 {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 10px;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.window-empty-text {
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.window-lines {
+  display: grid;
+}
+
+.window-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+
+.window-line:first-child {
+  border-top: 0;
+  padding-top: 4px;
+}
+
+.window-line:last-child {
+  padding-bottom: 2px;
+}
+
+.day-pills {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.day-pill {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 540;
+  transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.day-pill:hover {
+  border-color: var(--muted);
+  color: var(--ink);
+}
+
+.day-pill.selected {
+  background: var(--accent);
+  color: var(--surface);
+  border-color: var(--accent);
+  font-weight: 620;
+}
+
+.window-line-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.select.time-select {
+  width: auto;
+  min-width: 82px;
+  min-height: 30px;
+  padding: 4px 8px;
+  font-size: 12px;
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.window-time-sep {
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.window-remove-btn {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--faint);
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.window-remove-btn svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  fill: none;
+}
+
+.window-remove-btn:hover {
+  background: var(--surface-soft);
+  color: var(--ink);
 }
 
 .window-row {
@@ -1654,10 +1859,11 @@ h1 {
   background: transparent;
   resize: none;
   font-size: 13px;
-  line-height: 1.5;
+  line-height: 20px;
   max-height: 120px;
-  min-height: 22px;
-  padding: 4px 0;
+  min-height: 44px;
+  height: 44px;
+  padding: 12px 0;
   outline: none;
 }
 
@@ -1804,7 +2010,7 @@ h1 {
 
   .main,
   .main.today-main {
-    padding: 28px 24px 64px;
+    padding: 38px 24px 64px;
   }
 }
 
@@ -1893,6 +2099,40 @@ h1 {
 
   .setting-control {
     width: 100%;
+  }
+
+  .window-line {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    padding: 12px 0;
+  }
+
+  .day-pills {
+    display: grid;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    gap: 5px;
+  }
+
+  .day-pill {
+    width: 100%;
+    height: 36px;
+    font-size: 12px;
+  }
+
+  .window-line-controls {
+    justify-content: space-between;
+  }
+
+  .select.time-select {
+    flex: 1;
+    min-height: 40px;
+    font-size: 15px;
+  }
+
+  .window-remove-btn {
+    width: 36px;
+    height: 36px;
   }
 
   .metrics-grid {

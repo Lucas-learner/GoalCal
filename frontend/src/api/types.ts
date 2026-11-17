@@ -3,6 +3,7 @@ export interface User {
   name: string;
   email?: string | null;
   timezone: string;
+  lang?: string;
 }
 
 export type StepStatus = 'todo' | 'done' | 'dropped';
@@ -115,6 +116,30 @@ export interface Draft {
   version: string;
 }
 
+export interface GoalIntakeOption {
+  id: string;
+  label: string;
+  suggested_title?: string | null;
+  suggested_deadline?: string | null;
+  adjusted_scope?: string | null;
+}
+
+export interface GoalIntakeQuestion {
+  id: string;
+  prompt: string;
+  options: GoalIntakeOption[];
+}
+
+export interface GoalIntakeResponse {
+  needs_calibration: boolean;
+  conflict_kind: 'none' | 'scope_vs_time' | 'vague_target' | 'missing_baseline' | string;
+  suggested_title: string;
+  suggested_outcome?: string;
+  reason?: string;
+  questions: GoalIntakeQuestion[];
+  source?: string;
+}
+
 export interface TimeWindow {
   days: number[];
   start: string;
@@ -195,4 +220,15 @@ export interface MetricsResponse {
   recovery_72h?: number | null;
   progress?: number | null;
   [key: string]: unknown;
+}
+
+export type FeedbackCategory =
+  | '功能问题'
+  | 'AI 理解或计划问题'
+  | '速度或连接问题'
+  | '建议或其他';
+
+export interface FeedbackResponse {
+  id: number;
+  message: string;
 }

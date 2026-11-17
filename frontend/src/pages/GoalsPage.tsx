@@ -5,23 +5,23 @@ import { api } from '../api/client';
 import { invalidateAfterWrite, queryKeys } from '../api/queryKeys';
 import type { CalendarEvent, Goal, Step } from '../api/types';
 import { SparkleIcon } from '../components/Icons';
-import { Modal } from '../components/Modal';
 import { EmptyState, ErrorBanner, SkeletonCard } from '../components/StateFeedback';
 import { daysUntilDeadline, formatShortDate } from '../lib/datetime';
 import { useIdempotentAction } from '../lib/useIdempotentMutation';
+import { type Lang, pickText, useI18n } from '../i18n';
 import { useAppState } from '../state/AppStateContext';
 
-const GOAL_STATUS_LABEL: Record<string, string> = {
-  active: '进行中',
-  paused: '已暂停',
-  done: '已完成',
-  archived: '已归档',
+const GOAL_STATUS_LABEL: Record<string, [string, string]> = {
+  active: ['进行中', 'Active'],
+  paused: ['已暂停', 'Paused'],
+  done: ['已完成', 'Done'],
+  archived: ['已归档', 'Archived'],
 };
 
-const STEP_STATUS_LABEL: Record<string, string> = {
-  todo: '待办',
-  done: '已完成',
-  dropped: '已放弃',
+const STEP_STATUS_LABEL: Record<string, [string, string]> = {
+  todo: ['待办', 'Todo'],
+  done: ['已完成', 'Done'],
+  dropped: ['已放弃', 'Dropped'],
 };
 
 function computePhases(goal: Goal) {
@@ -48,14 +48,20 @@ function computePhases(goal: Goal) {
   });
 }
 
-function formatDeadlineSummary(goal: Goal, timezone: string): string {
-  if (!goal.deadline) return '没有明确期限';
+function formatDeadlineSummary(goal: Goal, timezone: string, lang: Lang): string {
+  if (!goal.deadline) return pickText(lang, '无期限', 'No deadline');
   const daysLeft = daysUntilDeadline(goal.deadline, timezone);
-  const short = formatShortDate(goal.deadline, timezone);
-  if (daysLeft == null) return `截止 ${short}`;
-  if (daysLeft < 0) return `截止 ${short} · 已逾期 ${Math.abs(daysLeft)} 天`;
-  if (daysLeft === 0) return `截止今天 (${short})`;
-  return `截止 ${short} · 还剩 ${daysLeft} 天`;
+  const short = formatShortDate(goal.deadline, timezone, lang);
+  if (daysLeft == null) return pickText(lang, `截止 ${short}`, `Due ${short}`);
+  if (daysLeft < 0) {
+    return pickText(
+      lang,
+      `截止 ${short} · 已逾期 ${Math.abs(daysLeft)} 天`,
+      `Due ${short} · ${Math.abs(daysLeft)}d overdue`,
+    );
+  }
+  if (daysLeft === 0) return pickText(lang, '今天截止', `Due today`);
+  return pickText(lang, `截止 ${short} · 剩 ${daysLeft} 天`, `Due ${short} · ${daysLeft}d left`);
 }
 
 export function GoalsPage({ timezone }: { timezone: string }) {
@@ -63,28 +69,25 @@ export function GoalsPage({ timezone }: { timezone: string }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { openAssistant, setPageGoalId, openProposalModal, recordMutationResult } = useAppState();
+  const { lang, t } = useI18n();
 
   const parsedParamId = goalIdParam ? Number(goalIdParam) : undefined;
   const hasExplicitSelection = parsedParamId != null && Number.isFinite(parsedParamId);
 
-  const [showArchived, setShowArchived] = useState(false);
-  const [confirmDeleteGoal, setConfirmDeleteGoal] = useState<Goal | null>(null);
-
   const goalsQuery = useQuery({
-    queryKey: showArchived ? [...queryKeys.goals, 'with-archived'] : queryKeys.goals,
-    queryFn: () => (showArchived ? api.getGoalsWithArchived() : api.getGoals()),
+    queryKey: queryKeys.goals,
+    queryFn: api.getGoals,
   });
 
   const allGoals = goalsQuery.data?.goals ?? [];
   const goals = useMemo(
-    () => (showArchived ? allGoals : allGoals.filter((g) => g.status !== 'archived')),
-    [allGoals, showArchived],
+    () => allGoals.filter((g) => g.status !== 'archived'),
+    [allGoals],
   );
 
   const activeGoalId = useMemo(() => {
     if (hasExplicitSelection) return parsedParamId;
-    const preferred = goals.find((g) => g.status !== 'archived') ?? goals[0];
-    return preferred?.id;
+    return goals[0]?.id;
   }, [hasExplicitSelection, parsedParamId, goals]);
 
   useEffect(() => {
@@ -93,13 +96,8 @@ export function GoalsPage({ timezone }: { timezone: string }) {
   }, [activeGoalId, setPageGoalId]);
 
   const detailQuery = useQuery({
-    queryKey:
-      activeGoalId != null
-        ? showArchived
-          ? [...queryKeys.goal(activeGoalId), 'with-archived']
-          : queryKeys.goal(activeGoalId)
-        : ['goals', 'none'],
-    queryFn: () => api.getGoal(activeGoalId!, { includeArchived: showArchived }),
+    queryKey: activeGoalId != null ? queryKeys.goal(activeGoalId) : ['goals', 'none'],
+    queryFn: () => api.getGoal(activeGoalId!),
     enabled: activeGoalId != null,
   });
 
@@ -139,36 +137,12 @@ export function GoalsPage({ timezone }: { timezone: string }) {
         setEditingGoalTitle(false);
       }
       await invalidateAfterWrite(queryClient, { goalId: args.id });
-      if (args.status === 'archived' && !showArchived && hasExplicitSelection) {
+      if (args.status === 'archived' && hasExplicitSelection) {
         navigate('/goals', { replace: true });
       }
     },
     onError: async (err, args) => {
       if (err.status === 409) {
-        await invalidateAfterWrite(queryClient, { goalId: args.id });
-      }
-    },
-  });
-
-  const deleteGoalFn = useCallback(
-    async (args: { id: number; version: string }, key: string) =>
-      api.deleteGoal(args.id, { version: args.version }, key),
-    [],
-  );
-
-  const deleteGoalAction = useIdempotentAction(deleteGoalFn, {
-    onSuccess: async (res, args) => {
-      recordMutationResult(res);
-      setConfirmDeleteGoal(null);
-      queryClient.removeQueries({ queryKey: queryKeys.goal(args.id) });
-      await invalidateAfterWrite(queryClient);
-      if (hasExplicitSelection) {
-        navigate('/goals', { replace: true });
-      }
-    },
-    onError: async (err, args) => {
-      if (err.status === 409 || err.status === 404) {
-        setConfirmDeleteGoal(null);
         await invalidateAfterWrite(queryClient, { goalId: args.id });
       }
     },
@@ -260,14 +234,12 @@ export function GoalsPage({ timezone }: { timezone: string }) {
 
   const anyActionError =
     updateGoalAction.actionError ??
-    deleteGoalAction.actionError ??
     updateStepAction.actionError ??
     proposeAction.actionError ??
     startStepAction.actionError ?? refillAction.actionError;
 
   const isBusy =
     updateGoalAction.isPending ||
-    deleteGoalAction.isPending ||
     updateStepAction.isPending ||
     proposeAction.isPending ||
     startStepAction.isPending || refillAction.isPending;
@@ -278,10 +250,7 @@ export function GoalsPage({ timezone }: { timezone: string }) {
   return (
     <div>
       <div className="topbar">
-        <div>
-          <div className="eyebrow">你的长期方向</div>
-          <h1>目标</h1>
-        </div>
+        <h1>{t('目标', 'Goals')}</h1>
         <div className="topbar-actions">
           <button
             type="button"
@@ -289,63 +258,51 @@ export function GoalsPage({ timezone }: { timezone: string }) {
             onClick={(e) => openAssistant(e.currentTarget)}
           >
             <SparkleIcon />
-            <span>问 GoalCal</span>
+            <span>{t('问 GoalCal', 'Ask GoalCal')}</span>
           </button>
           <Link className="btn primary" to="/goals/new">
-            + 新目标
+            {t('+ 新目标', '+ New goal')}
           </Link>
         </div>
       </div>
 
-      <p className="subtitle">不必一次看清全部，只需要知道每个目标的下一步。</p>
+      <p className="subtitle">
+        {t(
+          '不必一次看清全部，只需要知道每个目标的下一步。',
+          "You don't need the whole roadmap upfront — just the clear next step for each goal.",
+        )}
+      </p>
 
       {goalsQuery.isLoading ? (
-        <SkeletonCard label="正在加载目标列表" />
+        <SkeletonCard label={t('正在加载目标列表', 'Loading goals')} />
       ) : goalsQuery.isError ? (
         <ErrorBanner error={goalsQuery.error} onRetry={() => void goalsQuery.refetch()} />
       ) : goals.length === 0 && !hasExplicitSelection ? (
         <EmptyState
-          title="从一个想实现的结果开始"
-          copy="把你想要推进的长期目标告诉我，先生成可编辑的步骤草稿，再按自己的节奏排进日历。"
+          title={t('从一个想实现的结果开始', 'Start with an outcome that matters')}
+          copy={t(
+            '把你想要推进的长期目标告诉我，先生成可编辑的步骤草稿，再按自己的节奏排进日历。',
+            "Tell me what you're working toward. I'll draft editable steps you can schedule at your own pace.",
+          )}
           actions={
-            <>
-              <Link to="/goals/new" className="btn primary">
-                + 新目标
-              </Link>
-              <button
-                type="button"
-                className="btn"
-                onClick={() => setShowArchived((prev) => !prev)}
-              >
-                {showArchived ? '隐藏已归档' : '查看已归档'}
-              </button>
-            </>
+            <Link to="/goals/new" className="btn primary">
+              {t('+ 新目标', '+ New goal')}
+            </Link>
           }
         />
       ) : (
         <div
           className={`goals-layout${hasExplicitSelection ? ' mobile-has-selection' : ''}`}
         >
-          <div className="card goal-list" aria-label="目标列表">
-            <div
-              className="goal-list-label"
-              style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}
-            >
-              <span>
-                {showArchived ? '全部目标（含已归档）' : '进行中目标'} · {goals.length}
-              </span>
-              <button
-                type="button"
-                className="inline-link-btn"
-                onClick={() => setShowArchived((prev) => !prev)}
-              >
-                {showArchived ? '隐藏已归档' : '已归档'}
-              </button>
+          <div className="card goal-list" aria-label={t('目标列表', 'Goals list')}>
+            <div className="goal-list-label">
+              {t('目标', 'Goals')} · {goals.length}
             </div>
             {goals.map((g) => {
               const doneCount = g.steps.filter((s) => s.status === 'done').length;
               const pct = Math.round((g.progress ?? 0) * 100);
               const isSelected = activeGoalId === g.id;
+              const statusPair = GOAL_STATUS_LABEL[g.status];
               return (
                 <button
                   key={g.id}
@@ -355,16 +312,16 @@ export function GoalsPage({ timezone }: { timezone: string }) {
                   onClick={() => navigate(`/goals/${g.id}`)}
                 >
                   <div className="goal-row-title">
-                    {g.pinned ? '置顶 · ' : ''}
+                    {g.pinned ? t('置顶 · ', 'Pinned · ') : ''}
                     {g.title}
                   </div>
                   <div className="goal-row-meta">
-                    {GOAL_STATUS_LABEL[g.status] ?? g.status} · {formatDeadlineSummary(g, timezone)}
+                    {statusPair ? t(statusPair[0], statusPair[1]) : g.status} · {formatDeadlineSummary(g, timezone, lang)}
                   </div>
                   <div
                     className="progress"
                     role="progressbar"
-                    aria-label={`${g.title} 进度`}
+                    aria-label={t(`${g.title} 进度`, `${g.title} progress`)}
                     aria-valuemin={0}
                     aria-valuemax={100}
                     aria-valuenow={pct}
@@ -373,7 +330,7 @@ export function GoalsPage({ timezone }: { timezone: string }) {
                   </div>
                   <div className="goal-row-foot">
                     <span>
-                      {doneCount} / {g.steps.length} 步
+                      {doneCount} / {g.steps.length} {t('步', 'steps')}
                     </span>
                     <span>{pct}%</span>
                   </div>
@@ -389,16 +346,16 @@ export function GoalsPage({ timezone }: { timezone: string }) {
                 className="btn small back-list-btn"
                 onClick={() => navigate('/goals')}
               >
-                ← 返回目标列表
+                {t('← 返回目标列表', '← All goals')}
               </button>
             ) : null}
 
             {detailQuery.isLoading ? (
-              <SkeletonCard label="正在加载目标详情" />
+              <SkeletonCard label={t('正在加载目标详情', 'Loading goal details')} />
             ) : detailQuery.isError ? (
               <EmptyState
-                title="无法显示该目标"
-                copy={detailQuery.error.message || '目标不存在或已被归档。'}
+                title={t('无法显示该目标', 'Unable to load goal')}
+                copy={detailQuery.error.message || t('目标不存在或已被归档。', 'Goal not found or archived.')}
                 actions={
                   <>
                     <button
@@ -406,10 +363,10 @@ export function GoalsPage({ timezone }: { timezone: string }) {
                       className="btn"
                       onClick={() => void detailQuery.refetch()}
                     >
-                      重试
+                      {t('重试', 'Retry')}
                     </button>
                     <Link to="/goals" className="btn primary">
-                      返回目标列表
+                      {t('返回目标列表', 'Back to goals')}
                     </Link>
                   </>
                 }
@@ -438,19 +395,25 @@ export function GoalsPage({ timezone }: { timezone: string }) {
                         }}
                       >
                         <label className="sr-only" htmlFor="edit-goal-title-input">
-                          目标标题
+                          {t('目标标题', 'Goal title')}
                         </label>
                         <input
                           id="edit-goal-title-input"
                           type="text"
+                          autoFocus
                           className="input"
                           style={{ flex: 1, minWidth: 200 }}
                           value={goalTitleDraft}
                           onChange={(e) => setGoalTitleDraft(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Escape') {
+                              setEditingGoalTitle(false);
+                            }
+                          }}
                           disabled={isBusy}
                         />
                         <button type="submit" className="btn small primary" disabled={isBusy}>
-                          保存标题
+                          {t('保存', 'Save')}
                         </button>
                         <button
                           type="button"
@@ -458,40 +421,43 @@ export function GoalsPage({ timezone }: { timezone: string }) {
                           disabled={isBusy}
                           onClick={() => setEditingGoalTitle(false)}
                         >
-                          取消
+                          {t('取消', 'Cancel')}
                         </button>
                       </form>
                     ) : (
-                      <h2>{detailGoal.title}</h2>
+                      <h2>
+                        <button
+                          type="button"
+                          className="goal-title-trigger"
+                          title={t('点击修改标题', 'Click to rename')}
+                          disabled={isBusy}
+                          onClick={() => {
+                            setGoalTitleDraft(detailGoal.title);
+                            setEditingGoalTitle(true);
+                          }}
+                        >
+                          <span>{detailGoal.title}</span>
+                          <span className="goal-title-edit-icon" aria-hidden="true">✎</span>
+                        </button>
+                      </h2>
                     )}
 
                     <div className="goal-meta">
                       <span className="chip" style={{ marginRight: 8 }}>
-                        {GOAL_STATUS_LABEL[detailGoal.status] ?? detailGoal.status}
+                        {GOAL_STATUS_LABEL[detailGoal.status]
+                          ? t(GOAL_STATUS_LABEL[detailGoal.status][0], GOAL_STATUS_LABEL[detailGoal.status][1])
+                          : detailGoal.status}
                       </span>
                       {detailGoal.pinned ? (
                         <span className="chip blue" style={{ marginRight: 8 }}>
-                          已置顶
+                          {t('已置顶', 'Pinned')}
                         </span>
                       ) : null}
-                      <span>{formatDeadlineSummary(detailGoal, timezone)}</span>
+                      <span>{formatDeadlineSummary(detailGoal, timezone, lang)}</span>
                     </div>
                   </div>
 
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                    {!editingGoalTitle ? (
-                      <button
-                        type="button"
-                        className="btn small"
-                        disabled={isBusy}
-                        onClick={() => {
-                          setGoalTitleDraft(detailGoal.title);
-                          setEditingGoalTitle(true);
-                        }}
-                      >
-                        改标题
-                      </button>
-                    ) : null}
                     <button
                       type="button"
                       className="btn small"
@@ -504,40 +470,9 @@ export function GoalsPage({ timezone }: { timezone: string }) {
                         })
                       }
                     >
-                      {detailGoal.pinned ? '取消置顶' : '置顶'}
+                      {detailGoal.pinned ? t('取消置顶', 'Unpin') : t('置顶', 'Pin')}
                     </button>
-                    {detailGoal.status !== 'archived' ? (
-                      <button
-                        type="button"
-                        className="btn small"
-                        disabled={isBusy}
-                        onClick={() =>
-                          void updateGoalAction.run({
-                            id: detailGoal.id,
-                            version: detailGoal.version,
-                            status: detailGoal.status === 'paused' ? 'active' : 'paused',
-                          })
-                        }
-                      >
-                        {detailGoal.status === 'paused' ? '恢复' : '暂停'}
-                      </button>
-                    ) : null}
-                    {detailGoal.status !== 'archived' ? (
-                      <button
-                        type="button"
-                        className="btn small"
-                        disabled={isBusy}
-                        onClick={() =>
-                          void updateGoalAction.run({
-                            id: detailGoal.id,
-                            version: detailGoal.version,
-                            status: 'archived',
-                          })
-                        }
-                      >
-                        归档
-                      </button>
-                    ) : (
+                    {detailGoal.status === 'paused' ? (
                       <button
                         type="button"
                         className="btn small"
@@ -550,23 +485,30 @@ export function GoalsPage({ timezone }: { timezone: string }) {
                           })
                         }
                       >
-                        恢复目标
+                        {t('恢复', 'Resume')}
                       </button>
-                    )}
+                    ) : null}
                     <button
                       type="button"
-                      className="btn small danger"
+                      className="btn small"
                       disabled={isBusy}
-                      onClick={() => setConfirmDeleteGoal(detailGoal)}
+                      onClick={() =>
+                        void updateGoalAction.run({
+                          id: detailGoal.id,
+                          version: detailGoal.version,
+                          status: 'archived',
+                        })
+                      }
                     >
-                      删除
+                      {t('归档', 'Archive')}
                     </button>
                   </div>
                 </div>
 
                 {detailGoal.outcome && detailGoal.outcome !== detailGoal.title ? (
                   <p className="muted" style={{ fontSize: 12, marginTop: 10 }}>
-                    目标结果：{detailGoal.outcome}
+                    {t('目标结果：', 'Outcome: ')}
+                    {detailGoal.outcome}
                   </p>
                 ) : null}
 
@@ -578,7 +520,7 @@ export function GoalsPage({ timezone }: { timezone: string }) {
                       <div
                         className="progress"
                         role="progressbar"
-                        aria-label={`${detailGoal.title} 整体进度`}
+                        aria-label={t(`${detailGoal.title} 整体进度`, `${detailGoal.title} overall progress`)}
                         aria-valuemin={0}
                         aria-valuemax={100}
                         aria-valuenow={pct}
@@ -586,7 +528,7 @@ export function GoalsPage({ timezone }: { timezone: string }) {
                         <span style={{ width: `${pct}%` }} />
                       </div>
                       <div className="goal-progress-text">
-                        {doneSteps} / {detailGoal.steps.length} 步 · {pct}%
+                        {doneSteps} / {detailGoal.steps.length} {t('步', 'steps')} · {pct}%
                       </div>
                     </div>
                   );
@@ -594,11 +536,11 @@ export function GoalsPage({ timezone }: { timezone: string }) {
 
                 {nextTodoStep && detailGoal.status === 'active' ? (
                   <div className="next-box">
-                    <div className="section-label">下一步</div>
+                    <div className="section-label">{t('下一步', 'Next step')}</div>
                     <div className="next-title">{nextTodoStep.title}</div>
                     <div className="next-meta">
-                      {nextTodoStep.est_min} 分钟
-                      {nextTodoStep.outcome ? ` · 完成标准：${nextTodoStep.outcome}` : ''}
+                      {nextTodoStep.est_min} {t('分钟', 'min')}
+                      {nextTodoStep.outcome ? `${t(' · 完成标准：', ' · Done when: ')}${nextTodoStep.outcome}` : ''}
                     </div>
                     <div className="next-actions">
                       <button
@@ -614,7 +556,7 @@ export function GoalsPage({ timezone }: { timezone: string }) {
                           })
                         }
                       >
-                        立即开始
+                        {t('开始', 'Start')}
                       </button>
                       <button
                         type="button"
@@ -629,7 +571,7 @@ export function GoalsPage({ timezone }: { timezone: string }) {
                           })
                         }
                       >
-                        标记完成
+                        {t('完成', 'Done')}
                       </button>
                       <button
                         type="button"
@@ -637,7 +579,7 @@ export function GoalsPage({ timezone }: { timezone: string }) {
                         disabled={isBusy}
                         onClick={() => void proposeAction.run(nextTodoStep.id)}
                       >
-                        找时间安排
+                        {t('找时间', 'Find time')}
                       </button>
                     </div>
                   </div>
@@ -646,9 +588,9 @@ export function GoalsPage({ timezone }: { timezone: string }) {
                 {phases.length > 0 ? (
                   <div className="phase-section">
                     <div className="section-head">
-                      <span className="section-title">阶段</span>
+                      <span className="section-title">{t('阶段', 'Phases')}</span>
                       <span className="muted" style={{ fontSize: 11 }}>
-                        {phases.length} 个阶段 · 点击阶段可查看对应步骤
+                        {t(`${phases.length} 个阶段 · 点击筛选`, `${phases.length} phases · click to filter`)}
                       </span>
                     </div>
                     {phases.map((p) => {
@@ -661,14 +603,14 @@ export function GoalsPage({ timezone }: { timezone: string }) {
                           </span>
                           <span>
                             {p.name}
-                            {p.state === 'current' ? '（当前阶段）' : ''}
+                            {p.state === 'current' ? t('（当前）', ' (current)') : ''}
                           </span>
                           <span className="phase-meta">
                             {p.state === 'done'
-                              ? `已完成 ${p.done} 步`
+                              ? t(`已完成 ${p.done} 步`, `${p.done} done`)
                               : hasSteps
-                                ? `${p.done} / ${p.done + p.todo} 步`
-                                : '完成当前阶段后自动生成'}
+                                ? t(`${p.done} / ${p.done + p.todo} 步`, `${p.done} / ${p.done + p.todo} steps`)
+                                : t('当前阶段完成后生成', 'Generates after current phase')}
                           </span>
                         </>
                       );
@@ -696,7 +638,7 @@ export function GoalsPage({ timezone }: { timezone: string }) {
                   <div className="actions">
                     <button type="button" className="btn primary" disabled={isBusy}
                       onClick={() => void refillAction.run({ id: detailGoal.id, version: detailGoal.version })}>
-                      生成下一批步骤
+                      {t('生成下一批步骤', 'Generate next batch')}
                     </button>
                   </div>
                 ) : null}
@@ -716,7 +658,7 @@ export function GoalsPage({ timezone }: { timezone: string }) {
                     <div className="steps-section">
                       <div className="section-head">
                         <span className="section-title">
-                          {selectedPhase ? `步骤 · ${selectedPhase}` : '待推进步骤'}
+                          {selectedPhase ? `${t('步骤', 'Steps')} · ${selectedPhase}` : t('待办步骤', 'Todo steps')}
                         </span>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                           {selectedPhase ? (
@@ -725,30 +667,34 @@ export function GoalsPage({ timezone }: { timezone: string }) {
                               className="inline-link-btn primary-link"
                               onClick={() => setSelectedPhase(null)}
                             >
-                              只看待办
+                              {t('只看待办', 'Todo only')}
                             </button>
                           ) : null}
                           <span className="muted" style={{ fontSize: 11 }}>
                             {selectedPhase
-                              ? `共 ${phaseSteps.length} 步`
-                              : `${todoSteps.length} 步待办 · ${finishedSteps.length} 步已完成`}
+                              ? t(`共 ${phaseSteps.length} 步`, `${phaseSteps.length} steps`)
+                              : t(
+                                  `${todoSteps.length} 步待办 · ${finishedSteps.length} 步已完成`,
+                                  `${todoSteps.length} todo · ${finishedSteps.length} finished`,
+                                )}
                           </span>
                         </div>
                       </div>
 
                       {detailGoal.steps.length === 0 ? (
                         <div className="muted" style={{ fontSize: 12 }}>
-                          该目标暂时还没有步骤。
+                          {t('该目标暂时还没有步骤。', 'No steps in this goal yet.')}
                         </div>
                       ) : visibleSteps.length === 0 && !selectedPhase ? (
                         <div className="muted" style={{ fontSize: 12 }}>
-                          当前没有待办步骤，可展开下方已完成步骤或点击对应阶段查看。
+                          {t('暂无待办步骤', 'No pending steps right now.')}
                         </div>
                       ) : (
                         visibleSteps.map((step) => {
                           const isDone = step.status === 'done';
                           const isDropped = step.status === 'dropped';
                           const isEditing = editingStepId === step.id;
+                          const stepStatusPair = STEP_STATUS_LABEL[step.status];
 
                           return (
                             <div
@@ -760,7 +706,7 @@ export function GoalsPage({ timezone }: { timezone: string }) {
                               <button
                                 type="button"
                                 className="step-check-btn"
-                                aria-label={`${isDone ? '取消完成' : '标记完成'}：${step.title}`}
+                                aria-label={`${isDone ? t('取消完成', 'Mark todo') : t('标记完成', 'Mark done')}: ${step.title}`}
                                 aria-pressed={isDone}
                                 disabled={isBusy || isDropped}
                                 onClick={() =>
@@ -796,7 +742,7 @@ export function GoalsPage({ timezone }: { timezone: string }) {
                                     }}
                                   >
                                     <label className="sr-only" htmlFor={`step-title-${step.id}`}>
-                                      步骤名称
+                                      {t('步骤名称', 'Step title')}
                                     </label>
                                     <input
                                       id={`step-title-${step.id}`}
@@ -808,7 +754,7 @@ export function GoalsPage({ timezone }: { timezone: string }) {
                                     />
                                     <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                                       <label htmlFor={`step-est-${step.id}`} style={{ fontSize: 11 }}>
-                                        预计分钟
+                                        {t('预计分钟', 'Est. min')}
                                       </label>
                                       <input
                                         id={`step-est-${step.id}`}
@@ -821,7 +767,7 @@ export function GoalsPage({ timezone }: { timezone: string }) {
                                         disabled={isBusy}
                                       />
                                       <button type="submit" className="btn small primary" disabled={isBusy}>
-                                        保存
+                                        {t('保存', 'Save')}
                                       </button>
                                       <button
                                         type="button"
@@ -829,7 +775,7 @@ export function GoalsPage({ timezone }: { timezone: string }) {
                                         disabled={isBusy}
                                         onClick={() => setEditingStepId(null)}
                                       >
-                                        取消
+                                        {t('取消', 'Cancel')}
                                       </button>
                                     </div>
                                   </form>
@@ -837,11 +783,11 @@ export function GoalsPage({ timezone }: { timezone: string }) {
                                   <>
                                     <div className="step-title">{step.title}</div>
                                     <div className="step-meta">
-                                      {step.est_min} 分钟
+                                      {step.est_min} {t('分钟', 'min')}
                                       {step.status !== 'todo'
-                                        ? ` · ${STEP_STATUS_LABEL[step.status] ?? step.status}`
+                                        ? ` · ${stepStatusPair ? t(stepStatusPair[0], stepStatusPair[1]) : step.status}`
                                         : ''}
-                                      {step.outcome ? ` · 完成标准：${step.outcome}` : ''}
+                                      {step.outcome ? ` · ${step.outcome}` : ''}
                                     </div>
                                   </>
                                 )}
@@ -856,7 +802,7 @@ export function GoalsPage({ timezone }: { timezone: string }) {
                                       disabled={isBusy}
                                       onClick={() => void proposeAction.run(step.id)}
                                     >
-                                      找时间
+                                      {t('找时间', 'Find time')}
                                     </button>
                                   ) : null}
                                   <button
@@ -865,7 +811,7 @@ export function GoalsPage({ timezone }: { timezone: string }) {
                                     disabled={isBusy}
                                     onClick={() => beginEditStep(step)}
                                   >
-                                    编辑
+                                    {t('编辑', 'Edit')}
                                   </button>
                                   {step.status === 'todo' ? (
                                     <button
@@ -881,7 +827,7 @@ export function GoalsPage({ timezone }: { timezone: string }) {
                                         })
                                       }
                                     >
-                                      放弃
+                                      {t('放弃', 'Drop')}
                                     </button>
                                   ) : null}
                                 </div>
@@ -894,14 +840,19 @@ export function GoalsPage({ timezone }: { timezone: string }) {
                       {!selectedPhase && finishedSteps.length > 0 ? (
                         <div className="steps-history-bar">
                           <span className="muted" style={{ fontSize: 11 }}>
-                            已完成 / 已放弃 {finishedSteps.length} 步
+                            {t(
+                              `已完成 / 已放弃 ${finishedSteps.length} 步`,
+                              `${finishedSteps.length} finished / dropped`,
+                            )}
                           </span>
                           <button
                             type="button"
                             className="inline-link-btn"
                             onClick={() => setShowFinishedSteps((prev) => !prev)}
                           >
-                            {showFinishedSteps ? '收起已完成' : `展开查看 (${finishedSteps.length})`}
+                            {showFinishedSteps
+                              ? t('收起已完成', 'Hide finished')
+                              : t(`展开查看 (${finishedSteps.length})`, `Show (${finishedSteps.length})`)}
                           </button>
                         </div>
                       ) : null}
@@ -913,43 +864,6 @@ export function GoalsPage({ timezone }: { timezone: string }) {
           </div>
         </div>
       )}
-
-      {confirmDeleteGoal ? (
-        <Modal
-          title="确认删除目标"
-          onClose={() => {
-            if (!deleteGoalAction.isPending) setConfirmDeleteGoal(null);
-          }}
-        >
-          <p className="muted" style={{ fontSize: 13, lineHeight: 1.6, marginTop: 0 }}>
-            确定要彻底删除「{confirmDeleteGoal.title}」吗？这会同时删除它的全部步骤和关联的日程时间块，且无法撤销。
-          </p>
-          <ErrorBanner error={deleteGoalAction.actionError} />
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
-            <button
-              type="button"
-              className="btn"
-              disabled={deleteGoalAction.isPending}
-              onClick={() => setConfirmDeleteGoal(null)}
-            >
-              取消
-            </button>
-            <button
-              type="button"
-              className="btn danger"
-              disabled={deleteGoalAction.isPending}
-              onClick={() =>
-                void deleteGoalAction.run({
-                  id: confirmDeleteGoal.id,
-                  version: confirmDeleteGoal.version,
-                })
-              }
-            >
-              {deleteGoalAction.isPending ? '正在删除…' : '确认删除'}
-            </button>
-          </div>
-        </Modal>
-      ) : null}
     </div>
   );
 }

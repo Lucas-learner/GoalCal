@@ -10,23 +10,24 @@ import {
   isoToDatetimeLocal,
 } from '../lib/datetime';
 import { useIdempotentAction } from '../lib/useIdempotentMutation';
+import { useI18n } from '../i18n';
 import { useAppState } from '../state/AppStateContext';
 import { Modal } from './Modal';
 import { ErrorBanner } from './StateFeedback';
 
-const STATUS_LABEL: Record<string, string> = {
-  planned: '已计划',
-  done: '已完成',
-  partial: '部分完成',
-  missed: '未完成',
-  skipped: '已取消',
-  moved: '已调整',
+const STATUS_LABEL: Record<string, [string, string]> = {
+  planned: ['已计划', 'Planned'],
+  done: ['已完成', 'Done'],
+  partial: ['部分完成', 'Partial'],
+  missed: ['未完成', 'Missed'],
+  skipped: ['已取消', 'Cancelled'],
+  moved: ['已调整', 'Moved'],
 };
 
-const KIND_LABEL: Record<string, string> = {
-  block: '目标时间块',
-  external: '固定日程',
-  buffer: '缓冲',
+const KIND_LABEL: Record<string, [string, string]> = {
+  block: ['目标时间块', 'Goal block'],
+  external: ['固定日程', 'Fixed event'],
+  buffer: ['缓冲', 'Buffer'],
 };
 
 interface EventDialogProps {
@@ -38,6 +39,7 @@ interface EventDialogProps {
 export function EventDialog({ event, timezone, onClose }: EventDialogProps) {
   const queryClient = useQueryClient();
   const { recordMutationResult, openProposalModal } = useAppState();
+  const { lang, t } = useI18n();
 
   const initialStart = isoToDatetimeLocal(event.start, timezone);
   const initialEnd = isoToDatetimeLocal(event.end, timezone);
@@ -138,39 +140,44 @@ export function EventDialog({ event, timezone, onClose }: EventDialogProps) {
     const startUtc = datetimeLocalToUtcIso(startLocal, timezone);
     const endUtc = datetimeLocalToUtcIso(endLocal, timezone);
     if (!startUtc || !endUtc) {
-      setValidationError('请填写完整的开始和结束时间。');
+      setValidationError(t('请填写完整的开始和结束时间。', 'Please fill in both start and end time.'));
       return;
     }
     if (endUtc <= startUtc) {
-      setValidationError('结束时间必须晚于开始时间。');
+      setValidationError(t('结束时间必须晚于开始时间。', 'End time must be after start time.'));
       return;
     }
     void moveAction.run({ start: startUtc, end: endUtc });
   };
 
+  const kindPair = KIND_LABEL[event.kind];
+  const statusPair = STATUS_LABEL[event.status];
+
   return (
     <Modal title={event.title} onClose={onClose} hasUnsavedChanges={dirty}>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
         <span className={event.kind === 'block' ? 'chip blue' : 'chip'}>
-          {KIND_LABEL[event.kind] ?? event.kind}
+          {kindPair ? t(kindPair[0], kindPair[1]) : event.kind}
         </span>
-        <span className="chip">{STATUS_LABEL[event.status] ?? event.status}</span>
+        <span className="chip">
+          {statusPair ? t(statusPair[0], statusPair[1]) : event.status}
+        </span>
       </div>
 
       <div className="muted" style={{ fontSize: 12, marginBottom: 10 }}>
-        当前时间（{timezone}）：{formatDateTimeLabel(event.start, event.end, timezone)}
+        {formatDateTimeLabel(event.start, event.end, timezone, lang)} · {timezone}
       </div>
 
       {event.goal_id != null ? (
         <div style={{ marginBottom: 14, fontSize: 12 }}>
-          关联目标：{' '}
+          {t('目标：', 'Goal: ')}{' '}
           <Link
             to={`/goals/${event.goal_id}`}
             className="section-link"
             style={{ textDecoration: 'underline' }}
             onClick={onClose}
           >
-            {event.goal_title || `查看目标 #${event.goal_id}`}
+            {event.goal_title || t(`目标 #${event.goal_id}`, `Goal #${event.goal_id}`)}
           </Link>
         </div>
       ) : null}
@@ -188,7 +195,7 @@ export function EventDialog({ event, timezone, onClose }: EventDialogProps) {
       <form onSubmit={handleSaveTime} noValidate>
         <div className="field">
           <label className="field-label" htmlFor="event-start-local">
-            开始时间（{timezone}）
+            {t('开始', 'Start')}
           </label>
           <input
             id="event-start-local"
@@ -205,7 +212,7 @@ export function EventDialog({ event, timezone, onClose }: EventDialogProps) {
 
         <div className="field">
           <label className="field-label" htmlFor="event-end-local">
-            结束时间（{timezone}）
+            {t('结束', 'End')}
           </label>
           <input
             id="event-end-local"
@@ -235,11 +242,11 @@ export function EventDialog({ event, timezone, onClose }: EventDialogProps) {
                 disabled={isBusy || !['planned', 'moved'].includes(event.status)}
                 onClick={() => void startAction.run(undefined)}
               >
-                {startAction.isPending ? '开始中…' : '开始执行'}
+                {startAction.isPending ? t('开始中…', 'Starting…') : t('开始', 'Start')}
               </button>
             ) : null}
             <button type="submit" className="btn" disabled={isBusy || !['planned', 'moved'].includes(event.status)}>
-              {moveAction.isPending ? '保存中…' : '保存时间修改'}
+              {moveAction.isPending ? t('保存中…', 'Saving…') : t('保存', 'Save')}
             </button>
             {event.step_id != null && ['planned', 'moved'].includes(event.status) ? (
               <button
@@ -248,7 +255,7 @@ export function EventDialog({ event, timezone, onClose }: EventDialogProps) {
                 disabled={isBusy || !['planned', 'moved'].includes(event.status)}
                 onClick={() => void proposeAction.run(event.step_id!)}
               >
-                {proposeAction.isPending ? '查找中…' : '找替代时间'}
+                {proposeAction.isPending ? t('查找中…', 'Finding…') : t('换时间', 'Reschedule')}
               </button>
             ) : null}
           </div>
@@ -260,7 +267,7 @@ export function EventDialog({ event, timezone, onClose }: EventDialogProps) {
               disabled={isBusy || !['planned', 'moved'].includes(event.status)}
               onClick={() => void cancelAction.run(undefined)}
             >
-              {cancelAction.isPending ? '取消中…' : '取消此日程'}
+              {cancelAction.isPending ? t('取消中…', 'Cancelling…') : t('取消日程', 'Cancel event')}
             </button>
           ) : null}
         </div>
