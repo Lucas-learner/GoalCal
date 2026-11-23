@@ -11,6 +11,7 @@
 | [接口契约](接口契约.md) | 当前 API、校验与业务边界 |
 | [界面设计](DESIGN.md) | 当前 React 样式与交互 |
 | [助手与对话](conversation-redesign.md) | 当前助手线程与领域能力复用 |
+| [日历同步](calendar-sync.md) | 双向 ICS 订阅架构、安全边界与后续原生同步演进 |
 | [待办](TODO.md) | 尚未完成的产品与运维事项 |
 
 [归并记录](records/consolidation-2026-11-17.md) 保存已完成的服务切换与验收证据；[归并前审计](records/version-audit-2026-11-17.md) 是问题发现时的快照，其待办状态已被归并记录取代。

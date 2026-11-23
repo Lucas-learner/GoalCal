@@ -4,7 +4,7 @@ from .models import Base
 from .web import models as _web_models
 from .web import transport_models as _transport_models
 
-VERSION = 11
+VERSION = 12
 
 
 def migrate(engine):
@@ -90,6 +90,13 @@ def migrate(engine):
             habit_columns = {r[1] for r in con.exec_driver_sql('PRAGMA table_info(habits)')}
             if habit_columns and 'pinned' not in habit_columns:
                 con.exec_driver_sql('ALTER TABLE habits ADD COLUMN pinned BOOLEAN NOT NULL DEFAULT 0')
+            event_columns = {r[1] for r in con.exec_driver_sql('PRAGMA table_info(events)')}
+            if event_columns and 'sync_source_id' not in event_columns:
+                con.exec_driver_sql(
+                    'ALTER TABLE events ADD COLUMN sync_source_id INTEGER '
+                    'REFERENCES calendar_sources(id) ON DELETE CASCADE'
+                )
+            con.exec_driver_sql('CREATE INDEX IF NOT EXISTS ix_events_sync_source_id ON events(sync_source_id)')
             if con.exec_driver_sql('PRAGMA foreign_key_check').first():
                 raise RuntimeError('Database has invalid foreign keys; repair the development copy before import')
             con.exec_driver_sql(f'PRAGMA user_version={VERSION}')

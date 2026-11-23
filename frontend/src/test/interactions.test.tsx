@@ -581,6 +581,61 @@ describe('GoalCal critical interactions', () => {
           max_goal_minutes_per_day: 120,
         });
       }
+      if (url === '/api/v1/calendar/sync') {
+        return jsonResponse({
+          feed: {
+            enabled: false,
+            path: null,
+            include_blocks: true,
+            include_habits: true,
+            include_manual: true,
+            rotated_at: null,
+            last_accessed_at: null,
+            version: null,
+          },
+          sources: [],
+        });
+      }
+      if (url === '/api/v1/calendar/sync/feed' && method === 'PUT') {
+        const body = JSON.parse(String(init?.body || '{}'));
+        return jsonResponse({
+          message: '已更新日历订阅导出设置。',
+          feed: {
+            ...body,
+            path: body.enabled ? '/calendar/feed/test-secret-token-1234567890abcdef123456.ics' : null,
+            rotated_at: '2026-11-23T03:00:00Z',
+            last_accessed_at: null,
+            version: 'f1',
+          },
+        });
+      }
+      if (url === '/api/v1/calendar/sync/sources' && method === 'POST') {
+        const body = JSON.parse(String(init?.body || '{}'));
+        return jsonResponse({
+          message: `已添加「${body.name}」并同步：新增 2 条、跳过 0 条。`,
+          added: 2,
+          updated: 0,
+          removed: 0,
+          skipped: 0,
+          source: {
+            id: 1,
+            provider: 'ics_url',
+            direction: 'inbound',
+            name: body.name,
+            url: body.url,
+            enabled: true,
+            sync_interval_minutes: body.sync_interval_minutes ?? 30,
+            last_synced_at: '2026-11-23T03:00:00Z',
+            last_status: 'ok',
+            last_error: '',
+            last_added: 2,
+            last_updated: 0,
+            last_removed: 0,
+            last_skipped: 0,
+            version: 'cs1',
+          },
+        });
+      }
       if (url === '/api/v1/metrics') {
         return jsonResponse({ acceptance_rate: 0.75, recovery_rate_72h: 0.5, progress_rate: 0.8 });
       }
@@ -644,8 +699,22 @@ describe('GoalCal critical interactions', () => {
     await user.click(screen.getByRole('button', { name: '恢复' }));
     expect(screen.getByText('「旧版阅读计划」已恢复至目标', { selector: '.undo-toast span' })).toBeVisible();
 
-    // Calendar import & Metrics/Feedback are separated
-    await user.click(screen.getByRole('button', { name: '日历导入' }));
+    // Calendar sync (outbound feed + inbound subscription + manual ICS) & Metrics/Feedback are separated
+    await user.click(screen.getByRole('button', { name: '日历同步' }));
+    expect(await screen.findByRole('button', { name: '生成订阅链接' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '生成订阅链接' }));
+    expect(
+      calls.some((c) => c.url === '/api/v1/calendar/sync/feed' && c.method === 'PUT'),
+    ).toBe(true);
+    await user.type(screen.getByLabelText('日历名称'), '公司日历');
+    await user.type(
+      screen.getByLabelText('外部日历订阅地址（.ics / webcal://）'),
+      'https://cal.example/work.ics',
+    );
+    await user.click(screen.getByRole('button', { name: '添加并同步' }));
+    expect(
+      calls.some((c) => c.url === '/api/v1/calendar/sync/sources' && c.method === 'POST'),
+    ).toBe(true);
     expect(screen.getByLabelText('选择 .ics 文件（上限 5 MB）')).toBeInTheDocument();
     expect(screen.queryByText('近 7 天指标')).not.toBeInTheDocument();
 
@@ -665,6 +734,8 @@ describe('GoalCal critical interactions', () => {
 
     const askBtn = screen.getByRole('button', { name: '问 GoalCal' });
     const newEventBtn = screen.getByRole('button', { name: '+ 新日程' });
+    const syncBtn = screen.getByRole('button', { name: '日历同步' });
+    expect(syncBtn).toBeInTheDocument();
     expect(askBtn.compareDocumentPosition(newEventBtn) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
     const backlogTitle = await screen.findByText('确定播客主题');
@@ -674,6 +745,11 @@ describe('GoalCal critical interactions', () => {
     expect(backlogCard?.dataset.stepVersion).toBe('s501');
     expect(backlogCard?.dataset.goalId).toBe('77');
     expect(backlogCard?.dataset.estMin).toBe('25');
+
+    // Clicking Calendar Sync button on Calendar page navigates straight to Settings -> Calendar Sync section
+    await user.click(syncBtn);
+    expect(await screen.findByRole('heading', { name: '设置' })).toBeInTheDocument();
+    expect(await screen.findByText('导出到外部日历（.ics 订阅）')).toBeInTheDocument();
   });
 
   it('calibrates mismatched or vague goals before drafting and distills a clean goal title', async () => {

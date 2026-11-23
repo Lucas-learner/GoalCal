@@ -1,7 +1,7 @@
 # GoalCal 待办清单（TODO）
 
-> 更新日期：2026-11-17
-> 当前已上线版本：Web 习惯首版（`goalcal.zhang.sarl` / Cloudflare Tunnel `goalcal-v2` / 正式数据库 `var/production/goalcal.db` Schema `v9`）
+> 更新日期：2026-11-24
+> 当前已上线版本：Web 日历同步首版（`goalcal.zhang.sarl` / Cloudflare Tunnel `goalcal-v2` / 正式数据库 `var/production/goalcal.db` Schema `v12`）
 
 ---
 
@@ -16,8 +16,10 @@
 - [ ] **每周固定重复日程与批量编辑（`EventSeries`）**
   - 在 `NewEventDialog` 支持“按周重复”（周几多选 + 持续周数 + 预计生成条数预览）。
   - 在 `EventDialog` 支持按“仅此事件 / 此后全部”批量改期或取消。
-- [ ] **外部日历双向同步与订阅导出**
-  - 目前仅支持手动上传 `.ics` 单向导入；后续增加只读 `.ics` 订阅导出地址（供 Apple / Google 日历订阅 GoalCal 块），以及 CalDAV / OAuth 日历定时拉取。
+- [x] **ICS 双向订阅同步（只读导出 + 外部链接定时拉取）**
+  - 已实现用户专属只读 `.ics` 订阅导出地址（支持 `https://`、`webcal://`、内容筛选、ETag 与重置链接）及外部 `.ics`/`webcal://` 订阅源定时自动拉取与取消清理，详见 [日历同步设计](calendar-sync.md)。
+- [ ] **原生双向读写同步（Google OAuth / Apple CalDAV / Outlook Graph）**
+  - 基于现有 `calendar_sources` 与 `SyncProvider` 抽象按需扩展原生双向写入，解决 Google 日历 ICS 订阅刷新慢及外部拖动回写需求。
 - [ ] **日历弹窗就地完成 & 颜色图例**
   - 在 `CalendarPage` 顶部增加各状态色块图例（计划中 / 已完成 / 部分完成 / 未完成 / 外部固定日程）。
   - 在 `EventDialog` 为已排期目标块增加一步点选“已完成 / 部分 / 跳过”，无需再经“开始执行”或跳回目标页。

@@ -1,4 +1,5 @@
 """Bounded public HTTP(S) fetch, pinned DNS, verified TLS, no environment proxy."""
+from dataclasses import dataclass
 import http.client
 import ipaddress
 import socket
@@ -14,6 +15,40 @@ TIMEOUT = 15
 
 class FetchError(ValueError):
     pass
+
+
+@dataclass(frozen=True)
+class FetchResponse:
+    content: bytes | None
+    not_modified: bool = False
+    etag: str | None = None
+    last_modified: str | None = None
+
+
+def normalize_ics_url(url: str) -> str:
+    """Normalize webcal(s):// to https:// and validate standard HTTP(S) syntax."""
+    cleaned = (url or '').strip()
+    lowered = cleaned.lower()
+    if lowered.startswith('webcal://'):
+        cleaned = 'https://' + cleaned[len('webcal://'):]
+    elif lowered.startswith('webcals://'):
+        cleaned = 'https://' + cleaned[len('webcals://'):]
+    parts = urlsplit(cleaned)
+    try:
+        port = parts.port or (443 if parts.scheme == 'https' else 80)
+        host = (parts.hostname or '').encode('idna').decode('ascii')
+    except (ValueError, UnicodeError):
+        raise FetchError('Invalid URL') from None
+    if (parts.scheme not in ('http', 'https') or not host or parts.username is not None
+            or parts.password is not None or port != (443 if parts.scheme == 'https' else 80)
+            or any(ord(c) < 33 or ord(c) == 127 for c in cleaned) or '\\' in cleaned):
+        raise FetchError('Only standard HTTP/HTTPS URLs are supported')
+    try:
+        public_address(str(ipaddress.ip_address(host)))
+    except ValueError as exc:
+        if isinstance(exc, FetchError):
+            raise
+    return cleaned
 
 
 def public_address(value):
@@ -71,7 +106,15 @@ class PinnedConnection(http.client.HTTPConnection):
             self.sock.do_handshake()
 
 
-def fetch_ics(url):
+def fetch_ics_conditional(
+    url: str,
+    *,
+    etag: str | None = None,
+    last_modified: str | None = None,
+    allow_webcal: bool = True,
+) -> FetchResponse:
+    if allow_webcal:
+        url = normalize_ics_url(url)
     deadline = time.monotonic() + TIMEOUT
     for redirect in range(4):
         parts = urlsplit(url)
@@ -101,8 +144,17 @@ def fetch_ics(url):
             target = parts.path or '/'
             if parts.query:
                 target += '?' + parts.query
-            connection.request('GET', target, headers={'Host': f'[{host}]' if ':' in host else host,
-                               'Accept-Encoding': 'identity', 'User-Agent': 'GoalCal/1'})
+            headers = {
+                'Host': f'[{host}]' if ':' in host else host,
+                'Accept-Encoding': 'identity',
+                'User-Agent': 'GoalCal/1',
+            }
+            if redirect == 0:
+                if etag:
+                    headers['If-None-Match'] = etag
+                if last_modified:
+                    headers['If-Modified-Since'] = last_modified
+            connection.request('GET', target, headers=headers)
             response = connection.getresponse()
             if response.status in (301, 302, 303, 307, 308):
                 location = response.getheader('Location')
@@ -110,6 +162,13 @@ def fetch_ics(url):
                     raise FetchError('Redirect limit exceeded')
                 url = urljoin(url, location)
                 continue
+            if response.status == 304:
+                return FetchResponse(
+                    content=None,
+                    not_modified=True,
+                    etag=response.getheader('ETag') or etag,
+                    last_modified=response.getheader('Last-Modified') or last_modified,
+                )
             if response.status != 200 or response.getheader('Content-Encoding', 'identity') != 'identity':
                 raise FetchError('Unsupported response')
             length = response.getheader('Content-Length')
@@ -127,10 +186,23 @@ def fetch_ics(url):
                     raise FetchError('Calendar exceeds 5 MB')
             if time.monotonic() >= deadline:
                 raise FetchError('Download deadline exceeded')
-            return bytes(output)
+            return FetchResponse(
+                content=bytes(output),
+                not_modified=False,
+                etag=response.getheader('ETag'),
+                last_modified=response.getheader('Last-Modified'),
+            )
         except (OSError, http.client.HTTPException, ValueError) as exc:
+            if isinstance(exc, FetchError):
+                raise
             raise FetchError('Calendar download failed or exceeded limits') from None
         finally:
             timer.cancel()
             connection.close()
     raise FetchError('Redirect limit exceeded')
+
+
+def fetch_ics(url):
+    result = fetch_ics_conditional(url, allow_webcal=False)
+    assert result.content is not None
+    return result.content

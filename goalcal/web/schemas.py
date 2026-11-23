@@ -155,6 +155,36 @@ class ImportCalendar(Input):
     ics: str = Field(min_length=1, max_length=5*1024*1024)
 
 
+class UpdateCalendarFeed(Input):
+    enabled: bool
+    include_blocks: bool = True
+    include_habits: bool = True
+    include_manual: bool = True
+    version: str | None = Field(default=None, max_length=128)
+
+
+class RotateCalendarFeed(Input):
+    version: str | None = Field(default=None, max_length=128)
+
+
+class CreateCalendarSource(Input):
+    name: str = Field(min_length=1, max_length=120)
+    url: str = Field(min_length=1, max_length=2000)
+    provider: Literal['ics_url'] = 'ics_url'
+    sync_interval_minutes: int = Field(default=30, ge=15, le=1440)
+
+
+class UpdateCalendarSource(Version):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    url: str | None = Field(default=None, min_length=1, max_length=2000)
+    enabled: bool | None = None
+    sync_interval_minutes: int | None = Field(default=None, ge=15, le=1440)
+
+
+class SyncCalendarSource(Input):
+    version: str | None = Field(default=None, max_length=128)
+
+
 class UpdateMe(Input):
     lang: Literal['', 'zh', 'en'] | None = None
     theme: Literal['', 'light', 'dark'] | None = None

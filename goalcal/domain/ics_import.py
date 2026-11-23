@@ -15,10 +15,10 @@ from collections.abc import Callable
 
 from dateutil.rrule import rrulestr
 from icalendar import Calendar
-from sqlalchemy import select
+from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
-from ..models import Event
+from ..models import Checkin, Event, Interaction, RescheduleLog
 from ..timeutil import as_utc_naive, now_utc
 
 EXPAND_DAYS = 56  # RRULE 只展开未来 8 周
@@ -34,6 +34,7 @@ class ImportResult:
     added: int = 0
     updated: int = 0
     skipped: int = 0
+    removed: int = 0
 
 
 def _to_utc_naive(value: datetime, tz: str) -> datetime:
@@ -55,8 +56,28 @@ def _event_window(component, tz: str) -> tuple[datetime, datetime] | None:
     return _to_utc_naive(start, tz), _to_utc_naive(end, tz)
 
 
+def _exdates_utc(component, tz: str) -> set[datetime]:
+    prop = component.get("EXDATE")
+    if prop is None:
+        return set()
+    items = prop if isinstance(prop, list) else [prop]
+    excluded: set[datetime] = set()
+    for item in items:
+        dts = getattr(item, "dts", None)
+        if not dts:
+            continue
+        for entry in dts:
+            dt = getattr(entry, "dt", None)
+            if isinstance(dt, datetime):
+                excluded.add(_to_utc_naive(dt, tz))
+    return excluded
+
+
 def _expand(component, tz: str, now: datetime, budget: list[int] | None = None) -> list[tuple[str, datetime, datetime]] | None:
-    """展开成 (uid, start_utc, end_utc) 列表；无法处理（含全天事件）返回 None。"""
+    """展开成 (uid, start_utc, end_utc) 列表；无法处理（含全天事件或已取消）返回 None。"""
+    status = str(component.get("STATUS") or "").strip().upper()
+    if status == "CANCELLED":
+        return None
     window = _event_window(component, tz)
     if window is None:
         return None
@@ -81,6 +102,7 @@ def _expand(component, tz: str, now: datetime, budget: list[int] | None = None) 
     budget = budget if budget is not None else [0]
     dtstart = component.decoded("DTSTART")
     rule = rrulestr(f"RRULE:{rule_prop.to_ical().decode()}", dtstart=dtstart)
+    excluded = _exdates_utc(component, tz)
     horizon = now + timedelta(days=EXPAND_DAYS)
     out = []
     for index, occurrence in enumerate(rule, start=1):
@@ -90,10 +112,36 @@ def _expand(component, tz: str, now: datetime, budget: list[int] | None = None) 
         occ_utc = _to_utc_naive(occurrence, tz)
         if occ_utc > horizon:
             break
+        if occ_utc in excluded:
+            continue
         if occ_utc + duration < now:
             continue  # 已过去的实例不导入
         out.append((f"{base_uid}#{index}", occ_utc, occ_utc + duration))
     return out
+
+
+def _delete_synced_event(session: Session, event: Event) -> None:
+    session.execute(update(Checkin).where(Checkin.event_id == event.id).values(event_id=None))
+    session.execute(update(Interaction).where(Interaction.event_id == event.id).values(event_id=None))
+    session.execute(update(RescheduleLog).where(RescheduleLog.new_event_id == event.id).values(new_event_id=None))
+    session.execute(delete(RescheduleLog).where(RescheduleLog.event_id == event.id))
+    session.delete(event)
+
+
+def delete_source_events(session: Session, user_id: int, sync_source_id: int) -> int:
+    """Safely remove all events imported by a specific CalendarSource."""
+    events = list(
+        session.scalars(
+            select(Event).where(
+                Event.user_id == user_id,
+                Event.sync_source_id == sync_source_id,
+            )
+        )
+    )
+    for ev in events:
+        _delete_synced_event(session, ev)
+    session.flush()
+    return len(events)
 
 
 def _import_ics(
@@ -103,6 +151,8 @@ def _import_ics(
     tz: str,
     now: datetime | None = None,
     slot_allowed: Callable[[datetime, datetime], bool] | None = None,
+    sync_source_id: int | None = None,
+    prune_missing: bool = False,
 ) -> ImportResult:
     now = now or now_utc()
     if len(content) > MAX_BYTES:
@@ -120,20 +170,29 @@ def _import_ics(
         if count > MAX_EVENTS:
             raise ValueError("Too many expanded events")
         prepared.append((component, expanded))
-    existing = {
-        ev.uid: ev
-        for ev in session.scalars(
-            select(Event).where(
-                Event.user_id == user_id,
-                Event.source == "import",
-                Event.uid.is_not(None),
-            )
+    if sync_source_id is not None:
+        existing_query = select(Event).where(
+            Event.user_id == user_id,
+            Event.sync_source_id == sync_source_id,
+            Event.uid.is_not(None),
         )
-    }
+        event_source = "sync"
+    else:
+        existing_query = select(Event).where(
+            Event.user_id == user_id,
+            Event.source == "import",
+            Event.sync_source_id.is_(None),
+            Event.uid.is_not(None),
+        )
+        event_source = "import"
+    existing = {ev.uid: ev for ev in session.scalars(existing_query)}
+    seen_uids: set[str] = set()
     result = ImportResult()
     for component, expanded in prepared:
         if not expanded:
-            result.skipped += 1
+            status = str(component.get("STATUS") or "").strip().upper()
+            if status != "CANCELLED":
+                result.skipped += 1
             continue
         title = str(component.get("SUMMARY") or "Imported event").strip()[:200] or "Imported event"
         for uid, start_utc, end_utc in expanded:
@@ -142,11 +201,14 @@ def _import_ics(
             if slot_allowed is not None and not slot_allowed(start_utc, end_utc):
                 result.skipped += 1
                 continue
+            seen_uids.add(uid)
             event = existing.get(uid)
             if event is not None:
                 event.title = title
                 event.start_utc = start_utc
                 event.end_utc = end_utc
+                if sync_source_id is not None and event.status == "skipped":
+                    event.status = "planned"
                 result.updated += 1
             else:
                 event = Event(
@@ -155,17 +217,42 @@ def _import_ics(
                     start_utc=start_utc,
                     end_utc=end_utc,
                     kind="external",
-                    source="import",
+                    source=event_source,
                     uid=uid,
+                    sync_source_id=sync_source_id,
                 )
                 session.add(event)
                 existing[uid] = event
                 result.added += 1
+    if prune_missing and sync_source_id is not None:
+        for uid, ev in list(existing.items()):
+            if uid not in seen_uids and ev.end_utc >= now:
+                _delete_synced_event(session, ev)
+                result.removed += 1
     session.flush()
     return result
 
 
-def import_ics(session, user_id, content, tz, now=None, *, slot_allowed=None):
+def import_ics(
+    session,
+    user_id,
+    content,
+    tz,
+    now=None,
+    *,
+    slot_allowed=None,
+    sync_source_id=None,
+    prune_missing=False,
+):
     # Savepoint keeps the entire import atomic even if a caller catches errors.
     with session.begin_nested():
-        return _import_ics(session, user_id, content, tz, now, slot_allowed)
+        return _import_ics(
+            session,
+            user_id,
+            content,
+            tz,
+            now,
+            slot_allowed,
+            sync_source_id=sync_source_id,
+            prune_missing=prune_missing,
+        )

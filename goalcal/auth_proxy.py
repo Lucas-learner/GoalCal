@@ -8,8 +8,10 @@ is disabled unless explicitly enabled for local compatibility regression.
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import html
+import logging
 import os
 import re
 import secrets
@@ -551,12 +553,96 @@ async def proxy_websocket(websocket: WebSocket) -> None:
         await websocket.close(code=1011)
 
 
+_FEED_TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{32,128}")
+
+
+def _public_base_url(request: Request) -> str:
+    scheme = request.url.scheme
+    if request.client is None or request.client.host in {"127.0.0.1", "::1"}:
+        forwarded = request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip().lower()
+        if forwarded in {"http", "https"}:
+            scheme = forwarded
+    host = request.headers.get("host") or request.url.netloc
+    return f"{scheme}://{host}" if host else ""
+
+
+async def calendar_feed(request: Request) -> Response:
+    """Public token-authenticated read-only .ics subscription feed."""
+    filename = request.path_params.get("filename", "")
+    if not filename.endswith(".ics"):
+        return PlainTextResponse("Not found", status_code=404)
+    token = filename[:-4]
+    if not _FEED_TOKEN_RE.fullmatch(token):
+        return PlainTextResponse("Not found", status_code=404)
+    from .domain.calendar_sync import serve_feed_by_token
+
+    status, body, etag = await run_in_threadpool(
+        serve_feed_by_token,
+        token,
+        if_none_match=request.headers.get("if-none-match"),
+        base_url=_public_base_url(request),
+    )
+    if status == 404:
+        return PlainTextResponse("Not found", status_code=404, headers={"Cache-Control": "no-store"})
+    headers = {
+        "Cache-Control": "private, no-cache",
+        "X-Content-Type-Options": "nosniff",
+        "X-Robots-Tag": "noindex, nofollow",
+    }
+    if etag:
+        headers["ETag"] = etag
+    if status == 304:
+        return Response(b"", status_code=304, headers=headers)
+    headers["Content-Disposition"] = 'inline; filename="goalcal.ics"'
+    return Response(
+        b"" if request.method == "HEAD" else body,
+        status_code=200,
+        media_type="text/calendar; charset=utf-8",
+        headers=headers,
+    )
+
+
+def _sync_worker_enabled() -> bool:
+    return os.getenv("GOALCAL_SYNC_WORKER", "1").strip().lower() not in {"0", "false", "no", "off"}
+
+
+async def _calendar_sync_loop() -> None:
+    from .domain.calendar_sync import sync_due_sources_once
+
+    log = logging.getLogger("goalcal.calendar_sync")
+    while True:
+        try:
+            await asyncio.sleep(60)
+            await run_in_threadpool(sync_due_sources_once)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.warning("calendar_sync_background_tick_failed", exc_info=True)
+
+
+@asynccontextmanager
+async def _lifespan(_app: Starlette):
+    task: asyncio.Task | None = None
+    if _sync_worker_enabled():
+        task = asyncio.create_task(_calendar_sync_loop())
+    try:
+        yield
+    finally:
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+
 from .web.http import api as web_api, frontend as web_frontend
 
 
 app = Starlette(
     routes=[
         Route("/_goalcal/health", health, methods=["GET", "HEAD"]),
+        Route("/calendar/feed/{filename:str}", calendar_feed, methods=["GET", "HEAD"]),
         Mount("/api/v1", app=web_api),
         Route("/app/{path:path}", web_frontend, methods=["GET", "HEAD"]),
         Route("/app", lambda request: RedirectResponse("/app/", status_code=307)),
@@ -568,4 +654,5 @@ app = Starlette(
         WebSocketRoute("/{path:path}", proxy_websocket),
     ],
     middleware=[Middleware(GZipMiddleware, minimum_size=500)],
+    lifespan=_lifespan,
 )

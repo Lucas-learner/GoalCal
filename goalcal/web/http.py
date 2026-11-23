@@ -108,8 +108,80 @@ def replay(session, uid, key, digest, *, lang: str = 'zh'):
 
 
 def prepare(token, action, resource, body, *, lang: str | None = None):
-    """External model requests run before the write lock, authenticated and metered."""
+    """External model / network requests run before the write lock, authenticated and metered."""
     from .core import ApiError
+    if action in {'create_calendar_source', 'sync_calendar_source'}:
+        from icalendar import Calendar as ICal
+        from ..domain.calendar_sync import (
+            MAX_SOURCES_PER_USER,
+            fetch_source_content,
+            get_provider,
+            release_source,
+            try_acquire_source,
+        )
+        from ..models import CalendarSource
+        from ..safe_fetch import FetchError
+        from .calendar_sync import _localized_fetch_error
+
+        with scoped(token) as (session, principal):
+            resolved_lang = _effective_lang(lang, session, principal.user_id)
+            if action == 'create_calendar_source':
+                provider_name = body.get('provider', 'ics_url')
+                try:
+                    normalized_url = get_provider(provider_name).normalize_url(body.get('url', ''))
+                except (FetchError, ValueError) as exc:
+                    raise ApiError('invalid_url', _localized_fetch_error(resolved_lang, str(exc)), 422) from None
+                existing = list(
+                    session.scalars(select(CalendarSource).where(CalendarSource.user_id == principal.user_id))
+                )
+                if len(existing) >= MAX_SOURCES_PER_USER:
+                    raise ApiError(
+                        'limit_exceeded',
+                        pick(
+                            resolved_lang,
+                            f'最多可添加 {MAX_SOURCES_PER_USER} 个外部日历订阅源。',
+                            f'You can connect up to {MAX_SOURCES_PER_USER} external calendars.',
+                        ),
+                        422,
+                    )
+                if any(s.url == normalized_url for s in existing):
+                    raise ApiError(
+                        'duplicate_source',
+                        pick(resolved_lang, '这个日历订阅链接已经添加过了。', 'This calendar subscription URL is already connected.'),
+                        409,
+                    )
+                target_provider, target_url, source_id = provider_name, normalized_url, None
+            else:
+                source = session.get(CalendarSource, int(resource))
+                if source is None or source.user_id != principal.user_id:
+                    raise ApiError('not_found', pick(resolved_lang, '记录不存在', 'Record not found'), 404)
+                target_provider, target_url, source_id = source.provider, source.url, source.id
+
+        if action == 'create_calendar_source':
+            try:
+                fetched = fetch_source_content(target_provider, target_url)
+                if fetched.content is None:
+                    raise ValueError('Empty calendar response')
+                ICal.from_ical(fetched.content)
+            except (FetchError, ValueError) as exc:
+                raise ApiError('sync_fetch_failed', _localized_fetch_error(resolved_lang, str(exc)), 422) from None
+            return {**body, '_normalized_url': target_url, '_fetched': fetched}
+
+        assert source_id is not None
+        if not try_acquire_source(source_id):
+            raise ApiError(
+                'sync_in_progress',
+                pick(resolved_lang, '该日历正在同步中，请稍候再试。', 'This calendar is already syncing. Try again in a moment.'),
+                409,
+            )
+        try:
+            fetched = fetch_source_content(target_provider, target_url)
+            return {**body, '_fetched': fetched}
+        except (FetchError, ValueError) as exc:
+            return {**body, '_fetch_error': str(exc)}
+        finally:
+            release_source(source_id)
+
     if action not in {'intake', 'draft', 'assistant_turn', 'refill', 'update_step', 'checkin_execution', 'checkin_event'}:
         return body
     with scoped(token) as (session, principal):
@@ -230,6 +302,8 @@ def _dispatch_read(svc, action, resource, query):
         return svc.habits.detail(int(resource), query)
     if action == 'habit_slots':
         return svc.habits.slots(int(resource), query)
+    if action == 'calendar_sync':
+        return svc.calendar_sync.state()
     return None
 
 
@@ -305,6 +379,18 @@ def execute(token, action, resource, body, query, key=None, digest=None, lang: s
                 ),
                 'count': imported.added + imported.updated, 'skipped': imported.skipped,
             }
+        elif action == 'update_calendar_feed':
+            result = svc.calendar_sync.update_feed(body)
+        elif action == 'rotate_calendar_feed':
+            result = svc.calendar_sync.rotate_feed(body)
+        elif action == 'create_calendar_source':
+            result = svc.calendar_sync.create_source(body)
+        elif action == 'update_calendar_source':
+            result = svc.calendar_sync.update_source(int(resource), body)
+        elif action == 'sync_calendar_source':
+            result = svc.calendar_sync.sync_source(int(resource), body)
+        elif action == 'delete_calendar_source':
+            result = svc.calendar_sync.delete_source(int(resource), body)
         elif action == 'metrics':
             from .. import metrics
             result = {name: getattr(metrics, name)(session, principal.user_id, now)
@@ -432,7 +518,15 @@ SPECS = [
     ('/preferences/availability','PUT','save_preferences',schemas.Availability),
     ('/assistant','GET','assistant',None),('/assistant/turns','POST','assistant_turn',schemas.Turn),
     ('/assistant/clear','POST','assistant_clear',schemas.Version),
-    ('/calendar/import','POST','import_calendar',schemas.ImportCalendar),('/metrics','GET','metrics',None),
+    ('/calendar/import','POST','import_calendar',schemas.ImportCalendar),
+    ('/calendar/sync','GET','calendar_sync',None),
+    ('/calendar/sync/feed','PUT','update_calendar_feed',schemas.UpdateCalendarFeed),
+    ('/calendar/sync/feed/rotate','POST','rotate_calendar_feed',schemas.RotateCalendarFeed),
+    ('/calendar/sync/sources','POST','create_calendar_source',schemas.CreateCalendarSource),
+    ('/calendar/sync/sources/{id:int}','PATCH','update_calendar_source',schemas.UpdateCalendarSource),
+    ('/calendar/sync/sources/{id:int}/sync','POST','sync_calendar_source',schemas.SyncCalendarSource),
+    ('/calendar/sync/sources/{id:int}','DELETE','delete_calendar_source',schemas.Version),
+    ('/metrics','GET','metrics',None),
     ('/feedback','POST','feedback',schemas.SubmitFeedback),
 ]
 api = Starlette(routes=[Route(path, partial(endpoint, action=action, schema=schema), methods=[method])

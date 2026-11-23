@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { invalidateAfterWrite, queryKeys } from '../api/queryKeys';
 import type { Availability, FeedbackCategory, Goal, Habit, User } from '../api/types';
+import { CalendarSyncSection } from '../components/CalendarSyncSection';
 import { LogOutIcon } from '../components/Icons';
 import { Modal } from '../components/Modal';
 import { EmptyState, ErrorBanner, SkeletonCard } from '../components/StateFeedback';
@@ -12,9 +14,16 @@ import { useIdempotentAction } from '../lib/useIdempotentMutation';
 import { useAppState } from '../state/AppStateContext';
 import { type ThemePreference, useTheme } from '../theme';
 
-const MAX_ICS_BYTES = 5 * 1024 * 1024;
+type SettingsSectionId = 'account' | 'schedule' | 'archived' | 'sync' | 'metrics';
 
-type SettingsSectionId = 'account' | 'schedule' | 'archived' | 'import' | 'metrics';
+const SETTINGS_SECTIONS: readonly SettingsSectionId[] = ['account', 'schedule', 'archived', 'sync', 'metrics'];
+
+function parseSettingsSection(raw: string | null): SettingsSectionId {
+  if (raw && (SETTINGS_SECTIONS as readonly string[]).includes(raw)) {
+    return raw as SettingsSectionId;
+  }
+  return 'account';
+}
 
 const FEEDBACK_CATEGORIES: Array<{ value: FeedbackCategory; zh: string; en: string }> = [
   { value: '功能问题', zh: '功能问题', en: 'Bug or feature issue' },
@@ -33,7 +42,25 @@ export function SettingsPage({ user }: { user: User | undefined }) {
   const { recordMutationResult } = useAppState();
   const { pref, setPreference, t } = useI18n();
   const { pref: themePref, setPreference: setThemePreference } = useTheme();
-  const [section, setSection] = useState<SettingsSectionId>('account');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [section, setSectionState] = useState<SettingsSectionId>(() =>
+    parseSettingsSection(searchParams.get('section')),
+  );
+
+  useEffect(() => {
+    const param = searchParams.get('section');
+    if (param) {
+      setSectionState(parseSettingsSection(param));
+    }
+  }, [searchParams]);
+
+  const setSection = useCallback(
+    (next: SettingsSectionId) => {
+      setSectionState(next);
+      setSearchParams(next === 'account' ? {} : { section: next }, { replace: true });
+    },
+    [setSearchParams],
+  );
 
   const availabilityQuery = useQuery({
     queryKey: queryKeys.availability,
@@ -127,30 +154,11 @@ export function SettingsPage({ user }: { user: User | undefined }) {
     },
   });
 
-  // ICS import state
-  const [icsFile, setIcsFile] = useState<File | null>(null);
-  const [icsLocalError, setIcsLocalError] = useState<string | null>(null);
-  const [icsResultMsg, setIcsResultMsg] = useState<string | null>(null);
-
   // Feedback state
   const [feedbackCategory, setFeedbackCategory] = useState<FeedbackCategory>('功能问题');
   const [feedbackMessage, setFeedbackMessage] = useState('');
   const [feedbackLocalError, setFeedbackLocalError] = useState<string | null>(null);
   const [feedbackResultMsg, setFeedbackResultMsg] = useState<string | null>(null);
-
-  const importFn = useCallback(
-    async (icsText: string, key: string) => api.importCalendarIcs({ ics: icsText }, key),
-    [],
-  );
-
-  const importAction = useIdempotentAction(importFn, {
-    onSuccess: async (res) => {
-      setIcsLocalError(null);
-      setIcsResultMsg(t(`${res.message}（共处理 ${res.count} 条日程）`, `${res.message} (${res.count} processed)`));
-      recordMutationResult({ message: t(`${res.message}（${res.count} 条）`, `${res.message} (${res.count})`) });
-      await invalidateAfterWrite(queryClient);
-    },
-  });
 
   const feedbackFn = useCallback(
     async (args: { category: FeedbackCategory; message: string }, key: string) =>
@@ -287,34 +295,6 @@ export function SettingsPage({ user }: { user: User | undefined }) {
     void saveAction.run(draftAvail);
   };
 
-  const handleImportIcs = async () => {
-    setIcsLocalError(null);
-    setIcsResultMsg(null);
-    if (!icsFile) {
-      setIcsLocalError(t('请先选择一个 .ics 日历文件。', 'Please choose a .ics calendar file first.'));
-      return;
-    }
-    if (icsFile.size > MAX_ICS_BYTES) {
-      setIcsLocalError(t('ICS 文件大小不能超过 5 MB。', 'ICS file size cannot exceed 5 MB.'));
-      return;
-    }
-    try {
-      const text = await icsFile.text();
-      if (!text.includes('BEGIN:VCALENDAR')) {
-        setIcsLocalError(
-          t(
-            '文件内容不是有效的 ICS 日历格式（缺少 BEGIN:VCALENDAR）。',
-            'File is not a valid ICS calendar (missing BEGIN:VCALENDAR).',
-          ),
-        );
-        return;
-      }
-      await importAction.run(text);
-    } catch {
-      setIcsLocalError(t('读取本地文件失败，请重新选择文件。', 'Failed to read local file; please select it again.'));
-    }
-  };
-
   const handleSubmitFeedback = (e: React.FormEvent) => {
     e.preventDefault();
     setFeedbackLocalError(null);
@@ -357,7 +337,7 @@ export function SettingsPage({ user }: { user: User | undefined }) {
             { id: 'account' as const, label: t('通用与账号', 'General & Account') },
             { id: 'schedule' as const, label: t('时间偏好', 'Time Preferences') },
             { id: 'archived' as const, label: t('已归档', 'Archived') },
-            { id: 'import' as const, label: t('日历导入', 'Calendar Import') },
+            { id: 'sync' as const, label: t('日历同步', 'Calendar Sync') },
             { id: 'metrics' as const, label: t('指标与反馈', 'Metrics & Feedback') },
           ].map((tab) => (
             <button
@@ -708,48 +688,8 @@ export function SettingsPage({ user }: { user: User | undefined }) {
             </section>
           ) : null}
 
-          {section === 'import' ? (
-            <section className="settings-section" aria-label={t('日历导入', 'Calendar Import')}>
-              <div className="settings-section-title">{t('日历导入（.ics）', 'Calendar import (.ics)')}</div>
-              <div className="card-flat" style={{ padding: 18 }}>
-                <ErrorBanner error={importAction.actionError} />
-                {icsLocalError ? (
-                  <div className="field-error" role="alert" style={{ marginBottom: 12 }}>
-                    {icsLocalError}
-                  </div>
-                ) : null}
-                {icsResultMsg ? (
-                  <div className="status-banner info" role="status">
-                    <div className="status-banner-body">{icsResultMsg}</div>
-                  </div>
-                ) : null}
-
-                <div className="field">
-                  <label className="field-label" htmlFor="ics-file-input">
-                    {t('选择 .ics 文件（上限 5 MB）', 'Choose .ics file (max 5 MB)')}
-                  </label>
-                  <input
-                    id="ics-file-input"
-                    type="file"
-                    accept=".ics,text/calendar"
-                    className="input"
-                    disabled={importAction.isPending}
-                    onChange={(e) => {
-                      setIcsLocalError(null);
-                      setIcsFile(e.target.files?.[0] ?? null);
-                    }}
-                  />
-                </div>
-                <button
-                  type="button"
-                  className="btn primary"
-                  disabled={importAction.isPending || !icsFile}
-                  onClick={() => void handleImportIcs()}
-                >
-                  {importAction.isPending ? t('导入中…', 'Importing…') : t('导入', 'Import')}
-                </button>
-              </div>
-            </section>
+          {section === 'sync' ? (
+            <CalendarSyncSection timezone={user?.timezone || 'UTC'} />
           ) : null}
 
           {section === 'metrics' ? (

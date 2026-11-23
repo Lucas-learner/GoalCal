@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
-from ..models import Base
+from ..models import Base, CalendarFeed, CalendarSource
 
 
 class WebProposal(Base):
@@ -88,3 +88,16 @@ class HabitOccurrence(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime)
     revision: Mapped[int] = mapped_column(Integer, default=1)
     __table_args__ = (UniqueConstraint("habit_id", "day"),)
+
+
+__all__ = [
+    "CalendarFeed",
+    "CalendarSource",
+    "Habit",
+    "HabitOccurrence",
+    "HabitRule",
+    "WebDraft",
+    "WebExecution",
+    "WebOperation",
+    "WebProposal",
+]

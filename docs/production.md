@@ -1,6 +1,6 @@
 # GoalCal Web 生产维护手册
 
-更新：2026-11-22。正式入口 https://goalcal.zhang.sarl。源码工作区为 `/Users/macmini/projects/GoalCal`，应用与备份任务从已验证的发布目录启动。旧版 ngrok 和 `local.goalcal.*` 已退役。
+更新：2026-11-24。正式入口 https://goalcal.zhang.sarl。源码工作区为 `/Users/macmini/projects/GoalCal`，应用与备份任务从已验证的发布目录启动。旧版 ngrok 和 `local.goalcal.*` 已退役。
 
 ## 实例与路径
 
@@ -9,9 +9,9 @@
 | 网关 | `127.0.0.1:8521`，Starlette/Uvicorn，同进程 API + React 静态文件 |
 | 公网 | Cloudflare Tunnel，指定域名转发 8521；其他域名 404 |
 | 环境文件 | 仓库根目录 `.env.production`，权限 600 |
-| 数据库 | `var/production/goalcal.db`，schema 11，SQLite WAL |
+| 数据库 | `var/production/goalcal.db`，schema 12，SQLite WAL |
 | 日志 / 备份 | `var/production/logs/` / `var/production/backups/` |
-| 当前发布 | `var/releases/perf-v11-20261123/`，包含源码、`frontend/dist/` 和 `SHA256SUMS`（同 schema 回滚包：`var/releases/habits-v11-assistant-20261123/`） |
+| 当前发布 | `var/releases/calendar-sync-v12-20261124/`，包含源码、`frontend/dist/` 和 `SHA256SUMS`（上一版本 v11 跨 schema 回滚包：`var/releases/perf-v11-20261123/`，切换前备份路径记录在 `var/releases/calendar-sync-v12-20261124/CUTOVER_BACKUP`） |
 | 后台服务 | `local.goalcal-v2.app`、`.tunnel`、`.backup` |
 | 健康检查 | `http://127.0.0.1:8521/_goalcal/health` |
 
@@ -82,6 +82,6 @@ curl -fsS http://127.0.0.1:8521/_goalcal/health
 
 恢复命令需要停服：`.venv/bin/python -m goalcal.admin restore /绝对路径/备份.db --app-stopped`。恢复会撤销登录会话；备份之后的数据需另行恢复，不能声称回滚无损保留所有新写入。
 
-当前发布加入习惯的本周节奏、新建预览和助手预填草稿。切换前的在线备份路径记录在 `var/releases/habits-v9-rhythm-20261122/ONLINE_BACKUP`，同 schema 回滚包为 `var/releases/habits-v9-ui-20261122/`。恢复 v8 所需源码与构建保存在 `var/releases/rollback-3b022e1-v8/`，升级前最终备份路径记录在 `var/releases/habits-v9-20261122/CUTOVER_BACKUP`。
+当前发布加入双向 `.ics` 日历同步（只读订阅导出 `/calendar/feed/{token}.ics` + 外部 `.ics`/`webcal://` 定时拉取与取消清理 + 日历页快捷跳转），并将数据库升级至 Schema `v12`。升级前的在线备份与停服切换备份分别记录在 `var/releases/calendar-sync-v12-20261124/ONLINE_BACKUP` 与 `CUTOVER_BACKUP`，回滚至 v11 需停服恢复 `CUTOVER_BACKUP` 并切回 `var/releases/perf-v11-20261123/`。恢复 v8 所需源码与构建保存在 `var/releases/rollback-3b022e1-v8/`。
 
 本次归并的快照、旧数据与旧配置位置见 [整合记录](records/consolidation-2026-11-17.md)。旧数据只归档，不合并进正式新版库。

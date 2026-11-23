@@ -182,11 +182,23 @@ export function EventDialog({ event, timezone, onClose }: EventDialogProps) {
         <span className="chip">
           {statusPair ? t(statusPair[0], statusPair[1]) : event.status}
         </span>
+        {event.source === 'sync' ? (
+          <span className="chip">{t('外部同步', 'Synced')}</span>
+        ) : null}
       </div>
 
       <div className="muted" style={{ fontSize: 12, marginBottom: 10 }}>
         {formatDateTimeLabel(event.start, event.end, timezone, lang)} · {timezone}
       </div>
+
+      {event.source === 'sync' ? (
+        <div className="muted" style={{ fontSize: 11.5, marginBottom: 12, lineHeight: 1.5 }}>
+          {t(
+            '此日程来自外部日历订阅同步；下次同步时会以源日历的时间为准。',
+            'Synced from an external calendar subscription; future syncs will reflect updates from the source calendar.',
+          )}
+        </div>
+      ) : null}
 
       {event.goal_id != null ? (
         <div style={{ marginBottom: 14, fontSize: 12 }}>

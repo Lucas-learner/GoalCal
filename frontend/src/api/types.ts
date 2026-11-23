@@ -50,6 +50,8 @@ export interface CalendarEvent {
   end: string;
   kind: EventKind | string;
   status: EventStatus | string;
+  source?: string;
+  sync_source_id?: number | null;
   step_id: number | null;
   step_version?: string | null;
   goal_id: number | null;
@@ -346,6 +348,69 @@ export interface StepUpdateResponse {
 export interface IcsImportResponse {
   message: string;
   count: number;
+}
+
+export interface CalendarFeed {
+  enabled: boolean;
+  path: string | null;
+  include_blocks: boolean;
+  include_habits: boolean;
+  include_manual: boolean;
+  rotated_at: string | null;
+  last_accessed_at: string | null;
+  version: string | null;
+}
+
+export interface CalendarSource {
+  id: number;
+  provider: 'ics_url' | string;
+  direction: 'inbound' | 'outbound' | 'bidirectional' | string;
+  name: string;
+  url: string;
+  enabled: boolean;
+  sync_interval_minutes: number;
+  last_synced_at: string | null;
+  last_status: 'idle' | 'ok' | 'error' | string;
+  last_error: string;
+  last_added: number;
+  last_updated: number;
+  last_removed: number;
+  last_skipped: number;
+  version: string;
+}
+
+export interface CalendarSyncState {
+  feed: CalendarFeed;
+  sources: CalendarSource[];
+}
+
+export interface CalendarFeedMutationResponse {
+  feed: CalendarFeed;
+  message: string;
+}
+
+export interface CalendarSourceMutationResponse {
+  source: CalendarSource;
+  message: string;
+  added?: number;
+  updated?: number;
+  removed?: number;
+  skipped?: number;
+}
+
+export interface CalendarSourceSyncResponse {
+  ok: boolean;
+  source: CalendarSource;
+  message: string;
+  added: number;
+  updated: number;
+  removed: number;
+  skipped: number;
+}
+
+export interface CalendarSourceDeleteResponse {
+  message: string;
+  removed_events: number;
 }
 
 export interface MetricsResponse {

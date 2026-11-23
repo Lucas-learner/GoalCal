@@ -85,8 +85,11 @@ class Event(Base):
     end_utc: Mapped[datetime] = mapped_column(DateTime)
     kind: Mapped[str] = mapped_column(String(20), default="external")
     status: Mapped[str] = mapped_column(String(20), default="planned")  # planned|done|partial|missed|skipped|moved
-    source: Mapped[str] = mapped_column(String(20), default="chat")  # chat|seed|import|proposal
-    uid: Mapped[str | None] = mapped_column(String(200), nullable=True, index=True)  # ICS 导入去重键
+    source: Mapped[str] = mapped_column(String(20), default="chat")  # chat|seed|import|sync|web|proposal
+    uid: Mapped[str | None] = mapped_column(String(200), nullable=True, index=True)  # ICS 导入/同步去重键
+    sync_source_id: Mapped[int | None] = mapped_column(
+        ForeignKey("calendar_sources.id", ondelete="CASCADE"), nullable=True, index=True
+    )
     step_id: Mapped[int | None] = mapped_column(ForeignKey("steps.id"), nullable=True)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
@@ -194,3 +197,47 @@ class Interaction(Base):
     step_id: Mapped[int | None] = mapped_column(ForeignKey("steps.id"), nullable=True)
     event_id: Mapped[int | None] = mapped_column(ForeignKey("events.id"), nullable=True)
     payload: Mapped[str] = mapped_column(Text, default="{}")
+
+
+class CalendarSource(Base):
+    """External calendar sync source (ICS URL today; extensible to OAuth/CalDAV)."""
+
+    __tablename__ = "calendar_sources"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    provider: Mapped[str] = mapped_column(String(32), default="ics_url")
+    direction: Mapped[str] = mapped_column(String(16), default="inbound")
+    name: Mapped[str] = mapped_column(String(120))
+    url: Mapped[str] = mapped_column(String(2000), default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    sync_interval_minutes: Mapped[int] = mapped_column(Integer, default=30)
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_status: Mapped[str] = mapped_column(String(20), default="idle")  # idle|ok|error
+    last_error: Mapped[str] = mapped_column(String(500), default="")
+    last_added: Mapped[int] = mapped_column(Integer, default=0)
+    last_updated: Mapped[int] = mapped_column(Integer, default=0)
+    last_removed: Mapped[int] = mapped_column(Integer, default=0)
+    last_skipped: Mapped[int] = mapped_column(Integer, default=0)
+    etag: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    last_modified: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    sync_token: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive, onupdate=utcnow_naive)
+
+
+class CalendarFeed(Base):
+    """Read-only outbound .ics subscription feed per user."""
+
+    __tablename__ = "calendar_feeds"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True, index=True)
+    token: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    include_blocks: Mapped[bool] = mapped_column(Boolean, default=True)
+    include_habits: Mapped[bool] = mapped_column(Boolean, default=True)
+    include_manual: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
+    rotated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
+    last_accessed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

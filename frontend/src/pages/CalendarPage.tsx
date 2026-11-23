@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import FullCalendar from '@fullcalendar/react';
 import type {
@@ -25,7 +26,7 @@ import type { CalendarEvent, HabitActionBody, HabitOccurrence, HabitProgress } f
 import { EventDialog } from '../components/EventDialog';
 import { HabitForm } from '../components/HabitForm';
 import { HabitOccurrenceDialog, useHabitAction, useHabitLabels } from '../components/HabitOccurrenceDialog';
-import { SparkleIcon } from '../components/Icons';
+import { SparkleIcon, SyncIcon } from '../components/Icons';
 import { NewEventDialog } from '../components/NewEventDialog';
 import { EmptyState, ErrorBanner } from '../components/StateFeedback';
 import {
@@ -78,6 +79,7 @@ function useMediaQuery(query: string, fallbackWidthCheck?: () => boolean): boole
 }
 
 export function CalendarPage({ timezone }: { timezone: string }) {
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { openAssistant, openProposalModal, recordMutationResult } = useAppState();
   const { lang, t } = useI18n();
@@ -604,6 +606,14 @@ export function CalendarPage({ timezone }: { timezone: string }) {
       <div className="topbar">
         <h1>{t('日历', 'Calendar')}</h1>
         <div className="topbar-actions">
+          <button
+            type="button"
+            className="btn calendar-sync-btn"
+            onClick={() => navigate('/settings?section=sync')}
+          >
+            <SyncIcon />
+            <span>{t('日历同步', 'Calendar Sync')}</span>
+          </button>
           <button
             type="button"
             className="assistant-trigger"

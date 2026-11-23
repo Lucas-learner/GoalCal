@@ -30,6 +30,7 @@ export default defineConfig(({ mode }) => ({
     proxy: {
       '/api': loadEnv(mode, process.cwd(), 'GOALCAL_').GOALCAL_DEV_BACKEND || 'http://127.0.0.1:8517',
       '/_goalcal': loadEnv(mode, process.cwd(), 'GOALCAL_').GOALCAL_DEV_BACKEND || 'http://127.0.0.1:8517',
+      '/calendar/feed': loadEnv(mode, process.cwd(), 'GOALCAL_').GOALCAL_DEV_BACKEND || 'http://127.0.0.1:8517',
     },
   },
 }));

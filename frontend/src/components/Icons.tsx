@@ -75,3 +75,16 @@ export function LogOutIcon() {
     </span>
   );
 }
+
+export function SyncIcon() {
+  return (
+    <span className="icon" aria-hidden="true">
+      <svg viewBox="0 0 24 24">
+        <path d="M20 11a8 8 0 0 0-13.7-5.6L4 7.7" />
+        <path d="M4 4v3.7h3.7" />
+        <path d="M4 13a8 8 0 0 0 13.7 5.6L20 16.3" />
+        <path d="M20 20v-3.7h-3.7" />
+      </svg>
+    </span>
+  );
+}

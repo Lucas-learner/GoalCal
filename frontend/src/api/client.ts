@@ -4,6 +4,11 @@ import type {
   AssistantTurnResponse,
   Availability,
   CalendarEventsResponse,
+  CalendarFeedMutationResponse,
+  CalendarSourceDeleteResponse,
+  CalendarSourceMutationResponse,
+  CalendarSourceSyncResponse,
+  CalendarSyncState,
   Draft,
   DraftStep,
   Goal,
@@ -414,6 +419,50 @@ export const api = {
 
   importCalendarIcs: (body: { ics: string }, idempotencyKey?: string) =>
     apiWrite<IcsImportResponse>('/calendar/import', 'POST', body, { idempotencyKey }),
+
+  getCalendarSync: () => apiGet<CalendarSyncState>('/calendar/sync'),
+
+  updateCalendarFeed: (
+    body: {
+      enabled: boolean;
+      include_blocks: boolean;
+      include_habits: boolean;
+      include_manual: boolean;
+      version?: string;
+    },
+    idempotencyKey?: string,
+  ) => apiWrite<CalendarFeedMutationResponse>('/calendar/sync/feed', 'PUT', body, { idempotencyKey }),
+
+  rotateCalendarFeed: (body: { version?: string } = {}, idempotencyKey?: string) =>
+    apiWrite<CalendarFeedMutationResponse>('/calendar/sync/feed/rotate', 'POST', body, { idempotencyKey }),
+
+  createCalendarSource: (
+    body: {
+      name: string;
+      url: string;
+      provider?: 'ics_url';
+      sync_interval_minutes?: number;
+    },
+    idempotencyKey?: string,
+  ) => apiWrite<CalendarSourceMutationResponse>('/calendar/sync/sources', 'POST', body, { idempotencyKey }),
+
+  updateCalendarSource: (
+    id: number,
+    body: {
+      version: string;
+      name?: string;
+      url?: string;
+      enabled?: boolean;
+      sync_interval_minutes?: number;
+    },
+    idempotencyKey?: string,
+  ) => apiWrite<CalendarSourceMutationResponse>(`/calendar/sync/sources/${id}`, 'PATCH', body, { idempotencyKey }),
+
+  syncCalendarSource: (id: number, body: { version?: string } = {}, idempotencyKey?: string) =>
+    apiWrite<CalendarSourceSyncResponse>(`/calendar/sync/sources/${id}/sync`, 'POST', body, { idempotencyKey }),
+
+  deleteCalendarSource: (id: number, body: { version: string }, idempotencyKey?: string) =>
+    apiWrite<CalendarSourceDeleteResponse>(`/calendar/sync/sources/${id}`, 'DELETE', body, { idempotencyKey }),
 
   getMetrics: () => apiGet<MetricsResponse>('/metrics'),
 

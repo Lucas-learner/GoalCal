@@ -17,7 +17,7 @@ from .. import memory, metrics
 from ..data.goal_templates import first_batch, full_steps, milestones, pick_template
 from ..domain import goals as goal_service, recovery, scheduler
 from ..i18n import format_when, normalize_lang, pick
-from ..models import Checkin, Event, Goal, Interaction, Step, User, RescheduleLog
+from ..models import CalendarFeed, Checkin, Event, Goal, Interaction, Step, User, RescheduleLog
 from .availability import allows, validate_availability
 from .models import Habit, HabitOccurrence, WebDraft, WebExecution, WebOperation, WebProposal
 from .transport_models import WebThread
@@ -45,6 +45,9 @@ def version_token(row) -> str:
     if isinstance(row, (WebDraft, WebExecution, WebProposal)):
         return str(row.version)
     values = {c.key: getattr(row, c.key) for c in inspect(type(row)).columns}
+    if isinstance(row, CalendarFeed):
+        # Background feed polling updates last_accessed_at; do not cause false 409 conflicts on settings edits.
+        values.pop("last_accessed_at", None)
     if isinstance(row, Goal):
         # A goal is an aggregate: a legacy step change also updates its DTO version.
         values["steps"] = [(s.id, version_token(s)) for s in sorted(row.steps, key=lambda s: (s.seq, s.id))]
@@ -117,6 +120,11 @@ class Service:
         from .habits import HabitService
         return HabitService(self)
 
+    @property
+    def calendar_sync(self):
+        from .calendar_sync import CalendarSyncService
+        return CalendarSyncService(self)
+
     def _get(self, model, id):
         row = self.session.get(model, id)
         if row is None or (hasattr(row, "user_id") and row.user_id != self.user_id):
@@ -157,6 +165,7 @@ class Service:
                     break
         return {"id": event.id, "title": title, "start": _iso(event.start_utc),
                 "end": _iso(event.end_utc), "kind": event.kind, "status": event.status,
+                "source": event.source, "sync_source_id": event.sync_source_id,
                 "step_id": event.step_id, "step_version": version_token(step) if step else None,
                 "goal_id": goal.id if goal else None,
                 "goal_title": goal.title if goal else None, "version": version_token(event)}
