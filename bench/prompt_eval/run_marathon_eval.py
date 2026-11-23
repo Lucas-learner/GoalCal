@@ -17,10 +17,11 @@ import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
-sys.path.insert(0, "/Users/macmini/projects/GoalCal")
-# .env 里的 GOALCAL_DB_URL 是相对路径，会让 goalcal.config 的 production 校验
-# 直接抛错；本评测不触库，预先指向项目默认的绝对路径（不修改任何文件）。
-os.environ["GOALCAL_DB_URL"] = "sqlite:////Users/macmini/projects/GoalCal/var/goalcal-production.db"
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+# 评测隔离于开发与生产数据库。
+os.environ["GOALCAL_DB_URL"] = "sqlite:///:memory:"
+os.environ["GOALCAL_PRODUCTION"] = "false"
+os.environ.setdefault("GOALCAL_ENV_FILE", os.devnull)
 
 from goalcal.config import settings  # noqa: E402
 from goalcal.domain.refine import UPCOMING_SYSTEM  # noqa: E402

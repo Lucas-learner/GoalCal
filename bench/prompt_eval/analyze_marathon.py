@@ -17,7 +17,9 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 
 sys.path.insert(0, str(ROOT))
-os.environ["GOALCAL_DB_URL"] = "sqlite:////Users/macmini/projects/GoalCal/var/goalcal-production.db"
+os.environ["GOALCAL_DB_URL"] = "sqlite:///:memory:"
+os.environ["GOALCAL_PRODUCTION"] = "false"
+os.environ.setdefault("GOALCAL_ENV_FILE", os.devnull)
 from goalcal.config import settings  # noqa: E402
 
 DAYS = {"s1": [24, 21, 18, 15, 12, 9], "s2": [170, 155, 140, 125, 110, 95]}

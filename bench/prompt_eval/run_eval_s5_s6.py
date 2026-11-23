@@ -27,10 +27,12 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from urllib.parse import urlsplit
 
-os.environ["GOALCAL_DB_URL"] = "sqlite:////Users/macmini/projects/GoalCal/var/goalcal-production.db"
-sys.path.insert(0, "/Users/macmini/projects/GoalCal")
+os.environ["GOALCAL_DB_URL"] = "sqlite:///:memory:"
+os.environ["GOALCAL_PRODUCTION"] = "false"
+os.environ.setdefault("GOALCAL_ENV_FILE", os.devnull)
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from goalcal.config import settings  # noqa: E402  自动加载 .env
+from goalcal.config import settings  # noqa: E402  仅加载显式指定的环境文件
 from goalcal.domain.refine import UPCOMING_SYSTEM  # noqa: E402  变体 A：线上版本
 
 OUT_DIR = Path(__file__).resolve().parent

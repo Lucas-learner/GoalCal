@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from functools import partial
 import hashlib
 import json
@@ -170,7 +170,7 @@ def prepare(token, action, resource, body, *, lang: str | None = None):
                     goal, completing = step.goal, step
             elif action == 'checkin_execution' and body.get('outcome') == 'done' and resource is not None:
                 execution = session.get(WebExecution, resource)
-                if execution and execution.status == 'running':
+                if execution and execution.status == 'running' and execution.step_id is not None:
                     step = session.get(Step, execution.step_id)
                     if step:
                         goal, completing = step.goal, step
@@ -216,6 +216,7 @@ def prepare(token, action, resource, body, *, lang: str | None = None):
 
 def execute(token, action, resource, body, query, key=None, digest=None, lang: str | None = None):
     from .core import Service, ApiError
+    roll_on_read = False
     if key:
         with scoped(token) as (session, principal):
             resolved_lang = _effective_lang(lang, session, principal.user_id)
@@ -223,7 +224,10 @@ def execute(token, action, resource, body, query, key=None, digest=None, lang: s
             if cached is not None:
                 return cached
         body = prepare(token, action, resource, body, lang=lang)
-    with scoped(token, write=bool(key)) as (session, principal):
+    elif action in {'today', 'events', 'habits', 'habit', 'habit_slots'}:
+        with scoped(token) as (session, principal):
+            roll_on_read = Service(session, principal.user_id, principal.tz, datetime.now(timezone.utc)).habits.needs_roll()
+    with scoped(token, write=bool(key) or roll_on_read) as (session, principal):
         resolved_lang = _effective_lang(lang, session, principal.user_id)
         if key:
             cached = replay(session, principal.user_id, key, digest, lang=resolved_lang)
@@ -231,6 +235,8 @@ def execute(token, action, resource, body, query, key=None, digest=None, lang: s
                 return cached
         now = datetime.now(timezone.utc)
         svc = Service(session, principal.user_id, principal.tz, now, lang=resolved_lang)
+        if key or roll_on_read:
+            svc.habits.roll()
         if action == 'goals':
             result = svc.goals(include_archived=query.get('include_archived') in {'1', 'true'})
         elif action in {'me', 'today', 'preferences'}:
@@ -239,6 +245,18 @@ def execute(token, action, resource, body, query, key=None, digest=None, lang: s
             result = svc.goal(int(resource), include_archived=query.get('include_archived') in {'1', 'true'})
         elif action == 'events':
             result = svc.events(query.get('start'), query.get('end'))
+        elif action == 'habits':
+            result = svc.habits.list()
+        elif action == 'habit':
+            result = svc.habits.detail(int(resource), query)
+        elif action == 'habit_slots':
+            result = svc.habits.slots(int(resource), query)
+        elif action in {'create_habit', 'preview_habit'}:
+            result = svc.habits.create(body) if action == 'create_habit' else svc.habits.preview(body)
+        elif action in {'update_habit', 'habit_status', 'habit_action', 'delete_habit'}:
+            handler = {'update_habit': svc.habits.update, 'habit_status': svc.habits.status,
+                       'habit_action': svc.habits.act, 'delete_habit': svc.habits.delete}[action]
+            result = handler(int(resource), body)
         elif action == 'intake':
             result = body['_intake']
         elif action in {'draft', 'create_goal', 'create_event', 'save_preferences', 'update_me'}:
@@ -247,7 +265,7 @@ def execute(token, action, resource, body, query, key=None, digest=None, lang: s
             result = svc.undo(resource)
         elif action in {'accept', 'checkin_execution'}:
             result = getattr(svc, action)(resource, body)
-        elif action in {'refill','update_goal','delete_goal','update_step','move_event','cancel_event','propose','schedule_step','start_event','start_step','checkin_event'}:
+        elif action in {'refill','replan_goal','update_goal','delete_goal','update_step','move_event','cancel_event','propose','schedule_step','start_event','start_step','checkin_event'}:
             result = getattr(svc, action)(int(resource), body)
         elif action in {'assistant','assistant_turn','assistant_clear'}:
             from .assistant import clear_thread, read_state, turn
@@ -260,8 +278,12 @@ def execute(token, action, resource, body, query, key=None, digest=None, lang: s
             )
         elif action == 'import_calendar':
             from ..domain.ics_import import import_ics
+            pad = timedelta(minutes=svc._availability()['buffer_minutes'])
+            reserved = [(event.start_utc - pad, event.end_utc + pad) for event in svc._events()
+                        if event.kind == 'habit' and event.status in ('planned', 'moved') and event.end_utc > svc.now_naive]
             imported = import_ics(session, principal.user_id, body['ics'].encode(), principal.tz,
-                                  now=now.replace(tzinfo=None))
+                                  now=svc.now_naive,
+                                  slot_allowed=lambda start, end: not any(start < hi and end > lo for lo, hi in reserved))
             result = {
                 'message': pick(
                     resolved_lang,
@@ -366,10 +388,18 @@ async def endpoint(request: Request, *, action, schema=None):
 SPECS = [
     ('/me','GET','me',None),('/me','PATCH','update_me',schemas.UpdateMe),
     ('/today','GET','today',None),('/goals','GET','goals',None),
+    ('/habits','GET','habits',None),('/habits','POST','create_habit',schemas.CreateHabit),
+    ('/habits/preview','POST','preview_habit',schemas.HabitPreview),
+    ('/habits/{id:int}','GET','habit',None),('/habits/{id:int}/slots','GET','habit_slots',None),
+    ('/habits/{id:int}','PATCH','update_habit',schemas.UpdateHabit),
+    ('/habits/{id:int}','DELETE','delete_habit',schemas.Version),
+    ('/habits/{id:int}/status','POST','habit_status',schemas.HabitStatus),
+    ('/habits/{id:int}/occurrences','POST','habit_action',schemas.HabitAction),
     ('/goals/{id:int}','GET','goal',None),
     ('/goal-intake','POST','intake',schemas.IntakeInput),
     ('/goal-drafts','POST','draft',schemas.DraftInput),
     ('/goals/{id:int}/refill','POST','refill',schemas.Version),
+    ('/goals/{id:int}/replan','POST','replan_goal',schemas.ReplanGoal),
     ('/goals','POST','create_goal',schemas.CreateGoal),('/goals/{id:int}','PATCH','update_goal',schemas.GoalEdit),
     ('/goals/{id:int}','DELETE','delete_goal',schemas.Version),
     ('/steps/{id:int}','PATCH','update_step',schemas.StepEdit),

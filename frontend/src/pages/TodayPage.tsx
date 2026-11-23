@@ -3,9 +3,10 @@ import { Link } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { invalidateAfterWrite, queryKeys } from '../api/queryKeys';
-import type { CalendarEvent, TodayNext } from '../api/types';
+import type { CalendarEvent, HabitOccurrence, HabitProgress, TodayNext } from '../api/types';
 import { EventDialog } from '../components/EventDialog';
-import { SparkleIcon } from '../components/Icons';
+import { HabitOccurrenceDialog, useHabitAction, useHabitLabels } from '../components/HabitOccurrenceDialog';
+import { RepeatIcon, SparkleIcon } from '../components/Icons';
 import { EmptyState, ErrorBanner, SkeletonCard } from '../components/StateFeedback';
 import {
   durationMinutes,
@@ -33,6 +34,13 @@ export function TodayPage({ fallbackTimezone }: { fallbackTimezone: string }) {
   const { openAssistant, openProposalModal, recordMutationResult } = useAppState();
   const { lang, t } = useI18n();
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
+  const [selectedHabit, setSelectedHabit] = useState<HabitOccurrence | null>(null);
+  const [editingHabitTime, setEditingHabitTime] = useState(false);
+  const [selectedWeek, setSelectedWeek] = useState<HabitProgress | null>(null);
+  const habitAction = useHabitAction();
+  const habitLabels = useHabitLabels();
+  const completeHabit = (item: HabitOccurrence) => void habitAction.run({ id: item.habit_id,
+    body: { action: 'done', date: item.date, version: item.version } });
 
   const todayQuery = useQuery({
     queryKey: queryKeys.today,
@@ -140,6 +148,11 @@ export function TodayPage({ fallbackTimezone }: { fallbackTimezone: string }) {
 
   const data = todayQuery.data;
   const visibleEvents = (data?.events ?? []).filter((ev) => ev.status !== 'skipped');
+  const habitItems = data?.habits?.items ?? [];
+  const datedHabits = habitItems.filter((item) => !item.start && item.status === 'pending');
+  const doneHabits = habitItems.filter((item) => !item.start && item.status === 'done');
+  const habitWeeks = data?.habits?.weeks ?? [];
+  const habitNext = data?.habit_next;
   const execution = data?.execution && data.execution.status === 'running' ? data.execution : null;
   const waitingCheckin = execution
     ? isExecutionWaitingCheckin(execution.expected_end_at, tz)
@@ -150,7 +163,25 @@ export function TodayPage({ fallbackTimezone }: { fallbackTimezone: string }) {
     completeNextAction.actionError ??
     proposeAction.actionError ??
     checkinExecutionAction.actionError ??
-    checkinRecoveryAction.actionError;
+    checkinRecoveryAction.actionError ??
+    habitAction.actionError;
+
+  const habitRow = (item: HabitOccurrence) => (
+    <div className="habit-timeline-item" key={item.id}>
+      <button type="button" className={`event-row goal${item.id === habitNext?.id ? ' current' : ''}${item.status === 'done' ? ' resolved' : ''}`}
+        onClick={() => setSelectedHabit(item)}>
+        <span className="event-time">{item.start ? formatTimeHHmm(item.start, tz) : t('待排', 'Unscheduled')}</span>
+        <span className="event-main">
+          <span className="event-name">{item.title}</span>
+          <span className="event-sub">{habitLabels.habit}{item.reason ? ` · ${habitLabels.reason(item.reason)}` : ''}</span>
+        </span>
+        <span className="event-right">
+          {item.status !== 'pending' ? <span className="chip">{habitLabels.status[item.status]}</span> : null}
+          <span className="event-duration">{item.est_min} {t('分钟', 'min')}</span>
+        </span>
+      </button>
+    </div>
+  );
 
   return (
     <div>
@@ -245,7 +276,65 @@ export function TodayPage({ fallbackTimezone }: { fallbackTimezone: string }) {
                 </button>
               </div>
             </section>
-          ) : data.next ? (() => {
+          ) : habitNext ? (() => {
+            const habitScheduledRange = habitNext.start && habitNext.end
+              ? formatTimeRange(habitNext.start, habitNext.end, tz)
+              : '';
+            return (
+              <section className="focus-card" aria-label={t('下一步焦点', 'Up next')}>
+                <div className="section-label">{t('接下来', 'Up next')}</div>
+                <div className="focus-heading">
+                  <div style={{ minWidth: 0 }}>
+                    <div className="goal-name">{habitLabels.habit}</div>
+                    <div className="focus-title">{habitNext.title}</div>
+                    <div className="focus-meta">
+                      {habitNext.est_min} {t('分钟', 'min')}
+                      {habitScheduledRange
+                        ? `${t(' · 已安排 ', ' · Scheduled ')}${habitScheduledRange}`
+                        : t(' · 尚未安排时间', ' · Unscheduled')}
+                    </div>
+                  </div>
+                  <span className="focus-time">
+                    {habitNext.start ? formatTimeHHmm(habitNext.start, tz) : t('未排期', 'Unscheduled')}
+                  </span>
+                </div>
+                <div className="actions">
+                  <button
+                    type="button"
+                    className={habitNext.start ? 'btn primary' : 'btn'}
+                    disabled={habitAction.isPending}
+                    onClick={() =>
+                      void habitAction.run({
+                        id: habitNext.habit_id,
+                        body: { action: 'start', date: habitNext.date, version: habitNext.version },
+                      })
+                    }
+                  >
+                    {habitAction.isPending ? t('开始中…', 'Starting…') : t('开始', 'Start')}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={habitAction.isPending}
+                    onClick={() => completeHabit(habitNext)}
+                  >
+                    {habitAction.isPending ? t('保存中…', 'Saving…') : t('完成', 'Complete')}
+                  </button>
+                  <button
+                    type="button"
+                    className={habitNext.start ? 'btn' : 'btn primary'}
+                    disabled={habitAction.isPending}
+                    onClick={() => {
+                      setEditingHabitTime(true);
+                      setSelectedHabit(habitNext);
+                    }}
+                  >
+                    {habitNext.start ? t('调整时间', 'Reschedule') : t('找时间', 'Find time')}
+                  </button>
+                </div>
+              </section>
+            );
+          })() : data.next ? (() => {
             const nextEvent = data.next.event;
             const isFutureScheduled = Boolean(
               nextEvent && !isEventOnIsoDate(nextEvent.start, data.date, tz),
@@ -326,7 +415,7 @@ export function TodayPage({ fallbackTimezone }: { fallbackTimezone: string }) {
                 </div>
               </section>
             );
-          })() : (
+          })() : !(habitItems.some((item) => item.status !== 'skipped') || habitWeeks.length) ? (
             <div style={{ marginTop: 29 }}>
               <EmptyState
                 title={t('今天还没有待推进步骤', 'Nothing pending for today')}
@@ -343,7 +432,7 @@ export function TodayPage({ fallbackTimezone }: { fallbackTimezone: string }) {
                 }
               />
             </div>
-          )}
+          ) : null}
 
           {data.recovery.length > 0 ? (
             <section className="attention-list" aria-label={t('待恢复与逾期签到', 'Pending check-ins')}>
@@ -428,7 +517,7 @@ export function TodayPage({ fallbackTimezone }: { fallbackTimezone: string }) {
             </Link>
           </div>
 
-          {visibleEvents.length === 0 ? (
+          {visibleEvents.length === 0 && datedHabits.length === 0 && doneHabits.length === 0 && habitWeeks.length === 0 ? (
             <EmptyState
               title={t('今天还没有日程安排', 'No events scheduled today')}
               copy={t('你可以在日历中添加固定日程，或为待办步骤寻找合适时间。', 'Add fixed events on the calendar or schedule a goal step.')}
@@ -441,6 +530,7 @@ export function TodayPage({ fallbackTimezone }: { fallbackTimezone: string }) {
           ) : (
             <section className="timeline" aria-label={t('今日时间线', "Today's timeline")}>
               {visibleEvents.map((ev) => {
+                if (ev.habit) return habitRow(ev.habit);
                 const isCurrent =
                   execution?.event_id === ev.id || data.next?.event?.id === ev.id;
                 const isResolved =
@@ -474,6 +564,21 @@ export function TodayPage({ fallbackTimezone }: { fallbackTimezone: string }) {
                   </button>
                 );
               })}
+              {datedHabits.length > 0 && <div className="section-label habit-subhead">{t('待安排', 'Unscheduled')}</div>}
+              {datedHabits.map(habitRow)}
+              {habitWeeks.map((week) => week.offer && (
+                <div className="habit-timeline-item habit-week-offer" key={week.habit_id}>
+                  <div className="habit-offer-name"><RepeatIcon /> <strong>{week.title}</strong>
+                    <span className="muted">{t(`本周 ${week.done}/${week.target} 次`, `This week ${week.done}/${week.target}`)}</span></div>
+                  <button type="button" className="btn small" disabled={habitAction.isPending}
+                    onClick={() => completeHabit(week.offer!)}>{t('完成今天', 'Complete today')}</button>
+                  <button type="button" className="btn small" onClick={() => setSelectedWeek(week)}>
+                    {t('安排一次', 'Schedule a session')}
+                  </button>
+                </div>
+              ))}
+              {doneHabits.length > 0 && <div className="section-label habit-subhead">{t('已完成', 'Completed')}</div>}
+              {doneHabits.map(habitRow)}
             </section>
           )}
         </>
@@ -491,6 +596,11 @@ export function TodayPage({ fallbackTimezone }: { fallbackTimezone: string }) {
           />
         ) : null;
       })()}
+      {selectedHabit && <HabitOccurrenceDialog
+        occurrence={habitItems.find((item) => item.id === selectedHabit.id) ?? selectedHabit}
+        startInEditor={editingHabitTime}
+        onClose={() => { setSelectedHabit(null); setEditingHabitTime(false); }} />}
+      {selectedWeek && <HabitOccurrenceDialog week={selectedWeek} onClose={() => setSelectedWeek(null)} />}
     </div>
   );
 }

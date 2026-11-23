@@ -1,11 +1,11 @@
-> 历史迭代约束（归并前）。当前上线状态、根路径和运维以 [生产手册](../production.md) 为准；当时的 design-preview 原型已删除，当前视觉依据为 [DESIGN](../DESIGN.md)。
+> 历史迭代约束（归并前）。当前上线状态、根路径和运维以 [生产手册](../../production.md) 为准；当时的 design-preview 原型已删除，当前视觉依据为 [DESIGN](../../DESIGN.md)。
 
 # GoalCal Web 实现设计规范
 
 ## 1. 范围与依据
 
 - 本规范只覆盖新应用 `/app/`：今天、目标、日历、新目标、设置和全局 GoalCal 助手。旧 Streamlit 继续位于 `/`，不改样式、不跳转替换；本轮不做生产部署。
-- 唯一视觉来源为 `design-preview/today-balanced.html`、`design-preview/pages.html`，行为同时受 `docs/iteration/CONTRACT.md` 约束。冲突时以契约为准。
+- 唯一视觉来源为 `design-preview/today-balanced.html`、`design-preview/pages.html`，行为同时受 `docs/archive/iteration/CONTRACT.md` 约束。冲突时以契约为准。
 - 保留暖月白、低对比边框、自然宽度单列今天页、目标主从布局、日历周视图加待安排区、助手右侧抽屉的既定体验，不引入新视觉风格。
 - 原型中的对比切换栏、静态示例数据、演示链接均不进入产品。助手不显示“当前上下文”等上下文标签、切换器或管理入口；通过消息内容、页面目标参数和自然语言消歧完成隐式引用。
 - 时间候选不使用原型中的单选按钮和“安排所选时间”二次确认。点击或键盘激活某个候选即执行该候选，成功后提供撤销；有候选时输入框仍可编辑、发送。

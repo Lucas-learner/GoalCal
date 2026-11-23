@@ -4,8 +4,7 @@
 -> 新步骤追加 todo -> 模拟全部完成(todo -> done, actual_min=est_min)。共 6 轮。
 原始记录写入 bench/prompt_eval/s3_exam7_<A|B>.jsonl、s4_swim30_<A|B>.jsonl。
 
-运行：GOALCAL_DB_URL 仅为绕过 config 的 production 绝对路径校验（本评测不触库），
-在 import goalcal.config 之前覆盖，不修改任何文件。
+运行：环境配置和真实模型调用说明见本目录 README.md；数据库强制使用内存库。
 """
 
 from __future__ import annotations
@@ -16,10 +15,12 @@ import sys
 import time
 from pathlib import Path
 
-os.environ["GOALCAL_DB_URL"] = "sqlite:////Users/macmini/projects/GoalCal/var/goalcal-production.db"
-sys.path.insert(0, "/Users/macmini/projects/GoalCal")
+os.environ["GOALCAL_DB_URL"] = "sqlite:///:memory:"
+os.environ["GOALCAL_PRODUCTION"] = "false"
+os.environ.setdefault("GOALCAL_ENV_FILE", os.devnull)
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from goalcal.config import settings  # noqa: E402  自动加载 .env
+from goalcal.config import settings  # noqa: E402  仅加载显式指定的环境文件
 from goalcal.domain.refine import UPCOMING_SYSTEM  # noqa: E402  变体 A：线上版本
 
 OUT_DIR = Path(__file__).resolve().parent

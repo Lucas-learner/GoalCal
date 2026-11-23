@@ -1,3 +1,5 @@
+> 历史资料：保留当时记录，命令、路径、功能和待办不代表当前版本。当前资料见 [文档索引](../README.md)。
+
 # GoalCal 系统架构图
 
 基于 2026-11-03 工作区代码整理。当前是 Python + Streamlit 模块化单体，图中的分层代表代码职责，并非独立微服务。
@@ -152,8 +154,8 @@ sequenceDiagram
 
 ## 5. 代码依据
 
-- 入口与部署：[`app.py`](../app.py)、[`service.py`](../goalcal/service.py)、[`auth_proxy.py`](../goalcal/auth_proxy.py)。
-- 控制与执行：[`controller.py`](../goalcal/ui/controller.py)、[`agent.py`](../goalcal/agent.py)、[`dialog.py`](../goalcal/dialog.py)。
-- AI 分层：[`turn.py`](../goalcal/llm/turn.py)、[`plan.py`](../goalcal/llm/plan.py)、[`router.py`](../goalcal/llm/router.py)。
-- 领域判断：[`planner.py`](../goalcal/domain/planner.py)、[`scheduler.py`](../goalcal/domain/scheduler.py)、[`recovery.py`](../goalcal/domain/recovery.py)。
-- 数据与记忆：[`models.py`](../goalcal/models.py)、[`db.py`](../goalcal/db.py)、[`memory.py`](../goalcal/memory.py)。
+- 入口与部署：[`app.py`](../../app.py)、[`service.py`](../../goalcal/service.py)、[`auth_proxy.py`](../../goalcal/auth_proxy.py)。
+- 控制与执行：[`controller.py`](../../goalcal/ui/controller.py)、[`agent.py`](../../goalcal/agent.py)、[`dialog.py`](../../goalcal/dialog.py)。
+- AI 分层：[`turn.py`](../../goalcal/llm/turn.py)、[`plan.py`](../../goalcal/llm/plan.py)、[`router.py`](../../goalcal/llm/router.py)。
+- 领域判断：[`planner.py`](../../goalcal/domain/planner.py)、[`scheduler.py`](../../goalcal/domain/scheduler.py)、[`recovery.py`](../../goalcal/domain/recovery.py)。
+- 数据与记忆：[`models.py`](../../goalcal/models.py)、[`db.py`](../../goalcal/db.py)、[`memory.py`](../../goalcal/memory.py)。

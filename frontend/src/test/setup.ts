@@ -18,4 +18,8 @@ afterEach(() => {
     // ignore
   }
   document.cookie = 'goalcal_lang=; Path=/; Max-Age=0';
+  document.cookie = 'goalcal_theme=; Path=/; Max-Age=0';
+  document.documentElement.removeAttribute('data-theme');
+  document.documentElement.removeAttribute('data-theme-pref');
+  document.documentElement.style.colorScheme = '';
 });

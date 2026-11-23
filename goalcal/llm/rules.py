@@ -119,6 +119,7 @@ NEW_COMMAND_INTENTS = {
     "move_event",
     "delete_event",
     "delete_goal",
+    "pause_goal",
     "resume_goal",
     "query_events",
     "schedule_step",
@@ -127,9 +128,14 @@ NEW_COMMAND_INTENTS = {
     "create_goal",
 }
 
+PAUSE_GOAL_MARKERS = re.compile(
+    r"(?:帮我)?暂停[^。.;!?，,]{0,20}|暂停(?:这个|当前)?(?:目标|计划)|"
+    r"\bpause\b[^.?!]{0,25}\b(?:goals?|plans?)\b|^\s*(?:please\s+)?pause\b",
+    re.I,
+)
 RESUME_GOAL_MARKERS = re.compile(
-    r"恢复[^。.;!?，,]{0,8}(目标|计划)|(?:目标|计划)[^。.;!?，,]{0,4}恢复|"
-    r"\bresume\b[^.?!]{0,20}\b(?:goals?|plans?)\b",
+    r"恢复[^。.;!?，,]{0,20}|(?:目标|计划)[^。.;!?，,]{0,4}恢复|"
+    r"\bresume\b[^.?!]{0,25}\b(?:goals?|plans?)\b",
     re.I,
 )
 
@@ -385,11 +391,21 @@ def parse_with_rules(text: str, now: datetime) -> Action:
             raw=raw,
         )
 
-    # 8.5) 恢复暂停的目标（要在建目标之前：“我想恢复目标”也含“我想”）
+    # 8.4) 恢复暂停的目标（要在暂停和建目标之前：“我想恢复之前暂停的目标”同时含“恢复”“暂停”“我想”）
     if RESUME_GOAL_MARKERS.search(raw):
-        quoted = re.search(r"[\"'“”‘’]([^\"'“”‘’]+)[\"'“”‘’]", raw)
+        quoted = re.search(r"[「『\"'“”‘’]([^」』\"'“”‘’]+)[」』\"'“”‘’]", raw)
         return Action(
             intent="resume_goal",
+            target=quoted.group(1).strip()[:120] if quoted else None,
+            confidence=0.7,
+            raw=raw,
+        )
+
+    # 8.5) 暂停目标
+    if PAUSE_GOAL_MARKERS.search(raw):
+        quoted = re.search(r"[「『\"'“”‘’]([^」』\"'“”‘’]+)[」』\"'“”‘’]", raw)
+        return Action(
+            intent="pause_goal",
             target=quoted.group(1).strip()[:120] if quoted else None,
             confidence=0.7,
             raw=raw,
@@ -431,14 +447,15 @@ def parse_with_rules(text: str, now: datetime) -> Action:
             raw=raw,
         )
 
-    # 10) 报进度（否定句 "I did not finish …" / "没做完" 不算完成）
-    if DONE_MARKERS.search(raw) and not ADD_MARKERS.search(raw) and not NEGATED_DONE.search(raw):
+    # 10) 报进度（否定句 "I did not finish …" / "没做完" 不算完成；引号内的目标名不算完成词）
+    unquoted = re.sub(r"[「『\"'“”‘’][^」』\"'“”‘’]+[」』\"'“”‘’]", " ", raw)
+    if DONE_MARKERS.search(unquoted) and not ADD_MARKERS.search(raw) and not NEGATED_DONE.search(raw):
         target = _clean_title(raw, spans)
         return Action(intent="log_progress", progress_target=target, confidence=0.6, raw=raw)
 
     # 11) 查
     if QUERY_MARKERS.search(raw):
-        return Action(intent="query_events", confidence=0.6, raw=raw)
+        return Action(intent="query_events", start=dates[0][1] if dates else None, confidence=0.6, raw=raw)
 
     # 12) 隐式加日程：只有日期/时间、没有指令词（"明天10点开会"、"周五下午3点半开会"）
     if dates and (duration or extract_time(raw)):

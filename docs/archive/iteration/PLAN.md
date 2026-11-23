@@ -1,4 +1,4 @@
-> 历史迭代约束（归并前）。当前上线状态、根路径和运维以 [生产手册](../production.md) 为准；当时的 design-preview 原型已删除，当前视觉依据为 [DESIGN](../DESIGN.md)。
+> 历史迭代约束（归并前）。当前上线状态、根路径和运维以 [生产手册](../../production.md) 为准；当时的 design-preview 原型已删除，当前视觉依据为 [DESIGN](../../DESIGN.md)。
 
 # Iteration plan and collaboration
 

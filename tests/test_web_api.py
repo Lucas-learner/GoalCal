@@ -254,6 +254,28 @@ def test_no_deadline_and_create_intent_survive_refresh(accounts):
     assert request(token,'GET','/assistant').json()['create_goal']==response.json()['create_goal']
 
 
+@pytest.mark.parametrize(('message', 'draft'), [
+    ('我想每周跑三次步', {'title': '跑步', 'weekly_target': 3}),
+    ('I want to run three times a week for 20 minutes', {'title': 'run', 'weekly_target': 3, 'est_min': 20}),
+    ('我想每天晚上七点阅读 30 分钟', {'title': '阅读', 'weekdays': list(range(7)), 'est_min': 30, 'start_time': '19:00'}),
+    ('我想每周一、三、五练琴', {'title': '练琴', 'weekdays': [0, 2, 4]}),
+])
+def test_assistant_recurring_action_opens_habit_draft_without_creating_it(accounts, monkeypatch, message, draft):
+    from goalcal.web import assistant
+
+    def unexpected_model_call(*args, **kwargs):
+        pytest.fail('A clear recurring action should be parsed locally')
+
+    monkeypatch.setattr(assistant, 'turn_client', unexpected_model_call)
+    token = accounts[1][0]
+    response = request(token, 'POST', '/assistant/turns', {'text': message, 'version': '0'})
+    assert response.status_code == 200, response.text
+    assert response.json()['create_habit'] == draft
+    assert 'create_goal' not in response.json()
+    assert request(token, 'GET', '/assistant').json()['create_habit'] == draft
+    assert request(token, 'GET', '/habits').json()['habits'] == []
+
+
 def test_new_login_return_is_bounded(accounts):
     import re
     from goalcal.models import User
@@ -820,3 +842,66 @@ def test_today_next_prioritizes_today_then_unscheduled_pinned_then_future_fallba
         t3 = request(tokens[0], 'GET', '/today').json()
         assert t3['next']['step']['id'] == pinned_step_id
         assert t3['next']['event'] is not None
+
+
+def test_me_theme_preference_persistence_and_validation(accounts):
+    _, tokens = accounts
+
+    async def run():
+        async with httpx2.AsyncClient(
+            transport=httpx2.ASGITransport(app=app),
+            base_url=ORIGIN,
+            cookies={'goalcal_session': tokens[0]},
+        ) as c:
+            initial = await c.get('/api/v1/me')
+            assert initial.status_code == 200
+            assert initial.json()['theme'] == ''
+
+            set_lang = await c.patch('/api/v1/me', json={'lang': 'en'}, headers={'Origin': ORIGIN, 'Idempotency-Key': 'theme-lang-1'})
+            assert set_lang.status_code == 200
+            assert set_lang.json()['lang'] == 'en'
+            assert set_lang.json()['theme'] == ''
+
+            set_dark = await c.patch('/api/v1/me', json={'theme': 'dark'}, headers={'Origin': ORIGIN, 'Idempotency-Key': 'theme-dark-1'})
+            assert set_dark.status_code == 200
+            assert set_dark.json()['theme'] == 'dark'
+            assert set_dark.json()['lang'] == 'en'
+
+            set_light = await c.patch('/api/v1/me', json={'theme': 'light'}, headers={'Origin': ORIGIN, 'Idempotency-Key': 'theme-light-1'})
+            assert set_light.status_code == 200
+            assert set_light.json()['theme'] == 'light'
+
+            reset_auto = await c.patch('/api/v1/me', json={'theme': ''}, headers={'Origin': ORIGIN, 'Idempotency-Key': 'theme-auto-1'})
+            assert reset_auto.status_code == 200
+            assert reset_auto.json()['theme'] == ''
+            assert reset_auto.json()['lang'] == 'en'
+
+            invalid = await c.patch('/api/v1/me', json={'theme': 'neon'}, headers={'Origin': ORIGIN, 'Idempotency-Key': 'theme-bad-1'})
+            assert invalid.status_code == 422
+
+    asyncio.run(run())
+
+
+def test_habit_occurrence_is_tenant_scoped_and_concurrent_completion_counts_once(accounts):
+    _, (owner, other) = accounts
+    day = request(owner, 'GET', '/today').json()['date']
+    body = {'title': 'Read daily', 'mode': 'fixed', 'est_min': 20, 'start_date': day, 'weekdays': list(range(7))}
+    created = request(owner, 'POST', '/habits', body, key='create-reading')
+    assert created.status_code == 200, created.text
+    habit = created.json()['habit']
+    assert request(owner, 'POST', '/habits', body, key='create-reading').json()['habit']['id'] == habit['id']
+    path = f"/habits/{habit['id']}"
+    assert request(other, 'GET', path).status_code == 404
+    assert request(other, 'GET', '/habits').json()['habits'] == []
+    item = request(owner, 'GET', f'{path}?date={day}').json()['occurrence']
+    checkin = {'date': day, 'version': item['version'], 'action': 'done'}
+    assert request(other, 'POST', f'{path}/occurrences', checkin).status_code == 404
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _: request(owner, 'POST', f'{path}/occurrences', checkin), range(2)))
+    assert sorted(r.status_code for r in results) == [200, 409]
+    detail = request(owner, 'GET', path).json()
+    assert detail['progress']['done'] == 1
+    result = next(r.json() for r in results if r.status_code == 200)
+    undo = request(owner, 'POST', f"/operations/{result['operation_id']}/undo", {})
+    assert undo.status_code == 200, undo.text
+    assert request(owner, 'GET', path).json()['progress']['done'] == 0

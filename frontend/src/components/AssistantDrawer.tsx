@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ApiError, api, generateIdempotencyKey } from '../api/client';
 import { invalidateAfterWrite, queryKeys } from '../api/queryKeys';
-import type { AssistantState, Proposal } from '../api/types';
+import type { AssistantState, Proposal, ReplanGoalIntent } from '../api/types';
 import { formatDateTimeLabel, isIsoExpired } from '../lib/datetime';
 import { useIdempotentAction } from '../lib/useIdempotentMutation';
 import { useI18n } from '../i18n';
@@ -38,6 +38,8 @@ export function AssistantDrawer({
   const {
     assistantOpen,
     closeAssistant,
+    pendingAssistantPrompt,
+    clearPendingAssistantPrompt,
     pageGoalId,
     recordMutationResult,
     setPrefillNewGoal,
@@ -155,6 +157,8 @@ export function AssistantDrawer({
             proposal: response.proposal,
             version: response.version,
             create_goal: response.create_goal,
+            create_habit: response.create_habit,
+            replan_goal: response.replan_goal,
           });
           setFailedTurn(null);
 
@@ -165,7 +169,9 @@ export function AssistantDrawer({
             });
           }
 
-          await invalidateAfterWrite(queryClient);
+          if (response.operation_id || response.proposal || response.goal) {
+            await invalidateAfterWrite(queryClient, response.goal ? { goalId: response.goal.id } : undefined);
+          }
         } catch (rawErr) {
           const apiErr =
             rawErr instanceof ApiError
@@ -230,6 +236,15 @@ export function AssistantDrawer({
     [processQueue],
   );
 
+  // Automatically send a kickoff prompt when opened from an action like "Replan".
+  useEffect(() => {
+    if (assistantOpen && pendingAssistantPrompt && assistantQuery.isSuccess) {
+      const prompt = pendingAssistantPrompt;
+      clearPendingAssistantPrompt();
+      enqueueSend(prompt);
+    }
+  }, [assistantOpen, pendingAssistantPrompt, assistantQuery.isSuccess, clearPendingAssistantPrompt, enqueueSend]);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = composerText.trim();
@@ -292,6 +307,42 @@ export function AssistantDrawer({
     },
   });
 
+  const applyReplanFn = useCallback(
+    async (replan: ReplanGoalIntent, key: string) =>
+      api.replanGoal(
+        replan.goal_id,
+        {
+          version: replan.goal_version,
+          ...(replan.steps_changed === false
+            ? {}
+            : {
+                steps: replan.steps.map((s) => ({
+                  title: s.title,
+                  est_min: s.est_min,
+                  milestone: s.milestone,
+                  energy: s.energy,
+                })),
+                outline: replan.outline,
+              }),
+          ...(replan.deadline !== undefined && replan.deadline !== null ? { deadline: replan.deadline } : {}),
+        },
+        key,
+      ),
+    [],
+  );
+
+  const applyReplanAction = useIdempotentAction(applyReplanFn, {
+    onSuccess: async (res, replan) => {
+      recordMutationResult(res);
+      await invalidateAfterWrite(queryClient, { goalId: replan.goal_id });
+    },
+    onError: async (err, replan) => {
+      if (err.status === 409) {
+        await invalidateAfterWrite(queryClient, { goalId: replan.goal_id });
+      }
+    },
+  });
+
   const clearFn = useCallback(
     async (version: string, key: string) => api.clearAssistantThread({ version }, key),
     [],
@@ -306,6 +357,8 @@ export function AssistantDrawer({
         proposal: res.proposal,
         version: res.version,
         create_goal: res.create_goal,
+        create_habit: res.create_habit,
+        replan_goal: res.replan_goal,
       });
       setFailedTurn(null);
       if (res.message) {
@@ -340,7 +393,7 @@ export function AssistantDrawer({
           <span>{t('GoalCal 助手', 'GoalCal Assistant')}</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-          {(state?.messages?.length ?? 0) > 0 || proposal != null || state?.create_goal != null ? (
+          {(state?.messages?.length ?? 0) > 0 || proposal != null || state?.create_goal || state?.create_habit || state?.replan_goal ? (
             <button
               type="button"
               className="btn small"
@@ -381,7 +434,8 @@ export function AssistantDrawer({
           <div className="empty-state" style={{ padding: 18 }}>
             <div className="empty-state-title">{t('有什么可以帮你？', 'How can I help?')}</div>
             <div className="empty-state-copy" style={{ marginBottom: 0 }}>
-              {t('安排步骤、调整日程或创建目标', 'Schedule steps, adjust events, or create goals')}
+              {t('起草目标和习惯，或调整日程。试试「我想每周跑三次步」。',
+                'Draft a goal or habit, or adjust your calendar. Try “I want to run three times a week.”')}
             </div>
           </div>
         ) : null}
@@ -395,21 +449,88 @@ export function AssistantDrawer({
           </div>
         ))}
 
-        {state?.create_goal ? (
+        {state?.create_goal || state?.create_habit ? (
           <div className="proposal-card" style={{ marginTop: 6 }}>
-            <div className="proposal-goal">{t('新目标草稿', 'New goal draft')}</div>
-            <div className="proposal-step">{state.create_goal.title}</div>
+            <div className="proposal-goal">{state.create_habit ? t('新习惯草稿', 'New habit draft') : t('新目标草稿', 'New goal draft')}</div>
+            <div className="proposal-step">{state.create_habit?.title ?? state.create_goal?.title}</div>
+            {state.create_habit?.weekly_target && <div className="proposal-goal">
+              {t(`每周 ${state.create_habit.weekly_target} 次`, `${state.create_habit.weekly_target} times per week`)}
+            </div>}
             <div className="actions" style={{ marginTop: 12 }}>
               <button
                 type="button"
                 className="btn primary small"
                 onClick={() => {
-                  setPrefillNewGoal(state.create_goal!);
                   if (isModalOverlay) closeAssistant();
-                  navigate('/goals/new');
+                  if (state.create_habit) {
+                    navigate('/habits/new', { state: { draft: state.create_habit } });
+                  } else if (state.create_goal) {
+                    setPrefillNewGoal(state.create_goal);
+                    navigate('/goals/new');
+                  }
                 }}
               >
                 {t('编辑草稿', 'Edit draft')}
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        {state?.replan_goal ? (
+          <div className="proposal-card" style={{ marginTop: 6 }} aria-label={t('重新规划方案', 'Replan proposal')}>
+            <div className="proposal-goal">
+              {t('重新规划方案', 'Updated plan')}
+              {state.replan_goal.deadline === ''
+                ? ` · ${t('取消截止日期', 'Remove deadline')}`
+                : state.replan_goal.deadline
+                  ? state.replan_goal.previous_deadline && state.replan_goal.previous_deadline !== state.replan_goal.deadline
+                    ? ` · ${t('截止', 'Due')} ${state.replan_goal.previous_deadline} → ${state.replan_goal.deadline}`
+                    : ` · ${t('截止', 'Due')} ${state.replan_goal.deadline}`
+                  : ''}
+            </div>
+            <div className="proposal-step">{state.replan_goal.goal_title}</div>
+            {state.replan_goal.steps_changed === false ? (
+              <div className="field-help" style={{ margin: '10px 0' }}>
+                {t(
+                  `保留现有 ${state.replan_goal.steps.length} 个待办步骤不变，仅更新截止日期。`,
+                  `Keeps the ${state.replan_goal.steps.length} existing todo steps unchanged and updates only the deadline.`,
+                )}
+              </div>
+            ) : (
+              <>
+                <ol style={{ margin: '10px 0', paddingLeft: 18, fontSize: 12, lineHeight: 1.6 }}>
+                  {state.replan_goal.steps.map((step, idx) => (
+                    <li key={`${step.title}-${idx}`}>
+                      <span>{step.title}</span>
+                      <span className="muted tabular-nums"> · {step.est_min} {t('分钟', 'min')}</span>
+                    </li>
+                  ))}
+                </ol>
+                <div className="field-help" style={{ marginBottom: 10 }}>
+                  {t('已完成步骤会保留，确认后替换剩余待办步骤。', 'Completed steps are kept; confirming replaces remaining todo steps.')}
+                </div>
+              </>
+            )}
+            <ErrorBanner
+              error={applyReplanAction.actionError}
+              onRefresh={() => void invalidateAfterWrite(queryClient, { goalId: state.replan_goal!.goal_id })}
+            />
+            <div className="actions" style={{ marginTop: 10 }}>
+              <button
+                type="button"
+                className="btn primary small"
+                disabled={applyReplanAction.isPending || isSendingTurn}
+                onClick={() => void applyReplanAction.run(state.replan_goal!)}
+              >
+                {applyReplanAction.isPending ? t('应用中…', 'Applying…') : t('确认修改', 'Apply changes')}
+              </button>
+              <button
+                type="button"
+                className="btn small"
+                disabled={applyReplanAction.isPending || isSendingTurn}
+                onClick={() => textareaRef.current?.focus()}
+              >
+                {t('继续调整', 'Keep adjusting')}
               </button>
             </div>
           </div>

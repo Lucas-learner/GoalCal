@@ -18,8 +18,10 @@ import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
-sys.path.insert(0, "/Users/macmini/projects/GoalCal")
-os.environ["GOALCAL_DB_URL"] = "sqlite:////Users/macmini/projects/GoalCal/var/goalcal-production.db"
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+os.environ["GOALCAL_DB_URL"] = "sqlite:///:memory:"
+os.environ["GOALCAL_PRODUCTION"] = "false"
+os.environ.setdefault("GOALCAL_ENV_FILE", os.devnull)
 
 from goalcal.config import settings  # noqa: E402
 from goalcal.domain.refine import UPCOMING_SYSTEM  # noqa: E402

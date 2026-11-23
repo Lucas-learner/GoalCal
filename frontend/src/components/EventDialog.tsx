@@ -128,11 +128,31 @@ export function EventDialog({ event, timezone, onClose }: EventDialogProps) {
     },
   });
 
+  const completeStepFn = useCallback(
+    async (args: { stepId: number; version: string }, key: string) =>
+      api.updateStep(args.stepId, { version: args.version, status: 'done' }, key),
+    [],
+  );
+
+  const completeStepAction = useIdempotentAction(completeStepFn, {
+    onSuccess: async (res) => {
+      recordMutationResult(res);
+      await invalidateAfterWrite(queryClient, { goalId: event.goal_id });
+      onClose();
+    },
+    onError: async (err) => {
+      if (err.status === 409) {
+        await invalidateAfterWrite(queryClient, { goalId: event.goal_id });
+      }
+    },
+  });
+
   const isBusy =
     moveAction.isPending ||
     cancelAction.isPending ||
     startAction.isPending ||
-    proposeAction.isPending;
+    proposeAction.isPending ||
+    completeStepAction.isPending;
 
   const handleSaveTime = (e: React.FormEvent) => {
     e.preventDefault();
@@ -187,91 +207,120 @@ export function EventDialog({ event, timezone, onClose }: EventDialogProps) {
           moveAction.actionError ??
           cancelAction.actionError ??
           startAction.actionError ??
-          proposeAction.actionError
+          proposeAction.actionError ??
+          completeStepAction.actionError
         }
         onRefresh={() => void invalidateAfterWrite(queryClient, { goalId: event.goal_id })}
       />
 
-      <form onSubmit={handleSaveTime} noValidate>
-        <div className="field">
-          <label className="field-label" htmlFor="event-start-local">
-            {t('开始', 'Start')}
-          </label>
-          <input
-            id="event-start-local"
-            type="datetime-local"
-            className="input tabular-nums"
-            value={startLocal}
-            onChange={(e) => {
-              setDirty(true);
-              setStartLocal(e.target.value);
-            }}
-            disabled={isBusy || !['planned', 'moved'].includes(event.status)}
-          />
-        </div>
-
-        <div className="field">
-          <label className="field-label" htmlFor="event-end-local">
-            {t('结束', 'End')}
-          </label>
-          <input
-            id="event-end-local"
-            type="datetime-local"
-            className="input tabular-nums"
-            value={endLocal}
-            onChange={(e) => {
-              setDirty(true);
-              setEndLocal(e.target.value);
-            }}
-            disabled={isBusy || !['planned', 'moved'].includes(event.status)}
-          />
-        </div>
-
-        {validationError ? (
-          <div className="field-error" role="alert">
-            {validationError}
-          </div>
-        ) : null}
-
-        <div className="actions" style={{ justifyContent: 'space-between', marginTop: 18 }}>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            {event.kind === 'block' && ['planned', 'moved'].includes(event.status) ? (
-              <button
-                type="button"
-                className="btn primary"
-                disabled={isBusy || !['planned', 'moved'].includes(event.status)}
-                onClick={() => void startAction.run(undefined)}
-              >
-                {startAction.isPending ? t('开始中…', 'Starting…') : t('开始', 'Start')}
-              </button>
-            ) : null}
-            <button type="submit" className="btn" disabled={isBusy || !['planned', 'moved'].includes(event.status)}>
-              {moveAction.isPending ? t('保存中…', 'Saving…') : t('保存', 'Save')}
+      {event.kind === 'block' ? (
+        ['planned', 'moved'].includes(event.status) ? (
+          <div className="actions" style={{ marginTop: 18 }}>
+            <button
+              type="button"
+              className="btn primary"
+              disabled={isBusy}
+              onClick={() => void startAction.run(undefined)}
+            >
+              {startAction.isPending ? t('开始中…', 'Starting…') : t('开始', 'Start')}
             </button>
-            {event.step_id != null && ['planned', 'moved'].includes(event.status) ? (
+            {event.step_id != null && event.step_version ? (
               <button
                 type="button"
                 className="btn"
-                disabled={isBusy || !['planned', 'moved'].includes(event.status)}
+                disabled={isBusy}
+                onClick={() =>
+                  void completeStepAction.run({
+                    stepId: event.step_id!,
+                    version: event.step_version!,
+                  })
+                }
+              >
+                {completeStepAction.isPending ? t('保存中…', 'Saving…') : t('完成', 'Complete')}
+              </button>
+            ) : null}
+            {event.step_id != null ? (
+              <button
+                type="button"
+                className="btn"
+                disabled={isBusy}
                 onClick={() => void proposeAction.run(event.step_id!)}
               >
                 {proposeAction.isPending ? t('查找中…', 'Finding…') : t('换时间', 'Reschedule')}
               </button>
             ) : null}
-          </div>
-
-          {['planned', 'moved'].includes(event.status) ? (
             <button
               type="button"
               className="btn"
-              disabled={isBusy || !['planned', 'moved'].includes(event.status)}
+              disabled={isBusy}
               onClick={() => void cancelAction.run(undefined)}
             >
-              {cancelAction.isPending ? t('取消中…', 'Cancelling…') : t('取消日程', 'Cancel event')}
+              {cancelAction.isPending ? t('取消中…', 'Cancelling…') : t('取消排期', 'Cancel schedule')}
             </button>
+          </div>
+        ) : null
+      ) : (
+        <form onSubmit={handleSaveTime} noValidate>
+          <div className="field">
+            <label className="field-label" htmlFor="event-start-local">
+              {t('开始', 'Start')}
+            </label>
+            <input
+              id="event-start-local"
+              type="datetime-local"
+              className="input tabular-nums"
+              value={startLocal}
+              onChange={(e) => {
+                setDirty(true);
+                setStartLocal(e.target.value);
+              }}
+              disabled={isBusy || !['planned', 'moved'].includes(event.status)}
+            />
+          </div>
+
+          <div className="field">
+            <label className="field-label" htmlFor="event-end-local">
+              {t('结束', 'End')}
+            </label>
+            <input
+              id="event-end-local"
+              type="datetime-local"
+              className="input tabular-nums"
+              value={endLocal}
+              onChange={(e) => {
+                setDirty(true);
+                setEndLocal(e.target.value);
+              }}
+              disabled={isBusy || !['planned', 'moved'].includes(event.status)}
+            />
+          </div>
+
+          {validationError ? (
+            <div className="field-error" role="alert">
+              {validationError}
+            </div>
           ) : null}
-        </div>
-      </form>
+
+          <div className="actions" style={{ justifyContent: 'space-between', marginTop: 18 }}>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button type="submit" className="btn primary" disabled={isBusy || !['planned', 'moved'].includes(event.status)}>
+                {moveAction.isPending ? t('保存中…', 'Saving…') : t('保存', 'Save')}
+              </button>
+            </div>
+
+            {['planned', 'moved'].includes(event.status) ? (
+              <button
+                type="button"
+                className="btn"
+                disabled={isBusy || !['planned', 'moved'].includes(event.status)}
+                onClick={() => void cancelAction.run(undefined)}
+              >
+                {cancelAction.isPending ? t('取消中…', 'Cancelling…') : t('取消日程', 'Cancel event')}
+              </button>
+            ) : null}
+          </div>
+        </form>
+      )}
     </Modal>
   );
 }

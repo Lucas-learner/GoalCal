@@ -14,6 +14,7 @@ interface NewEventDialogProps {
   initialStartLocal: string;
   initialEndLocal: string;
   onClose: () => void;
+  onNewHabit?: (start: string, end: string) => void;
 }
 
 export function NewEventDialog({
@@ -21,6 +22,7 @@ export function NewEventDialog({
   initialStartLocal,
   initialEndLocal,
   onClose,
+  onNewHabit,
 }: NewEventDialogProps) {
   const queryClient = useQueryClient();
   const { recordMutationResult } = useAppState();
@@ -71,6 +73,10 @@ export function NewEventDialog({
   return (
     <Modal title={t('新建日程', 'New event')} onClose={onClose} hasUnsavedChanges={isDirty}>
       <ErrorBanner error={createAction.actionError} />
+      {onNewHabit && <div className="actions">
+        <button type="button" className="btn small" disabled={createAction.isPending}
+          onClick={() => onNewHabit(startLocal, endLocal)}>{t('新习惯', 'New habit')}</button>
+      </div>}
       <div className="muted" style={{ fontSize: 11, marginBottom: 10 }}>
         {t('时区', 'Time zone')}: {timezone}
       </div>

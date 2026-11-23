@@ -1,3 +1,5 @@
+> 历史资料：保留当时记录，命令、路径、功能和待办不代表当前版本。当前资料见 [文档索引](../README.md)。
+
 # GoalCal 界面设计与用户体验优化方案
 
 > 参考基准：`GoalCalendar_IOS_demo` 交互设计 × 当前 `GoalCal` Web 端实现（`app.py`、`goalcal/ui/*`、`goalcal/domain/*`）

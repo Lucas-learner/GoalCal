@@ -15,7 +15,7 @@ from .models import (
     UserPreference, Conversation, Message,
 )
 
-from .web.models import WebProposal, WebOperation, WebExecution, WebDraft
+from .web.models import Habit, HabitOccurrence, HabitRule, WebProposal, WebOperation, WebExecution, WebDraft
 from .web.transport_models import WebRequest, WebThread
 
 current_session = ContextVar('goalcal_session', default=None)
@@ -38,6 +38,8 @@ def criteria(uid):
         WebProposal: WebProposal.user_id == uid, WebOperation: WebOperation.user_id == uid,
         WebExecution: WebExecution.user_id == uid, WebDraft: WebDraft.user_id == uid,
         WebRequest: WebRequest.user_id == uid, WebThread: WebThread.user_id == uid,
+        Habit: Habit.user_id == uid, HabitRule: HabitRule.user_id == uid,
+        HabitOccurrence: HabitOccurrence.user_id == uid,
         User: User.id == uid, Goal: Goal.user_id == uid,
         Step: Step.goal_id.in_(goals), Event: Event.user_id == uid,
         Checkin: Checkin.step_id.in_(steps), StateLog: StateLog.user_id == uid,
@@ -78,7 +80,7 @@ def validate_object(session, row):
     references = {
         'goal_id': Goal, 'step_id': Step, 'event_id': Event,
         'new_event_id': Event, 'conversation_id': Conversation, 'focus_goal_id': Goal,
-        'proposal_id': WebProposal,
+        'proposal_id': WebProposal, 'habit_id': Habit,
     }
     for field in ('user_id', *references):
         if field in state.attrs and state.persistent and state.attrs[field].history.deleted:

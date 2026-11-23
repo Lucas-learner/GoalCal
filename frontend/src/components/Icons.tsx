@@ -32,6 +32,16 @@ export function CalendarIcon() {
   );
 }
 
+export function RepeatIcon() {
+  return (
+    <span className="icon" aria-hidden="true">
+      <svg viewBox="0 0 24 24">
+        <path d="m16 3 4 4-4 4M4 11V9a2 2 0 0 1 2-2h14M8 21l-4-4 4-4m12 0v2a2 2 0 0 1-2 2H4" />
+      </svg>
+    </span>
+  );
+}
+
 export function SparkleIcon() {
   return (
     <span className="icon" aria-hidden="true">

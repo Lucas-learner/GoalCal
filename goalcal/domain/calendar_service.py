@@ -77,7 +77,7 @@ def find_event(
     exact: bool = False,
 ) -> Event | None:
     """按标题找事件；now_utc 传入后优先匹配未来事件，exact 用于删除等精确操作。"""
-    events = list(session.scalars(select(Event).where(Event.user_id == user_id)))
+    events = list(session.scalars(select(Event).where(Event.user_id == user_id, Event.kind != "habit")))
     if not events:
         return None
     hint_l = hint.lower().strip()
@@ -107,6 +107,8 @@ def find_event(
 
 def move_event(session: Session, event: Event, new_start: datetime, tz: str) -> Event:
     from ..web.legacy import require_idle
+    if event.kind == "habit":
+        raise ValueError("Edit this session from its habit details")
     require_idle(session, event_id=event.id)
     duration = event.end_utc - event.start_utc
     event.start_utc = as_utc_naive(new_start, tz)
@@ -119,6 +121,8 @@ def move_event(session: Session, event: Event, new_start: datetime, tz: str) -> 
 def delete_event(session: Session, event: Event) -> None:
     """硬删事件。scheduled 由未来目标块推导，步骤状态无需回写。"""
     from ..web.legacy import require_idle
+    if event.kind == "habit":
+        raise ValueError("Edit this session from its habit details")
     require_idle(session, event_id=event.id)
     session.execute(update(Checkin).where(Checkin.event_id == event.id).values(event_id=None))
     session.execute(update(Interaction).where(Interaction.event_id == event.id).values(event_id=None))

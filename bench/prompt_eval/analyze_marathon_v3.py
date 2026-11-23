@@ -17,7 +17,9 @@ ROOT = HERE.parent.parent
 
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(ROOT))
-os.environ["GOALCAL_DB_URL"] = "sqlite:////Users/macmini/projects/GoalCal/var/goalcal-production.db"
+os.environ["GOALCAL_DB_URL"] = "sqlite:///:memory:"
+os.environ["GOALCAL_PRODUCTION"] = "false"
+os.environ.setdefault("GOALCAL_ENV_FILE", os.devnull)
 
 import analyze_marathon as am  # noqa: E402
 from goalcal.config import settings  # noqa: E402

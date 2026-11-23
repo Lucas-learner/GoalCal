@@ -74,7 +74,7 @@ class Step(Base):
 
 
 class Event(Base):
-    """kind: external(用户原有日程) | block(目标执行块) | buffer(缓冲)"""
+    """kind: external(用户原有日程) | block(目标执行块) | habit(习惯占用) | buffer(缓冲)"""
 
     __tablename__ = "events"
 

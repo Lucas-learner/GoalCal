@@ -8,7 +8,7 @@ import { useIdempotentAction } from '../lib/useIdempotentMutation';
 import { useI18n } from '../i18n';
 import { useAppState } from '../state/AppStateContext';
 import { AssistantDrawer } from './AssistantDrawer';
-import { CalendarIcon, HomeIcon, SettingsIcon, TargetIcon } from './Icons';
+import { CalendarIcon, HomeIcon, RepeatIcon, SettingsIcon, TargetIcon } from './Icons';
 import { ProposalModal } from './ProposalModal';
 import { ErrorBanner } from './StateFeedback';
 
@@ -99,6 +99,7 @@ export function AppShell({
   const navItems = [
     { to: '/', label: t('今天', 'Today'), icon: <HomeIcon />, end: true },
     { to: '/goals', label: t('目标', 'Goals'), icon: <TargetIcon />, end: false },
+    { to: '/habits', label: t('习惯', 'Habits'), icon: <RepeatIcon />, end: false },
     { to: '/calendar', label: t('日历', 'Calendar'), icon: <CalendarIcon />, end: false },
   ];
 
@@ -213,28 +214,13 @@ export function AppShell({
       ) : null}
 
       <nav className="mobile-nav" aria-label={t('移动导航', 'Mobile navigation')}>
-        <NavLink
-          to="/"
-          end
-          className={({ isActive }) => `mobile-nav-item${isActive ? ' active' : ''}`}
-        >
-          <HomeIcon />
-          <span>{t('今天', 'Today')}</span>
-        </NavLink>
-        <NavLink
-          to="/goals"
-          className={({ isActive }) => `mobile-nav-item${isActive ? ' active' : ''}`}
-        >
-          <TargetIcon />
-          <span>{t('目标', 'Goals')}</span>
-        </NavLink>
-        <NavLink
-          to="/calendar"
-          className={({ isActive }) => `mobile-nav-item${isActive ? ' active' : ''}`}
-        >
-          <CalendarIcon />
-          <span>{t('日历', 'Calendar')}</span>
-        </NavLink>
+        {navItems.map((item) => (
+          <NavLink key={item.to} to={item.to} end={item.end}
+            className={({ isActive }) => `mobile-nav-item${isActive ? ' active' : ''}`}>
+            {item.icon}
+            <span>{item.label}</span>
+          </NavLink>
+        ))}
         <NavLink
           to="/settings"
           className={({ isActive }) => `mobile-nav-item${isActive ? ' active' : ''}`}

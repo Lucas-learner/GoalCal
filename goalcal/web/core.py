@@ -19,7 +19,7 @@ from ..domain import goals as goal_service, recovery, scheduler
 from ..i18n import format_when, normalize_lang, pick
 from ..models import Checkin, Event, Goal, Interaction, Step, User, RescheduleLog
 from .availability import allows, validate_availability
-from .models import WebDraft, WebExecution, WebOperation, WebProposal
+from .models import Habit, HabitOccurrence, WebDraft, WebExecution, WebOperation, WebProposal
 from .transport_models import WebThread
 
 UTC = timezone.utc
@@ -112,6 +112,11 @@ class Service:
     def _t(self, zh: str, en: str) -> str:
         return pick(self.lang, zh, en)
 
+    @property
+    def habits(self):
+        from .habits import HabitService
+        return HabitService(self)
+
     def _get(self, model, id):
         row = self.session.get(model, id)
         if row is None or (hasattr(row, "user_id") and row.user_id != self.user_id):
@@ -152,13 +157,25 @@ class Service:
                     break
         return {"id": event.id, "title": title, "start": _iso(event.start_utc),
                 "end": _iso(event.end_utc), "kind": event.kind, "status": event.status,
-                "step_id": event.step_id, "goal_id": goal.id if goal else None,
+                "step_id": event.step_id, "step_version": version_token(step) if step else None,
+                "goal_id": goal.id if goal else None,
                 "goal_title": goal.title if goal else None, "version": version_token(event)}
 
     def serialize_execution(self, execution: WebExecution) -> dict:
+        if execution.habit_occurrence_id is not None:
+            occ = self._get(HabitOccurrence, execution.habit_occurrence_id)
+            habit = self._get(Habit, occ.habit_id)
+            event = self._get(Event, execution.event_id)
+            return {"id": execution.id, "event_id": execution.event_id, "step_id": None,
+                    "habit_id": habit.id, "habit_occurrence_id": occ.id,
+                    "goal_title": self._t("习惯", "Habit"), "step_title": event.title,
+                    "started_at": _iso(execution.started_at),
+                    "expected_end_at": _iso(execution.expected_end_at),
+                    "status": execution.status, "version": version_token(execution)}
         step = self._get(Step, execution.step_id)
         goal = self._get(Goal, step.goal_id)
         return {"id": execution.id, "event_id": execution.event_id, "step_id": step.id,
+                "habit_id": None, "habit_occurrence_id": None,
                 "goal_title": goal.title, "step_title": step.title,
                 "started_at": _iso(execution.started_at),
                 "expected_end_at": _iso(execution.expected_end_at),
@@ -185,12 +202,17 @@ class Service:
     def _running(self):
         return next((r for r in self._executions() if r.status == "running"), None)
 
-    def _ensure_not_running(self, *, event_id=None, step_id=None, goal_id=None):
+    def _ensure_not_running(self, *, event_id=None, step_id=None, goal_id=None, habit_occurrence_id=None, habit_id=None):
         for execution in self._executions():
             if execution.status != "running":
                 continue
-            if (execution.event_id == event_id or execution.step_id == step_id
-                    or (goal_id is not None and self._get(Step, execution.step_id).goal_id == goal_id)):
+            if ((event_id is not None and execution.event_id == event_id)
+                    or (step_id is not None and execution.step_id == step_id)
+                    or (habit_occurrence_id is not None and execution.habit_occurrence_id == habit_occurrence_id)
+                    or (habit_id is not None and execution.habit_occurrence_id is not None
+                        and self._get(HabitOccurrence, execution.habit_occurrence_id).habit_id == habit_id)
+                    or (goal_id is not None and execution.step_id is not None
+                        and self._get(Step, execution.step_id).goal_id == goal_id)):
                 raise ApiError("execution_active", self._t("请先完成当前执行的签到", "Please check in on the running session first"))
 
     def _active_step(self, step: Step):
@@ -225,12 +247,12 @@ class Service:
         if end <= start or end - start > timedelta(days=7):
             raise ApiError("validation", self._t("结束须晚于开始，单个日程不能超过七天", "End time must be after start time and span at most 7 days"), 422)
 
-    def _slot(self, start, end, *, ignore=(), step=None, goal=None, goal_block=True):
+    def _slot(self, start, end, *, ignore=(), step=None, goal=None, goal_block=True, habit_block=False):
         self._validate_interval(start, end)
         start, end = _utc(start), _utc(end)
         config = self._availability()
         local_start, local_end = start.astimezone(self.zone), end.astimezone(self.zone)
-        if goal_block:
+        if goal_block or habit_block:
             if start < self.now:
                 raise ApiError("invalid_time", self._t("执行时间不能在过去", "Execution time cannot be in the past"))
             if not allows(local_start, local_end, config):
@@ -239,9 +261,12 @@ class Service:
                 goal = self._active_step(step)
             if goal and goal.deadline and local_end > datetime.combine(goal.deadline + timedelta(days=1), time(), self.zone):
                 raise ApiError("deadline", self._t("该时间超过目标截止日期", "That time passes the goal deadline"))
-        pad = timedelta(minutes=config["buffer_minutes"] if goal_block else 0)
+        buffer = timedelta(minutes=config["buffer_minutes"])
         occupied = [e for e in self._events() if e.id not in ignore and e.status not in ("skipped", "missed")]
-        if any(start < _utc(e.end_utc) + pad and end > _utc(e.start_utc) - pad for e in occupied):
+        def overlaps(e):
+            pad = buffer if goal_block or habit_block or e.kind == "habit" else timedelta(0)
+            return start < _utc(e.end_utc) + pad and end > _utc(e.start_utc) - pad
+        if any(overlaps(e) for e in occupied):
             raise ApiError("schedule_conflict", self._t("该时段与已有日程冲突", "That time conflicts with an existing event"))
         if goal_block:
             day_start = datetime.combine(local_start.date(), time(), self.zone).astimezone(UTC)
@@ -251,29 +276,41 @@ class Service:
             if minutes + (end - start).total_seconds() / 60 > config["max_goal_minutes_per_day"]:
                 raise ApiError("daily_limit", self._t("该日目标时间已达上限", "Daily goal-time limit reached for that day"))
 
-    def _user_lang(self) -> str:
+    def _ui_pref(self, key: str, allowed: tuple[str, ...]) -> str:
         prefs = memory.list_preferences(self.session, self.user_id, scope="ui", now=self.now_naive)
-        row = next((p for p in prefs if p.key == "lang"), None)
+        row = next((p for p in prefs if p.key == key), None)
         if not row:
             return ""
         try:
             val = json.loads(row.value)
         except ValueError:
             return ""
-        return val if val in ("zh", "en") else ""
+        return val if val in allowed else ""
+
+    def _save_ui_pref(self, key: str, value: str, allowed: tuple[str, ...], err_zh: str, err_en: str) -> None:
+        if value not in ("", *allowed):
+            raise ApiError("validation", self._t(err_zh, err_en), 422)
+        if value:
+            memory.set_preference(self.session, self.user_id, key, value, scope="ui")
+        else:
+            memory.delete_preference(self.session, self.user_id, key, scope="ui")
 
     def me(self):
         user = self._get(User, self.user_id)
-        return {"id": user.id, "name": user.name, "email": user.email, "timezone": user.tz, "lang": self._user_lang()}
+        return {
+            "id": user.id,
+            "name": user.name,
+            "email": user.email,
+            "timezone": user.tz,
+            "lang": self._ui_pref("lang", ("zh", "en")),
+            "theme": self._ui_pref("theme", ("light", "dark")),
+        }
 
     def update_me(self, body):
-        lang = body.get("lang")
-        if lang not in ("", "zh", "en"):
-            raise ApiError("validation", self._t("语言选项无效", "Invalid language option"), 422)
-        if lang:
-            memory.set_preference(self.session, self.user_id, "lang", lang, scope="ui")
-        else:
-            memory.delete_preference(self.session, self.user_id, "lang", scope="ui")
+        if "lang" in body:
+            self._save_ui_pref("lang", body["lang"], ("zh", "en"), "语言选项无效", "Invalid language option")
+        if "theme" in body:
+            self._save_ui_pref("theme", body["theme"], ("light", "dark"), "外观选项无效", "Invalid appearance option")
         self.session.flush()
         return self.me()
 
@@ -331,9 +368,19 @@ class Service:
         running = self._running()
         recovery_events = [e for e in recovery.unresolved_blocks(self.session, self.user_id, self.now_naive)
                            if not any(x.event_id == e.id and x.status == "running" for x in self._executions())]
+        habits = self.habits.range(day, day, view="today")
+        timed = [item for item in habits["items"] if item["status"] == "pending" and item["end"]
+                 and parse_datetime(item["end"]) > self.now]
+        dated = [item for item in habits["items"] if item["status"] == "pending" and not item["start"]]
+        goal_today = chosen and chosen["event"] and parse_datetime(chosen["event"]["start"]) < end
+        habit_next = next(iter(timed or dated), None)
+        if goal_today and (not habit_next or not habit_next["start"]
+                           or parse_datetime(chosen["event"]["start"]) <= parse_datetime(habit_next["start"])):
+            habit_next = None
         return {"date": day.isoformat(), "timezone": self.tz, "next": chosen,
                 "execution": self.serialize_execution(running) if running else None,
-                "recovery": [self.serialize_event(e) for e in recovery_events], "events": events}
+                "recovery": [self.serialize_event(e) for e in recovery_events], "events": events,
+                "habits": habits, "habit_next": habit_next}
 
     def _step_defs(self, values):
         if not isinstance(values, list) or not 1 <= len(values) <= 100:
@@ -481,6 +528,18 @@ class Service:
                     event.title = step.title[:200]
         was_archived = goal.status == "archived"
         goal.title, goal.status = title, status
+        if "deadline" in body:
+            raw_deadline = body["deadline"].strip()
+            if raw_deadline == "":
+                goal.deadline = None
+            else:
+                try:
+                    new_deadline = date.fromisoformat(raw_deadline)
+                except ValueError:
+                    raise ApiError("validation", self._t("截止日期格式无效", "Invalid deadline date"), 422) from None
+                if new_deadline < self.now.astimezone(self.zone).date():
+                    raise ApiError("invalid_deadline", self._t("截止日期不能在过去", "Deadline cannot be in the past"), 422)
+                goal.deadline = new_deadline
         if "pinned" in body:
             goal.pinned = body["pinned"]
         if status == "archived":
@@ -495,8 +554,8 @@ class Service:
         self.session.flush()
         if status == "archived":
             msg = self._t(
-                f"「{goal.title}」已移至 设置 → 已归档目标",
-                f'"{goal.title}" moved to Settings → Archived goals',
+                f"「{goal.title}」已归档至 设置 → 已归档",
+                f'"{goal.title}" archived to Settings → Archived',
             )
         elif was_archived and status == "active":
             msg = self._t(
@@ -506,6 +565,111 @@ class Service:
         else:
             msg = self._t(f"已更新目标「{goal.title}」", f'Updated goal "{goal.title}"')
         return {"message": msg, "goal": self.serialize_goal(goal)}
+
+    def replan_goal(self, goal_id, body, *, update_thread: bool = True):
+        goal = self._get(Goal, goal_id)
+        self.check_version(goal, body)
+        if goal.status != "active":
+            raise ApiError("invalid_state", self._t("只有进行中的目标可以重新规划", "Only active goals can be replanned"))
+        has_steps = body.get("steps") is not None
+        has_deadline = "deadline" in body
+        if not has_steps and not has_deadline:
+            raise ApiError("validation", self._t("没有需要更新的规划内容", "No plan changes to apply"), 422)
+        if has_steps:
+            self._ensure_not_running(goal_id=goal.id)
+        definitions = self._step_defs(body.get("steps")) if has_steps else None
+        if has_deadline:
+            raw_deadline = body["deadline"].strip()
+            if raw_deadline == "":
+                goal.deadline = None
+            else:
+                try:
+                    new_deadline = date.fromisoformat(raw_deadline)
+                except ValueError:
+                    raise ApiError("validation", self._t("截止日期格式无效", "Invalid deadline date"), 422) from None
+                if new_deadline < self.now.astimezone(self.zone).date():
+                    raise ApiError("invalid_deadline", self._t("截止日期不能在过去", "Deadline cannot be in the past"), 422)
+                goal.deadline = new_deadline
+        if definitions is not None:
+            todo_steps = [s for s in goal.steps if s.status == "todo"]
+            todo_ids = [s.id for s in todo_steps]
+            if todo_ids:
+                for proposal in self.session.scalars(select(WebProposal).where(
+                        WebProposal.user_id == self.user_id, WebProposal.step_id.in_(todo_ids))):
+                    self.session.delete(proposal)
+                open_future = [e for e in self._events() if e.step_id in todo_ids and e.status in OPEN and _utc(e.start_utc) >= self.now]
+                self._soft_cancel(open_future)
+                self.session.flush()
+                referenced = set()
+                for model, col in ((Event, Event.step_id), (Checkin, Checkin.step_id),
+                                   (WebExecution, WebExecution.step_id), (Interaction, Interaction.step_id)):
+                    for sid in self.session.scalars(select(col).where(col.in_(todo_ids))):
+                        if sid is not None:
+                            referenced.add(sid)
+                for step in todo_steps:
+                    if step.id in referenced:
+                        step.status = "dropped"
+                    else:
+                        self.session.delete(step)
+                self.session.flush()
+            self.session.expire(goal, ["steps"])
+            next_seq = max((s.seq for s in goal.steps), default=-1) + 1
+            for offset, d in enumerate(definitions):
+                self.session.add(Step(
+                    goal_id=goal.id,
+                    seq=next_seq + offset,
+                    title=d["title"],
+                    est_min=d["est_min"],
+                    milestone=d["milestone"],
+                    energy=d["energy"],
+                    status="todo",
+                ))
+            done_milestones = [s.milestone for s in sorted(goal.steps, key=lambda x: x.seq) if s.status == "done" and s.milestone]
+            new_outline = body.get("outline") or []
+            step_milestones = [d["milestone"] for d in definitions if d.get("milestone")]
+            merged_outline = list(dict.fromkeys([*done_milestones, *[x.strip() for x in new_outline if isinstance(x, str) and x.strip()], *step_milestones]))
+            if merged_outline:
+                goal.outline = _json(merged_outline)
+        if definitions is not None:
+            summary_zh = f"已重新规划「{goal.title}」，共 {len(definitions)} 个待办步骤"
+            summary_en = f'Replanned "{goal.title}" with {len(definitions)} todo steps'
+            if has_deadline:
+                if goal.deadline:
+                    summary_zh += f"（截止 {goal.deadline.isoformat()}）"
+                    summary_en += f" (due {goal.deadline.isoformat()})"
+                else:
+                    summary_zh += "（已取消截止日期）"
+                    summary_en += " (deadline removed)"
+        elif goal.deadline:
+            summary_zh = f"已将「{goal.title}」的截止日期更新为 {goal.deadline.isoformat()}"
+            summary_en = f'Updated deadline for "{goal.title}" to {goal.deadline.isoformat()}'
+        else:
+            summary_zh = f"已取消「{goal.title}」的截止日期"
+            summary_en = f'Removed deadline for "{goal.title}"'
+        msg = self._t(summary_zh, summary_en)
+        # Clear pending replan card in assistant thread once applied via HTTP button.
+        if update_thread:
+            thread = self.session.scalar(select(WebThread).where(WebThread.user_id == self.user_id))
+            if thread:
+                messages = json.loads(thread.messages_json or "[]")
+                if messages and (messages[-1].get("replan_goal") or messages[-1].get("replan_prompt_goal_id")):
+                    messages[-1].pop("replan_goal", None)
+                    messages[-1].pop("replan_prompt_goal_id", None)
+                    messages[-1].pop("replan_context", None)
+                    messages.append({
+                        "id": uuid4().hex,
+                        "role": "assistant",
+                        "content": msg + self._t("。", "."),
+                        "ts": self.now.isoformat(),
+                    })
+                    thread.messages_json = json.dumps(messages[-40:], ensure_ascii=False)
+                    thread.version += 1
+        self.session.flush()
+        self.session.expire(goal, ["steps"])
+        return {
+            "message": msg,
+            "goal": self.serialize_goal(goal),
+        }
 
     def delete_goal(self, id, body):
         goal = self._get(Goal, id)
@@ -608,8 +772,20 @@ class Service:
         start, end = parse_datetime(start, lang=self.lang), parse_datetime(end, lang=self.lang)
         if end <= start or end - start > timedelta(days=93):
             raise ApiError("validation", self._t("日历查询范围须为 1 至 93 天", "Calendar query range must be 1 to 93 days"), 422)
-        events = [e for e in self._events() if _utc(e.end_utc) > start and _utc(e.start_utc) < end]
-        return {"events": [self.serialize_event(e) for e in sorted(events, key=lambda e: (e.start_utc, e.id))]}
+        habits = self.habits.range(start.astimezone(self.zone).date(),
+                                   (end - timedelta(microseconds=1)).astimezone(self.zone).date(), view="calendar")
+        occurrences = {i["event_id"]: i for i in habits["items"] if i["event_id"]}
+        events = []
+        for event in self._events():
+            if _utc(event.end_utc) <= start or _utc(event.start_utc) >= end:
+                continue
+            if event.kind != "habit":
+                events.append(self.serialize_event(event))
+            elif event.id in occurrences:
+                occurrence = occurrences[event.id]
+                status = "planned" if occurrence["status"] == "pending" else occurrence["status"]
+                events.append({**self.serialize_event(event), "status": status, "habit": occurrence})
+        return {"events": sorted(events, key=lambda event: (event["start"], event["id"])), "habits": habits}
 
     def create_event(self, body):
         title = _text(body.get("title"), lang=self.lang)
@@ -624,6 +800,8 @@ class Service:
     def _editable_event(self, id, body):
         event = self._get(Event, id)
         self.check_version(event, body)
+        if event.kind == "habit":
+            raise ApiError("invalid_state", self._t("请从习惯详情调整这次安排", "Edit this session from its habit details"))
         if event.status not in OPEN:
             raise ApiError("invalid_state", self._t("该日程已处理", "This event has already been resolved"))
         self._ensure_not_running(event_id=event.id)
@@ -770,6 +948,8 @@ class Service:
         if operation.undone:
             raise ApiError("already_undone", self._t("该操作已撤销", "This operation has already been undone"))
         changes = json.loads(operation.payload_json)
+        if isinstance(changes, dict) and "habit_id" in changes:
+            return self.habits.undo(operation, changes)
         ids = {c["after"]["id"] for c in changes}
         rows = []
         for change in changes:
@@ -867,6 +1047,42 @@ class Service:
         if outcome not in ("done", "extend", "adjust"):
             raise ApiError("validation", self._t("执行签到结果无效", "Invalid execution check-in outcome"), 422)
         event = self._get(Event, execution.event_id)
+        if execution.habit_occurrence_id is not None:
+            occ = self._get(HabitOccurrence, execution.habit_occurrence_id)
+            if (event.status not in OPEN or occ.event_id != event.id
+                    or event.start_utc != execution.started_at or event.end_utc != execution.expected_end_at):
+                raise ApiError("invalid_state", self._t("执行对应的日程已被修改，请刷新后处理", "The scheduled event for this session changed; refresh and retry"))
+            if outcome == "extend":
+                end = _utc(execution.expected_end_at) + timedelta(minutes=15)
+                if end <= self.now:
+                    raise ApiError("invalid_time", self._t("执行已超时，请调整或完成后重新开始", "Session is past due; wrap up or adjust and restart"))
+                config = self._availability()
+                if not allows(_utc(event.start_utc).astimezone(self.zone), end.astimezone(self.zone), config):
+                    raise ApiError("outside_availability", self._t("延长时间超出可用时段", "Extending exceeds your available window"))
+                actual_now = self.now
+                try:
+                    self.now = _utc(event.start_utc)
+                    self._slot(self.now, end, ignore=(event.id,), goal_block=False, habit_block=True)
+                finally:
+                    self.now = actual_now
+                execution.expected_end_at, event.end_utc = _naive(end), _naive(end)
+            else:
+                if self.now_naive < event.end_utc:
+                    event.end_utc = max(event.start_utc + timedelta(seconds=1), self.now_naive)
+                if outcome == "done":
+                    event.status, event.resolved_at = "done", self.now_naive
+                    occ.status, occ.completed_at = "done", self.now_naive
+                    execution.status = "completed"
+                else:
+                    event.status, event.resolved_at = "skipped", self.now_naive
+                    occ.event_id = None
+                    execution.status = "adjusted"
+                occ.revision += 1
+                execution.resolved_at = self.now_naive
+            execution.version += 1
+            self.session.flush()
+            return {"message": self._t(f"已更新习惯「{event.title}」的执行", f'Updated session for habit "{event.title}"'),
+                    "execution": self.serialize_execution(execution), "event": self.serialize_event(event)}
         step = self._get(Step, execution.step_id)
         goal = self._active_step(step)
         if (event.status not in OPEN or event.step_id != execution.step_id

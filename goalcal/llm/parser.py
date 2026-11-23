@@ -73,7 +73,7 @@ def reconcile_dates(action: Action, text: str, now: datetime) -> Action:
             if found and extract_time(phrase):
                 action.start = found[-1][1]
         return action
-    if action.intent not in {"add_event", "move_event", "create_goal"}:
+    if action.intent not in {"add_event", "move_event", "create_goal", "query_events"}:
         return action
     found = extract_dates(action.when_text or text, now)
     if action.intent == "create_goal":

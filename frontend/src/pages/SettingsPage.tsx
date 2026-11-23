@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { invalidateAfterWrite, queryKeys } from '../api/queryKeys';
-import type { Availability, FeedbackCategory, Goal, User } from '../api/types';
+import type { Availability, FeedbackCategory, Goal, Habit, User } from '../api/types';
 import { LogOutIcon } from '../components/Icons';
 import { Modal } from '../components/Modal';
 import { EmptyState, ErrorBanner, SkeletonCard } from '../components/StateFeedback';
@@ -10,6 +10,7 @@ import { WindowGroupEditor, validateWindowGroup } from '../components/TimePrefer
 import { type LangPreference, useI18n } from '../i18n';
 import { useIdempotentAction } from '../lib/useIdempotentMutation';
 import { useAppState } from '../state/AppStateContext';
+import { type ThemePreference, useTheme } from '../theme';
 
 const MAX_ICS_BYTES = 5 * 1024 * 1024;
 
@@ -31,6 +32,7 @@ export function SettingsPage({ user }: { user: User | undefined }) {
   const queryClient = useQueryClient();
   const { recordMutationResult } = useAppState();
   const { pref, setPreference, t } = useI18n();
+  const { pref: themePref, setPreference: setThemePreference } = useTheme();
   const [section, setSection] = useState<SettingsSectionId>('account');
 
   const availabilityQuery = useQuery({
@@ -49,7 +51,14 @@ export function SettingsPage({ user }: { user: User | undefined }) {
     enabled: section === 'archived',
   });
 
+  const archivedHabitsQuery = useQuery({
+    queryKey: queryKeys.habits,
+    queryFn: api.getHabits,
+    enabled: section === 'archived',
+  });
+
   const [confirmDeleteArchivedGoal, setConfirmDeleteArchivedGoal] = useState<Goal | null>(null);
+  const [confirmDeleteArchivedHabit, setConfirmDeleteArchivedHabit] = useState<Habit | null>(null);
 
   const [draftAvail, setDraftAvail] = useState<Availability | null>(null);
   const [dirty, setDirty] = useState(false);
@@ -77,6 +86,22 @@ export function SettingsPage({ user }: { user: User | undefined }) {
   const handleLanguageChange = (nextPref: LangPreference) => {
     setPreference(nextPref);
     void saveLangAction.run(nextPref === 'auto' ? '' : nextPref);
+  };
+
+  const saveThemeFn = useCallback(
+    async (themeChoice: '' | 'light' | 'dark', key: string) => api.updateMe({ theme: themeChoice }, key),
+    [],
+  );
+
+  const saveThemeAction = useIdempotentAction(saveThemeFn, {
+    onSuccess: (updatedUser) => {
+      queryClient.setQueryData(queryKeys.me, updatedUser);
+    },
+  });
+
+  const handleThemeChange = (nextPref: ThemePreference) => {
+    setThemePreference(nextPref);
+    void saveThemeAction.run(nextPref === 'auto' ? '' : nextPref);
   };
 
   const saveFn = useCallback(
@@ -154,6 +179,45 @@ export function SettingsPage({ user }: { user: User | undefined }) {
     onError: async (err, args) => {
       if (err.status === 409) {
         await invalidateAfterWrite(queryClient, { goalId: args.id });
+      }
+    },
+  });
+
+  const restoreHabitFn = useCallback(
+    async (args: { id: number; version: string }, key: string) =>
+      api.changeHabitStatus(args.id, { version: args.version, status: 'active' }, key),
+    [],
+  );
+
+  const restoreHabitAction = useIdempotentAction(restoreHabitFn, {
+    onSuccess: async (res) => {
+      recordMutationResult(res);
+      await invalidateAfterWrite(queryClient);
+    },
+    onError: async (err) => {
+      if (err.status === 409) {
+        await invalidateAfterWrite(queryClient);
+      }
+    },
+  });
+
+  const deleteArchivedHabitFn = useCallback(
+    async (args: { id: number; version: string }, key: string) =>
+      api.deleteHabit(args.id, { version: args.version }, key),
+    [],
+  );
+
+  const deleteArchivedHabitAction = useIdempotentAction(deleteArchivedHabitFn, {
+    onSuccess: async (res, args) => {
+      recordMutationResult(res);
+      setConfirmDeleteArchivedHabit(null);
+      queryClient.removeQueries({ queryKey: queryKeys.habit(args.id) });
+      await invalidateAfterWrite(queryClient);
+    },
+    onError: async (err) => {
+      if (err.status === 409 || err.status === 404) {
+        setConfirmDeleteArchivedHabit(null);
+        await invalidateAfterWrite(queryClient);
       }
     },
   });
@@ -268,7 +332,12 @@ export function SettingsPage({ user }: { user: User | undefined }) {
   const recoveryRate = metrics?.recovery_rate_72h ?? metrics?.recovery_72h ?? null;
   const progressRate = metrics?.progress_rate ?? metrics?.progress ?? null;
   const archivedGoals = (archivedGoalsQuery.data?.goals ?? []).filter((g) => g.status === 'archived');
-  const isArchivedBusy = restoreGoalAction.isPending || deleteArchivedGoalAction.isPending;
+  const archivedHabits = (archivedHabitsQuery.data?.habits ?? []).filter((h) => h.status === 'archived');
+  const isArchivedBusy =
+    restoreGoalAction.isPending ||
+    restoreHabitAction.isPending ||
+    deleteArchivedGoalAction.isPending ||
+    deleteArchivedHabitAction.isPending;
 
   return (
     <div className="settings-wrap">
@@ -285,7 +354,7 @@ export function SettingsPage({ user }: { user: User | undefined }) {
           {[
             { id: 'account' as const, label: t('通用与账号', 'General & Account') },
             { id: 'schedule' as const, label: t('时间偏好', 'Time Preferences') },
-            { id: 'archived' as const, label: t('已归档目标', 'Archived goals') },
+            { id: 'archived' as const, label: t('已归档', 'Archived') },
             { id: 'import' as const, label: t('日历导入', 'Calendar Import') },
             { id: 'metrics' as const, label: t('指标与反馈', 'Metrics & Feedback') },
           ].map((tab) => (
@@ -305,7 +374,7 @@ export function SettingsPage({ user }: { user: User | undefined }) {
           {section === 'account' ? (
             <section className="settings-section" aria-label={t('通用与账号', 'General & Account')}>
               <div className="settings-section-title">{t('通用与账号', 'General & Account')}</div>
-              <ErrorBanner error={saveLangAction.actionError} />
+              <ErrorBanner error={saveLangAction.actionError ?? saveThemeAction.actionError} />
               <div className="card-flat settings-card">
                 <div className="setting-row">
                   <div className="setting-name">{t('账号', 'Account')}</div>
@@ -340,6 +409,24 @@ export function SettingsPage({ user }: { user: User | undefined }) {
                       <option value="auto">{t('跟随系统', 'Follow system')}</option>
                       <option value="zh">简体中文</option>
                       <option value="en">English</option>
+                    </select>
+                  </div>
+                </div>
+                <div className="setting-row">
+                  <label className="setting-name" htmlFor="setting-theme-select">
+                    {t('外观', 'Appearance')}
+                  </label>
+                  <div className="setting-control">
+                    <select
+                      id="setting-theme-select"
+                      className="select"
+                      value={themePref}
+                      disabled={saveThemeAction.isPending}
+                      onChange={(e) => handleThemeChange(e.target.value as ThemePreference)}
+                    >
+                      <option value="auto">{t('跟随系统', 'Follow system')}</option>
+                      <option value="light">{t('浅色', 'Light')}</option>
+                      <option value="dark">{t('深色', 'Dark')}</option>
                     </select>
                   </div>
                 </div>
@@ -502,9 +589,15 @@ export function SettingsPage({ user }: { user: User | undefined }) {
           ) : null}
 
           {section === 'archived' ? (
-            <section className="settings-section" aria-label={t('已归档目标', 'Archived goals')}>
+            <section className="settings-section" aria-label={t('已归档', 'Archived')}>
               <div className="settings-section-title">{t('已归档目标', 'Archived goals')}</div>
-              <ErrorBanner error={restoreGoalAction.actionError ?? deleteArchivedGoalAction.actionError} />
+              <ErrorBanner
+                error={
+                  restoreGoalAction.actionError ??
+                  restoreHabitAction.actionError ??
+                  deleteArchivedGoalAction.actionError
+                }
+              />
               {archivedGoalsQuery.isLoading ? (
                 <SkeletonCard label={t('加载中', 'Loading')} />
               ) : archivedGoalsQuery.isError ? (
@@ -552,6 +645,62 @@ export function SettingsPage({ user }: { user: User | undefined }) {
                       </div>
                     );
                   })}
+                </div>
+              )}
+
+              <div className="settings-section-title" style={{ marginTop: 28 }}>
+                {t('已归档习惯', 'Archived habits')}
+              </div>
+              {archivedHabitsQuery.isLoading ? (
+                <SkeletonCard label={t('加载中', 'Loading')} />
+              ) : archivedHabitsQuery.isError ? (
+                <ErrorBanner
+                  error={archivedHabitsQuery.error}
+                  onRetry={() => void archivedHabitsQuery.refetch()}
+                />
+              ) : archivedHabits.length === 0 ? (
+                <EmptyState title={t('暂无已归档习惯', 'No archived habits')} />
+              ) : (
+                <div className="card-flat settings-card">
+                  {archivedHabits.map((habit) => (
+                    <div key={habit.id} className="setting-row">
+                      <div style={{ minWidth: 0 }}>
+                        <div className="setting-name">{habit.rule.title}</div>
+                        <div className="setting-desc">
+                          {habit.rule.mode === 'weekly'
+                            ? t(`每周 ${habit.rule.weekly_target} 次`, `${habit.rule.weekly_target} times per week`)
+                            : habit.rule.weekdays.length === 7
+                              ? t('每天', 'Every day')
+                              : t(`每周 ${habit.rule.weekdays.length} 天`, `${habit.rule.weekdays.length} days per week`)}
+                          {' · '}
+                          {habit.rule.est_min} {t('分钟', 'min')}
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+                        <button
+                          type="button"
+                          className="btn small"
+                          disabled={isArchivedBusy}
+                          onClick={() =>
+                            void restoreHabitAction.run({
+                              id: habit.id,
+                              version: habit.version,
+                            })
+                          }
+                        >
+                          {t('恢复', 'Restore')}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn small danger"
+                          disabled={isArchivedBusy}
+                          onClick={() => setConfirmDeleteArchivedHabit(habit)}
+                        >
+                          {t('删除', 'Delete')}
+                        </button>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               )}
             </section>
@@ -724,6 +873,46 @@ export function SettingsPage({ user }: { user: User | undefined }) {
               }
             >
               {deleteArchivedGoalAction.isPending ? t('删除中…', 'Deleting…') : t('确认删除', 'Confirm delete')}
+            </button>
+          </div>
+        </Modal>
+      ) : null}
+
+      {confirmDeleteArchivedHabit ? (
+        <Modal
+          title={t('确认删除习惯', 'Delete habit')}
+          onClose={() => {
+            if (!deleteArchivedHabitAction.isPending) setConfirmDeleteArchivedHabit(null);
+          }}
+        >
+          <p className="muted" style={{ fontSize: 13, lineHeight: 1.6, marginTop: 0 }}>
+            {t(
+              `删除「${confirmDeleteArchivedHabit.rule.title}」及其全部记录和关联日程？此操作不可撤销。`,
+              `Delete "${confirmDeleteArchivedHabit.rule.title}" and all its records and scheduled sessions? This cannot be undone.`,
+            )}
+          </p>
+          <ErrorBanner error={deleteArchivedHabitAction.actionError} />
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
+            <button
+              type="button"
+              className="btn"
+              disabled={deleteArchivedHabitAction.isPending}
+              onClick={() => setConfirmDeleteArchivedHabit(null)}
+            >
+              {t('取消', 'Cancel')}
+            </button>
+            <button
+              type="button"
+              className="btn danger"
+              disabled={deleteArchivedHabitAction.isPending}
+              onClick={() =>
+                void deleteArchivedHabitAction.run({
+                  id: confirmDeleteArchivedHabit.id,
+                  version: confirmDeleteArchivedHabit.version,
+                })
+              }
+            >
+              {deleteArchivedHabitAction.isPending ? t('删除中…', 'Deleting…') : t('确认删除', 'Confirm delete')}
             </button>
           </div>
         </Modal>

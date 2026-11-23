@@ -597,10 +597,10 @@ describe('GoalCal critical interactions', () => {
     await screen.findByRole('heading', { name: '目标' });
     expect(screen.queryByText('你的长期方向')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '已归档' })).not.toBeInTheDocument();
-    // Goals detail omits Rename/Pause/Delete toolbar buttons and allows clicking title to edit inline
+    // Goals detail keeps Pause and Archive toolbar buttons and allows clicking title to edit inline
     expect(await screen.findByRole('button', { name: '归档' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '暂停' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '改标题' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: '暂停' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '删除' })).not.toBeInTheDocument();
     await user.click(within(screen.getByRole('heading', { level: 2 })).getByRole('button'));
     expect(screen.getByLabelText('目标标题')).toHaveValue('学会做播客');
@@ -638,8 +638,8 @@ describe('GoalCal critical interactions', () => {
     expect(screen.getByText('设置已保存', { selector: '.undo-toast span' })).toBeVisible();
     expect(screen.queryByText('已保存', { selector: '.status-banner-body' })).not.toBeInTheDocument();
 
-    // Archived goals live cleanly inside Settings tab and support restore
-    await user.click(screen.getByRole('button', { name: '已归档目标' }));
+    // Archived goals & habits live cleanly inside Settings tab and support restore
+    await user.click(screen.getByRole('button', { name: '已归档' }));
     expect(await screen.findByText('旧版阅读计划')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: '恢复' }));
     expect(screen.getByText('「旧版阅读计划」已恢复至目标', { selector: '.undo-toast span' })).toBeVisible();

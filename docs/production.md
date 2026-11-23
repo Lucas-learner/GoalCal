@@ -1,6 +1,6 @@
 # GoalCal Web 生产维护手册
 
-更新：2026-11-17。正式入口 https://goalcal.zhang.sarl，唯一代码目录 `/Users/macmini/projects/GoalCal`。旧版 ngrok 和 `local.goalcal.*` 已退役；历史文档不再作为操作手册。
+更新：2026-11-22。正式入口 https://goalcal.zhang.sarl。源码工作区为 `/Users/macmini/projects/GoalCal`，应用与备份任务从已验证的发布目录启动。旧版 ngrok 和 `local.goalcal.*` 已退役。
 
 ## 实例与路径
 
@@ -9,9 +9,9 @@
 | 网关 | `127.0.0.1:8521`，Starlette/Uvicorn，同进程 API + React 静态文件 |
 | 公网 | Cloudflare Tunnel，指定域名转发 8521；其他域名 404 |
 | 环境文件 | 仓库根目录 `.env.production`，权限 600 |
-| 数据库 | `var/production/goalcal.db`，schema 8，SQLite WAL |
+| 数据库 | `var/production/goalcal.db`，schema 11，SQLite WAL |
 | 日志 / 备份 | `var/production/logs/` / `var/production/backups/` |
-| 静态构建 | `frontend/dist/`，由锁定依赖构建，不提交 Git |
+| 当前发布 | `var/releases/habits-v11-assistant-20261123/`，包含源码、`frontend/dist/` 和 `SHA256SUMS` |
 | 后台服务 | `local.goalcal-v2.app`、`.tunnel`、`.backup` |
 | 健康检查 | `http://127.0.0.1:8521/_goalcal/health` |
 
@@ -52,6 +52,10 @@ cloudflared tunnel --config "$PWD/deploy/generated/cloudflared.yml" ingress vali
 
 应用/隧道异常自动重启；备份登录加载时和每天 03:15 运行，保留 14 天 daily 备份。用户退出 macOS、断电、断网仍会影响可用性。隧道只绑定网关的 loopback 端口。
 
+Cloudflare 隧道监督器每 30 秒读取本机 `127.0.0.1:20241/metrics` 的可用连接数（显式固定 metrics 端口，仅 loopback，不经过系统代理）。连续 180 秒没有可用连接，或探测接口持续失败时，先停止隧道子进程，再退出交由 launchd KeepAlive 重启。首次探测在启动 30 秒后执行，因此冷启动最早约 210 秒才会触发重启；每次重启都有完整宽限期，避免网络未恢复时频繁重启。任一次连接恢复即清零故障计时；部分连接断开但仍有可用连接时不重启。
+
+维护事件写入滚动日志 `var/production/logs/application.log`，搜索 `tunnel_watchdog_` 可查看启动、断线、恢复和自动重启记录。隧道原始输出仍在 `tunnel.log`。此监测处理本机隧道断线，不能在主机关机、退出登录或网络完全中断时保持公网服务，也不替代外部可用性监控。更新监督器代码后执行 `launchctl kickstart -k "gui/$(id -u)/local.goalcal-v2.tunnel"` 即可启用，无需修改 plist 或重启应用。
+
 ## 日常命令
 
 ```sh
@@ -70,12 +74,14 @@ curl -fsS http://127.0.0.1:8521/_goalcal/health
 
 ## 发布与回滚
 
-1. 确认提交、`make test`、`make e2e` 通过；避免在运行中的生产目录直接进行未经验证的编辑。
-2. 记录当前提交和环境配置，在线备份数据库，保留旧构建；构建到独立目录并检查后再替换产物。
-3. 停止应用 `launchctl bootout gui/$(id -u)/local.goalcal-v2.app`，安装已验证源码/构建；需要 schema 更新时执行迁移并保留 pre-migration 备份。
-4. 使用 `launchctl bootstrap gui/$(id -u) "$HOME/Library/LaunchAgents/local.goalcal-v2.app.plist"` 启动；检查健康、公开登录页及核心业务。只改应用无需重启隧道。
-5. 同 schema 回滚使用对应提交/构建并保留当前库；schema 升级后的回滚需要兼容程序或停服恢复对应备份。V1 schema 6 程序不能读取当前 v8 库。
+1. 根据应用 LaunchAgent 的 `WorkingDirectory` 核对实际运行版本。盘点线上和工作区已经可用的功能，将发布范围与线上版本比较，再构建独立目录并在其中运行 `make test`、`make e2e`。
+2. 记录基础提交与产物校验值，在线备份数据库，保留上个版本的源码和构建。涉及 schema 升级时先在备份副本演练。发布旧版本前核对代码与正式库的 schema，避免通过旧代码触发误迁移。
+3. 停止应用与定时备份任务，保存最终切换备份。完成迁移后，将应用与备份 LaunchAgent 的 `WorkingDirectory` 都指向新发布目录。
+4. 重新加载原标签，检查本机及公网健康、登录页和相关 API。生产环境文件与 Cloudflare 隧道沿用现有配置。
+5. 同 schema 回滚使用相应发布目录并保留当前库。跨 schema 回滚需停服并恢复相应备份或使用兼容程序。
 
 恢复命令需要停服：`.venv/bin/python -m goalcal.admin restore /绝对路径/备份.db --app-stopped`。恢复会撤销登录会话；备份之后的数据需另行恢复，不能声称回滚无损保留所有新写入。
 
-本次归并的快照、旧数据与旧配置位置见 [整合记录](consolidation-2026-11-17.md)。旧数据只归档，不合并进正式新版库。
+当前发布加入习惯的本周节奏、新建预览和助手预填草稿。切换前的在线备份路径记录在 `var/releases/habits-v9-rhythm-20261122/ONLINE_BACKUP`，同 schema 回滚包为 `var/releases/habits-v9-ui-20261122/`。恢复 v8 所需源码与构建保存在 `var/releases/rollback-3b022e1-v8/`，升级前最终备份路径记录在 `var/releases/habits-v9-20261122/CUTOVER_BACKUP`。
+
+本次归并的快照、旧数据与旧配置位置见 [整合记录](records/consolidation-2026-11-17.md)。旧数据只归档，不合并进正式新版库。

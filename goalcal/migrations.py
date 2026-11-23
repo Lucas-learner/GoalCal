@@ -4,7 +4,7 @@ from .models import Base
 from .web import models as _web_models
 from .web import transport_models as _transport_models
 
-VERSION = 8
+VERSION = 11
 
 
 def migrate(engine):
@@ -60,6 +60,36 @@ def migrate(engine):
             con.exec_driver_sql('CREATE UNIQUE INDEX IF NOT EXISTS ix_goals_draft_id ON goals(draft_id)')
             if 'pinned' not in goal_columns:
                 con.exec_driver_sql('ALTER TABLE goals ADD COLUMN pinned BOOLEAN NOT NULL DEFAULT 0')
+            exec_columns = {r[1]: r for r in con.exec_driver_sql('PRAGMA table_info(web_executions)')}
+            if exec_columns and ('habit_occurrence_id' not in exec_columns or exec_columns['step_id'][3]):
+                con.exec_driver_sql('ALTER TABLE web_executions RENAME TO web_executions_old')
+                con.exec_driver_sql(
+                    'CREATE TABLE web_executions ('
+                    'id VARCHAR(32) NOT NULL PRIMARY KEY, '
+                    'user_id INTEGER NOT NULL REFERENCES users(id), '
+                    'event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE, '
+                    'step_id INTEGER REFERENCES steps(id) ON DELETE CASCADE, '
+                    'habit_occurrence_id VARCHAR(40) REFERENCES habit_occurrences(id) ON DELETE CASCADE, '
+                    'status VARCHAR(20) NOT NULL, '
+                    'started_at DATETIME NOT NULL, '
+                    'expected_end_at DATETIME NOT NULL, '
+                    'resolved_at DATETIME, '
+                    'version INTEGER NOT NULL)'
+                )
+                con.exec_driver_sql('CREATE INDEX IF NOT EXISTS ix_web_executions_user_id ON web_executions(user_id)')
+                con.exec_driver_sql('CREATE INDEX IF NOT EXISTS ix_web_executions_event_id ON web_executions(event_id)')
+                con.exec_driver_sql('CREATE INDEX IF NOT EXISTS ix_web_executions_step_id ON web_executions(step_id)')
+                con.exec_driver_sql('CREATE INDEX IF NOT EXISTS ix_web_executions_habit_occurrence_id ON web_executions(habit_occurrence_id)')
+                con.exec_driver_sql(
+                    'INSERT INTO web_executions '
+                    '(id, user_id, event_id, step_id, habit_occurrence_id, status, started_at, expected_end_at, resolved_at, version) '
+                    'SELECT id, user_id, event_id, step_id, NULL, status, started_at, expected_end_at, resolved_at, version '
+                    'FROM web_executions_old'
+                )
+                con.exec_driver_sql('DROP TABLE web_executions_old')
+            habit_columns = {r[1] for r in con.exec_driver_sql('PRAGMA table_info(habits)')}
+            if habit_columns and 'pinned' not in habit_columns:
+                con.exec_driver_sql('ALTER TABLE habits ADD COLUMN pinned BOOLEAN NOT NULL DEFAULT 0')
             if con.exec_driver_sql('PRAGMA foreign_key_check').first():
                 raise RuntimeError('Database has invalid foreign keys; repair the development copy before import')
             con.exec_driver_sql(f'PRAGMA user_version={VERSION}')

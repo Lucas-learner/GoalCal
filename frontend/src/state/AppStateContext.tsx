@@ -2,6 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useRef, useSt
 import { setUnauthorizedHandler } from '../api/client';
 import type { CreateGoalIntent, Proposal } from '../api/types';
 import { I18nProvider, getActiveLang, pickText } from '../i18n';
+import { ThemeProvider } from '../theme';
 
 export interface UndoEntry {
   key: number;
@@ -21,8 +22,10 @@ interface AppStateContextValue {
   dismissUndo: () => void;
 
   assistantOpen: boolean;
-  openAssistant: (trigger?: HTMLElement | null) => void;
+  openAssistant: (trigger?: HTMLElement | null, opts?: { prompt?: string }) => void;
   closeAssistant: () => void;
+  pendingAssistantPrompt: string | null;
+  clearPendingAssistantPrompt: () => void;
 
   pageGoalId: number | undefined;
   setPageGoalId: (id: number | undefined) => void;
@@ -44,6 +47,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [authExpired, setAuthExpired] = useState(false);
   const [undoEntry, setUndoEntry] = useState<UndoEntry | null>(null);
   const [assistantOpen, setAssistantOpen] = useState(false);
+  const [pendingAssistantPrompt, setPendingAssistantPrompt] = useState<string | null>(null);
   const [pageGoalId, setPageGoalId] = useState<number | undefined>(undefined);
   const [activeProposal, setActiveProposal] = useState<Proposal | null>(null);
   const [prefillNewGoal, setPrefillNewGoal] = useState<CreateGoalIntent | null>(null);
@@ -102,13 +106,20 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     setUndoEntry(null);
   }, []);
 
-  const openAssistant = useCallback((trigger?: HTMLElement | null) => {
+  const openAssistant = useCallback((trigger?: HTMLElement | null, opts?: { prompt?: string }) => {
     if (trigger) {
       assistantTriggerRef.current = trigger;
     } else if (document.activeElement instanceof HTMLElement) {
       assistantTriggerRef.current = document.activeElement;
     }
+    if (opts?.prompt) {
+      setPendingAssistantPrompt(opts.prompt);
+    }
     setAssistantOpen(true);
+  }, []);
+
+  const clearPendingAssistantPrompt = useCallback(() => {
+    setPendingAssistantPrompt(null);
   }, []);
 
   const closeAssistant = useCallback(() => {
@@ -129,31 +140,35 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <I18nProvider>
-      <AppStateContext.Provider
-        value={{
-          authExpired,
-          clearAuthExpired,
-          markAuthExpired,
-          undoEntry,
-          recordMutationResult,
-          markUndoCompleted,
-          dismissUndo,
-          assistantOpen,
-          openAssistant,
-          closeAssistant,
-          pageGoalId,
-          setPageGoalId,
-          activeProposal,
-          openProposalModal,
-          closeProposalModal,
-          prefillNewGoal,
-          setPrefillNewGoal,
-          statusAnnouncement,
-          announceStatus,
-        }}
-      >
-        {children}
-      </AppStateContext.Provider>
+      <ThemeProvider>
+        <AppStateContext.Provider
+          value={{
+            authExpired,
+            clearAuthExpired,
+            markAuthExpired,
+            undoEntry,
+            recordMutationResult,
+            markUndoCompleted,
+            dismissUndo,
+            assistantOpen,
+            openAssistant,
+            closeAssistant,
+            pendingAssistantPrompt,
+            clearPendingAssistantPrompt,
+            pageGoalId,
+            setPageGoalId,
+            activeProposal,
+            openProposalModal,
+            closeProposalModal,
+            prefillNewGoal,
+            setPrefillNewGoal,
+            statusAnnouncement,
+            announceStatus,
+          }}
+        >
+          {children}
+        </AppStateContext.Provider>
+      </ThemeProvider>
     </I18nProvider>
   );
 }

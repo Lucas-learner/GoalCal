@@ -11,6 +11,44 @@ class Version(Input):
     version: str = Field(min_length=1, max_length=128)
 
 
+class HabitInput(Input):
+    title: str = Field(min_length=1, max_length=200)
+    mode: Literal['fixed', 'weekly']
+    est_min: int = Field(ge=5, le=480)
+    weekdays: list[int] = Field(default_factory=list, max_length=7)
+    start_time: str | None = Field(default=None, max_length=5)
+    weekly_target: int | None = Field(default=None, ge=1, le=7)
+    goal_id: int | None = None
+
+
+class CreateHabit(HabitInput):
+    start_date: str = Field(min_length=10, max_length=10)
+
+
+class HabitPreview(HabitInput):
+    start_date: str = Field(min_length=10, max_length=10)
+    habit_id: int | None = None
+
+
+class UpdateHabit(HabitInput, Version):
+    effective_date: str | None = Field(default=None, min_length=10, max_length=10)
+
+
+class HabitStatus(Version):
+    status: Literal['active', 'paused', 'archived'] | None = None
+    pinned: bool | None = None
+
+
+class HabitAction(Input):
+    date: str = Field(min_length=10, max_length=10)
+    action: Literal['schedule', 'done', 'skip', 'cancel', 'restore', 'start']
+    version: str | None = Field(default=None, max_length=128)
+    habit_version: str | None = Field(default=None, max_length=128)
+    target_date: str | None = Field(default=None, min_length=10, max_length=10)
+    start: str | None = Field(default=None, max_length=64)
+    minutes: int | None = Field(default=None, ge=5, le=480)
+
+
 class IntakeInput(Input):
     description: str = Field(min_length=1, max_length=2000)
     deadline: str | None = Field(default=None, min_length=10, max_length=10)
@@ -45,6 +83,13 @@ class GoalEdit(Version):
     title: str | None = Field(default=None, min_length=1, max_length=200)
     status: Literal['active','paused','archived','done'] | None = None
     pinned: bool | None = None
+    deadline: str | None = Field(default=None, max_length=10)
+
+
+class ReplanGoal(Version):
+    steps: list[StepDefinition] | None = Field(default=None, min_length=1, max_length=40)
+    outline: list[str] | None = Field(default=None, max_length=20)
+    deadline: str | None = Field(default=None, max_length=10)
 
 
 class StepEdit(Version):
@@ -111,7 +156,8 @@ class ImportCalendar(Input):
 
 
 class UpdateMe(Input):
-    lang: Literal['', 'zh', 'en']
+    lang: Literal['', 'zh', 'en'] | None = None
+    theme: Literal['', 'light', 'dark'] | None = None
 
 
 class SubmitFeedback(Input):

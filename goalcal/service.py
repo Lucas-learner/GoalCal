@@ -12,6 +12,7 @@ from .config import ROOT
 from .db import init_db
 from .storage import database_path, backup
 from .logging_setup import configure_logging
+from .tunnel_watchdog import METRICS_ADDRESS, TunnelWatchdog
 
 
 def main():
@@ -58,7 +59,8 @@ def main():
     else:
         if not args.cloudflared or not args.config:
             parser.error('Cloudflare requires --cloudflared and --config')
-        commands = [('tunnel', [args.cloudflared, 'tunnel', '--config', args.config, 'run'])]
+        commands = [('tunnel', [args.cloudflared, 'tunnel', '--config', args.config,
+                                '--metrics', METRICS_ADDRESS, 'run'])]
     path = database_path().parent / 'logs' / f'{args.service}.log'
     handler = RotatingFileHandler(path, maxBytes=2_000_000, backupCount=5)
     log = logging.getLogger('service_output'); log.addHandler(handler); log.setLevel(logging.INFO)
@@ -86,9 +88,15 @@ def main():
                for name, child in children]
     for thread in threads:
         thread.start()
+    watchdog = (TunnelWatchdog(logging.getLogger('goalcal.maintenance'))
+                if args.service == 'tunnel' and args.provider == 'cloudflare' else None)
     failed = False
     try:
         while not stopping and all(child.poll() is None for _, child in children):
+            if watchdog and watchdog.restart_required():
+                # Exit nonzero after cleaning up the child. launchd KeepAlive
+                # starts a fresh supervisor; each attempt gets a full grace period.
+                break
             time.sleep(0.25)
         failed = not stopping
     finally:

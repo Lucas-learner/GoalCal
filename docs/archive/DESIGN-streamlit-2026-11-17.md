@@ -1,3 +1,5 @@
+> 历史资料：保留当时记录，命令、路径、功能和待办不代表当前版本。当前资料见 [文档索引](../README.md)。
+
 # Design
 
 GoalCal 的视觉基调：暖、安静、克制。界面退到内容后面，对话是主角。
@@ -93,7 +95,7 @@ Start a new goal
 
 ## 待办与演进方向（Backlog）
 
-- **界面与体验优化（待实施）**：详见 [ui-ux-optimization-2026-11-16.md](ui-ux-optimization-2026-11-16.md)，包含 Chat 候选理由展示与提案历史态留痕、Goals `StepStrip` 进度块与版宽收紧（860–960px）、Calendar 弹窗就地完成/改期与图例、Settings 时段控件化、以及重复事件系列（`EventSeries` / `SeriesScope`）。
+- **界面与体验优化（待实施）**：详见 [ui-ux-optimization-2026-11-16.md](ui-ux-optimization-2026-11-16-streamlit-2026-11-17.md)，包含 Chat 候选理由展示与提案历史态留痕、Goals `StepStrip` 进度块与版宽收紧（860–960px）、Calendar 弹窗就地完成/改期与图例、Settings 时段控件化、以及重复事件系列（`EventSeries` / `SeriesScope`）。
 - **习惯（重复任务）与 Today 视角（暂留待办）**：
   - 定义上与 `Goal`（终局导向）区分，作为周期性节律实体独立建模；
   - **仅采纳需要消耗时间与精力的习惯**（具备时长 `est_min > 0` 与精力/类型属性，排入真实时间块，不引入喝水吃药类零时长纯打卡）；

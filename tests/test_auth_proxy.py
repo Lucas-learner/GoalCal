@@ -311,3 +311,83 @@ def test_auth_pages_follow_accept_language_and_cookie_override():
                 assert me["lang"] == "en"
 
     asyncio.run(scenario())
+
+
+def test_auth_pages_support_theme_cookie_and_system_dark_mode():
+    async def scenario():
+        transport = httpx2.ASGITransport(app=app)
+        async with httpx2.AsyncClient(transport=transport, base_url="https://goalcal.example") as client:
+            auto_page = await client.get("/", headers={"Accept": "text/html"})
+            assert auto_page.status_code == 200
+            assert "prefers-color-scheme:dark" in auto_page.text
+            assert '<html lang="en">' in auto_page.text
+
+            dark_page = await client.get("/", headers={"Accept": "text/html"}, cookies={"goalcal_theme": "dark"})
+            assert dark_page.status_code == 200
+            assert '<html lang="en" data-theme="dark">' in dark_page.text
+
+            light_page = await client.get("/", headers={"Accept": "text/html"}, cookies={"goalcal_theme": "light"})
+            assert light_page.status_code == 200
+            assert '<html lang="en" data-theme="light">' in light_page.text
+
+    asyncio.run(scenario())
+
+
+def test_login_reuses_form_cookie_across_tabs_and_recovers_from_missing_cookie(monkeypatch):
+    monkeypatch.setenv("GOALCAL_ROOT_APP", "1")
+    name = _account()
+
+    async def scenario():
+        transport = httpx2.ASGITransport(app=app)
+        async with httpx2.AsyncClient(transport=transport, base_url="https://goalcal.example") as client:
+            tab1 = await client.get("/_goalcal/login", headers={"Accept": "text/html"})
+            assert tab1.status_code == 200
+            form_cookie = tab1.headers["set-cookie"]
+            assert "SameSite=lax" in form_cookie
+            assert f"Max-Age={auth_proxy.FORM_COOKIE_SECONDS}" in form_cookie
+            tab1_csrf = _csrf(tab1)
+
+            # Opening a second login or register tab must not invalidate tab1's CSRF token.
+            tab2 = await client.get("/_goalcal/login?next=/app/", headers={"Accept": "text/html"})
+            reg_tab = await client.get("/_goalcal/register?next=/app/", headers={"Accept": "text/html"})
+            assert _csrf(tab2) == tab1_csrf
+            assert _csrf(reg_tab) == tab1_csrf
+
+            # Missing/expired form cookie on same-origin POST renders a recoverable login form instead of plain-text 403.
+            client.cookies.delete(auth_proxy.FORM_COOKIE_NAME)
+            expired = await client.post(
+                "/_goalcal/login",
+                data={"username": name, "password": "test-password-long", "csrf": tab1_csrf},
+                headers={"Origin": "https://goalcal.example"},
+                follow_redirects=False,
+            )
+            assert expired.status_code == 403
+            assert "action=\"/_goalcal/login\"" in expired.text
+            assert "Form session expired. Please try again." in expired.text
+            assert client.cookies.get(COOKIE_NAME) is None
+
+            # Resubmitting from the refreshed page succeeds and redirects to the app.
+            retried = await client.post(
+                "/_goalcal/login",
+                data={"username": name, "password": "test-password-long", "csrf": _csrf(expired)},
+                headers={"Origin": "https://goalcal.example"},
+                follow_redirects=False,
+            )
+            assert retried.status_code == 303
+            assert retried.headers["location"] == "/app/"
+            assert auth.authenticate(client.cookies.get(COOKIE_NAME)).username == name
+
+            # Tab1's original CSRF token also remains valid while the browser keeps its form cookie.
+            client.cookies.delete(COOKIE_NAME)
+            tab1_relogin = await client.get("/_goalcal/login", headers={"Accept": "text/html"})
+            await client.get("/_goalcal/register", headers={"Accept": "text/html"})
+            tab1_submit = await client.post(
+                "/_goalcal/login",
+                data={"username": name, "password": "test-password-long", "csrf": _csrf(tab1_relogin)},
+                headers={"Origin": "https://goalcal.example"},
+                follow_redirects=False,
+            )
+            assert tab1_submit.status_code == 303
+            assert tab1_submit.headers["location"] == "/app/"
+
+    asyncio.run(scenario())

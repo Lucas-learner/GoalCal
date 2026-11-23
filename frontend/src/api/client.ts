@@ -8,6 +8,13 @@ import type {
   DraftStep,
   Goal,
   GoalsListResponse,
+  Habit,
+  HabitActionBody,
+  HabitDetail,
+  HabitOccurrence,
+  HabitPreview,
+  HabitRule,
+  HabitStatus,
   IcsImportResponse,
   MetricsResponse,
   MutationResult,
@@ -227,13 +234,42 @@ export async function apiWrite<T>(
   });
 }
 
-// Endpoint bindings matching docs/iteration/CONTRACT.md
+// Endpoint bindings matching docs/接口契约.md and goalcal/web/http.py
 
 export const api = {
   getMe: () => apiGet<User>('/me'),
-  updateMe: (body: { lang: '' | 'zh' | 'en' }, idempotencyKey?: string) =>
+  updateMe: (body: { lang?: '' | 'zh' | 'en'; theme?: '' | 'light' | 'dark' }, idempotencyKey?: string) =>
     apiWrite<User>('/me', 'PATCH', body, { idempotencyKey }),
   getToday: () => apiGet<TodayResponse>('/today'),
+  getHabits: () => apiGet<{ habits: Habit[] }>('/habits'),
+  getHabit: (id: number, through?: string) =>
+    apiGet<HabitDetail>(through ? `/habits/${id}?through=${encodeURIComponent(through)}` : `/habits/${id}`),
+  getHabitDay: (id: number, date: string) =>
+    apiGet<{ occurrence: HabitOccurrence | null }>(`/habits/${id}?date=${encodeURIComponent(date)}`),
+  getHabitSlots: (
+    id: number,
+    params: { start_date: string; end_date: string; period?: 'all' | 'morning' | 'afternoon' | 'evening'; ignore_date?: string },
+  ) => {
+    const search = new URLSearchParams({
+      start_date: params.start_date,
+      end_date: params.end_date,
+    });
+    if (params.period && params.period !== 'all') search.set('period', params.period);
+    if (params.ignore_date) search.set('ignore_date', params.ignore_date);
+    return apiGet<{ candidates: import('./types').HabitSlotCandidate[] }>(`/habits/${id}/slots?${search.toString()}`);
+  },
+  previewHabit: (body: HabitRule & { start_date: string; goal_id: number | null; habit_id?: number }, idempotencyKey: string) =>
+    apiWrite<HabitPreview>('/habits/preview', 'POST', body, { idempotencyKey }),
+  createHabit: (body: HabitRule & { start_date: string; goal_id: number | null }, idempotencyKey: string) =>
+    apiWrite<MutationResult & { habit: Habit }>('/habits', 'POST', body, { idempotencyKey }),
+  updateHabit: (id: number, body: HabitRule & { effective_date?: string; version: string; goal_id: number | null }, idempotencyKey: string) =>
+    apiWrite<MutationResult & { habit: Habit }>(`/habits/${id}`, 'PATCH', body, { idempotencyKey }),
+  changeHabitStatus: (id: number, body: { version: string; status?: HabitStatus; pinned?: boolean }, idempotencyKey: string) =>
+    apiWrite<MutationResult>(`/habits/${id}/status`, 'POST', body, { idempotencyKey }),
+  deleteHabit: (id: number, body: { version: string }, idempotencyKey?: string) =>
+    apiWrite<MutationResult>(`/habits/${id}`, 'DELETE', body, { idempotencyKey }),
+  habitAction: (id: number, body: HabitActionBody, idempotencyKey: string) =>
+    apiWrite<MutationResult & { occurrence: HabitOccurrence | null }>(`/habits/${id}/occurrences`, 'POST', body, { idempotencyKey }),
   getGoals: () => apiGet<GoalsListResponse>('/goals'),
   getGoalsWithArchived: () => apiGet<GoalsListResponse>('/goals?include_archived=1'),
   getGoal: (id: number, opts?: { includeArchived?: boolean }) =>
@@ -271,9 +307,20 @@ export const api = {
 
   updateGoal: (
     id: number,
-    body: { version: string; title?: string; status?: string; pinned?: boolean },
+    body: { version: string; title?: string; status?: string; pinned?: boolean; deadline?: string },
     idempotencyKey?: string,
   ) => apiWrite<MutationResult>(`/goals/${id}`, 'PATCH', body, { idempotencyKey }),
+
+  replanGoal: (
+    id: number,
+    body: {
+      version: string;
+      steps?: Array<{ title: string; est_min: number; milestone?: string; energy?: number }>;
+      outline?: string[];
+      deadline?: string;
+    },
+    idempotencyKey?: string,
+  ) => apiWrite<MutationResult & { goal?: Goal }>(`/goals/${id}/replan`, 'POST', body, { idempotencyKey }),
 
   deleteGoal: (id: number, body: { version: string }, idempotencyKey?: string) =>
     apiWrite<MutationResult>(`/goals/${id}`, 'DELETE', body, { idempotencyKey }),

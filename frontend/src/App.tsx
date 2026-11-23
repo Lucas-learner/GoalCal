@@ -7,7 +7,9 @@ import { AppShell } from './components/AppShell';
 import { ErrorBanner, SkeletonCard } from './components/StateFeedback';
 const CalendarPage = lazy(() => import('./pages/CalendarPage').then((module) => ({ default: module.CalendarPage })));
 import { useI18n } from './i18n';
+import { useTheme } from './theme';
 import { GoalsPage } from './pages/GoalsPage';
+import { HabitsPage, NewHabitPage } from './pages/HabitsPage';
 import { NewGoalPage } from './pages/NewGoalPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { TodayPage } from './pages/TodayPage';
@@ -32,6 +34,7 @@ export function createAppQueryClient() {
 
 export function AppContent() {
   const { t, syncFromUser } = useI18n();
+  const { syncFromUser: syncThemeFromUser } = useTheme();
   const meQuery = useQuery({
     queryKey: queryKeys.me,
     queryFn: api.getMe,
@@ -45,6 +48,12 @@ export function AppContent() {
       syncFromUser(user.lang);
     }
   }, [user?.lang, syncFromUser]);
+
+  useEffect(() => {
+    if (user?.theme !== undefined) {
+      syncThemeFromUser(user.theme);
+    }
+  }, [user?.theme, syncThemeFromUser]);
 
   return (
     <AppShell user={user}>
@@ -61,6 +70,9 @@ export function AppContent() {
           <Route path="/goals" element={<GoalsPage timezone={timezone} />} />
           <Route path="/goals/new" element={<NewGoalPage timezone={timezone} />} />
           <Route path="/goals/:goalId" element={<GoalsPage timezone={timezone} />} />
+          <Route path="/habits" element={<HabitsPage />} />
+          <Route path="/habits/new" element={<NewHabitPage timezone={timezone} />} />
+          <Route path="/habits/:habitId" element={<HabitsPage />} />
           <Route path="/calendar" element={<CalendarPage timezone={timezone} />} />
           <Route path="/settings" element={<SettingsPage user={user} />} />
           <Route path="*" element={<Navigate to="/" replace />} />

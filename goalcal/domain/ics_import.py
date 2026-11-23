@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from collections.abc import Callable
 
 from dateutil.rrule import rrulestr
 from icalendar import Calendar
@@ -101,6 +102,7 @@ def _import_ics(
     content: bytes,
     tz: str,
     now: datetime | None = None,
+    slot_allowed: Callable[[datetime, datetime], bool] | None = None,
 ) -> ImportResult:
     now = now or now_utc()
     if len(content) > MAX_BYTES:
@@ -137,6 +139,9 @@ def _import_ics(
         for uid, start_utc, end_utc in expanded:
             if end_utc <= start_utc:
                 end_utc = start_utc + timedelta(minutes=DEFAULT_MINUTES)
+            if slot_allowed is not None and not slot_allowed(start_utc, end_utc):
+                result.skipped += 1
+                continue
             event = existing.get(uid)
             if event is not None:
                 event.title = title
@@ -160,7 +165,7 @@ def _import_ics(
     return result
 
 
-def import_ics(session, user_id, content, tz, now=None):
+def import_ics(session, user_id, content, tz, now=None, *, slot_allowed=None):
     # Savepoint keeps the entire import atomic even if a caller catches errors.
     with session.begin_nested():
-        return _import_ics(session, user_id, content, tz, now)
+        return _import_ics(session, user_id, content, tz, now, slot_allowed)

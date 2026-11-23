@@ -1,3 +1,5 @@
+> 历史资料：保留当时记录，命令、路径、功能和待办不代表当前版本。当前资料见 [文档索引](../README.md)。
+
 # 当前公网入口：ngrok 免费固定网址
 
 GoalCal 先使用 ngrok，域名购买与 Cloudflare 正式隧道延后。
@@ -57,6 +59,6 @@ launchctl bootout "gui/$(id -u)/local.goalcal.tunnel"
 launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/local.goalcal.tunnel.plist"
 ```
 
-本机停电、退出 macOS 用户、断网时服务仍会中断。恢复与数据库维护按 [生产运行手册](production.md) 执行。未来切换 Cloudflare 只替换公网隧道和网址，继续使用当前生产数据库。
+本机停电、退出 macOS 用户、断网时服务仍会中断。恢复与数据库维护按 [生产运行手册](production-streamlit-2026-11-17.md) 执行。未来切换 Cloudflare 只替换公网隧道和网址，继续使用当前生产数据库。
 
-邀请用户与日志反馈迭代详见 [试用说明](trial.md)。
+邀请用户与日志反馈迭代详见 [试用说明](trial-streamlit-2026-11-17.md)。

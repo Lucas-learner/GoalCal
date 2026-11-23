@@ -21,13 +21,16 @@ import timeGridPlugin from '@fullcalendar/timegrid';
 import { DateTime } from 'luxon';
 import { api } from '../api/client';
 import { invalidateAfterWrite, queryKeys } from '../api/queryKeys';
-import type { CalendarEvent } from '../api/types';
+import type { CalendarEvent, HabitActionBody, HabitOccurrence, HabitProgress } from '../api/types';
 import { EventDialog } from '../components/EventDialog';
+import { HabitForm } from '../components/HabitForm';
+import { HabitOccurrenceDialog, useHabitAction, useHabitLabels } from '../components/HabitOccurrenceDialog';
 import { SparkleIcon } from '../components/Icons';
 import { NewEventDialog } from '../components/NewEventDialog';
 import { EmptyState, ErrorBanner } from '../components/StateFeedback';
 import {
   calendarStrToUtcIso,
+  durationMinutes,
   formatTimeRange,
   getRangeBoundsUtc,
   todayIsoDateInZone,
@@ -43,6 +46,37 @@ const STATUS_BADGE: Record<string, [string, string]> = {
   missed: ['未完成', 'Missed'],
 };
 
+function readMediaMatch(query: string, fallbackWidthCheck?: () => boolean): boolean {
+  if (typeof window === 'undefined') return false;
+  if (typeof window.matchMedia === 'function') {
+    return window.matchMedia(query).matches;
+  }
+  return fallbackWidthCheck ? fallbackWidthCheck() : false;
+}
+
+function useMediaQuery(query: string, fallbackWidthCheck?: () => boolean): boolean {
+  const [matches, setMatches] = useState(() => readMediaMatch(query, fallbackWidthCheck));
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (typeof window.matchMedia === 'function') {
+      const mql = window.matchMedia(query);
+      setMatches(mql.matches);
+      const onChange = (e: MediaQueryListEvent) => setMatches(e.matches);
+      mql.addEventListener('change', onChange);
+      return () => mql.removeEventListener('change', onChange);
+    }
+    if (!fallbackWidthCheck) return;
+    const onResize = () => setMatches(fallbackWidthCheck());
+    onResize();
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query]);
+
+  return matches;
+}
+
 export function CalendarPage({ timezone }: { timezone: string }) {
   const queryClient = useQueryClient();
   const { openAssistant, openProposalModal, recordMutationResult } = useAppState();
@@ -50,13 +84,16 @@ export function CalendarPage({ timezone }: { timezone: string }) {
   const calendarRef = useRef<FullCalendar | null>(null);
   const backlogRef = useRef<HTMLElement | null>(null);
 
-  const [isMobile, setIsMobile] = useState(() =>
-    typeof window !== 'undefined' ? window.innerWidth <= 720 : false,
-  );
+  const isMobile = useMediaQuery('(max-width: 720px)', () => window.innerWidth <= 720);
+  const isSingleColumn = useMediaQuery('(max-width: 960px)', () => window.innerWidth <= 960);
+  const isCoarsePointer = useMediaQuery('(pointer: coarse)');
+  const enableDrag = !isMobile && !isCoarsePointer;
+
   const [viewMode, setViewMode] = useState<'week' | 'day'>(() =>
-    typeof window !== 'undefined' && window.innerWidth <= 720 ? 'day' : 'week',
+    readMediaMatch('(max-width: 720px)', () => window.innerWidth <= 720) ? 'day' : 'week',
   );
   const [anchorDate, setAnchorDate] = useState(() => todayIsoDateInZone(timezone));
+  const [backlogOpen, setBacklogOpen] = useState(false);
 
   const initialBounds = useMemo(
     () => getRangeBoundsUtc(anchorDate, viewMode, timezone),
@@ -69,19 +106,14 @@ export function CalendarPage({ timezone }: { timezone: string }) {
   }));
 
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
+  const [selectedHabit, setSelectedHabit] = useState<{ item: HabitOccurrence; edit?: boolean } | null>(null);
+  const [selectedWeek, setSelectedWeek] = useState<HabitProgress | null>(null);
+  const [newHabit, setNewHabit] = useState<{ date: string; time: string; minutes: number } | null>(null);
+  const habitLabels = useHabitLabels();
   const [newEventRange, setNewEventRange] = useState<{
     startLocal: string;
     endLocal: string;
   } | null>(null);
-
-  useEffect(() => {
-    const handleResize = () => {
-      const mobile = window.innerWidth <= 720;
-      setIsMobile(mobile);
-    };
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
 
   const eventsQuery = useQuery({
     queryKey: queryKeys.calendarRange(range.startUtc, range.endUtc),
@@ -98,16 +130,51 @@ export function CalendarPage({ timezone }: { timezone: string }) {
     queryFn: api.getGoals,
   });
 
+  const habitsQuery = useQuery({
+    queryKey: queryKeys.habits,
+    queryFn: api.getHabits,
+  });
+
+  const habitAction = useHabitAction();
+  const habitItems = eventsQuery.data?.habits?.items ?? [];
+  const habitWeeks = eventsQuery.data?.habits?.weeks ?? [];
+  const activeHabits = useMemo(
+    () => (habitsQuery.data?.habits ?? []).filter((habit) => habit.status === 'active'),
+    [habitsQuery.data?.habits],
+  );
+  const backlogHabits = useMemo(() => {
+    const items: HabitOccurrence[] = [];
+    for (const habit of activeHabits) {
+      if (habit.next_unscheduled) items.push(habit.next_unscheduled);
+    }
+    return items.sort((a, b) => a.date.localeCompare(b.date) || a.habit_id - b.habit_id);
+  }, [activeHabits]);
+  const backlogHabitWeeks = useMemo(() => {
+    const weeks: HabitProgress[] = [];
+    for (const habit of activeHabits) {
+      if (!habit.next_unscheduled && habit.next_week) weeks.push(habit.next_week);
+    }
+    return weeks.sort((a, b) => a.week.localeCompare(b.week) || a.habit_id - b.habit_id);
+  }, [activeHabits]);
+  const backlogCount = backlogHabits.length + backlogHabitWeeks.length;
+
   const moveFn = useCallback(
     async (
       args: { event: CalendarEvent; startUtc: string; endUtc: string; revert: () => void },
       key: string,
-    ) =>
-      api.moveCalendarEvent(
+    ) => {
+      if (args.event.habit) {
+        const item = args.event.habit;
+        const targetDate = DateTime.fromISO(args.startUtc).setZone(item.timezone).toISODate()!;
+        return api.habitAction(item.habit_id, { version: item.version, action: 'schedule', date: item.date,
+          target_date: targetDate, start: args.startUtc, minutes: Math.round(durationMinutes(args.startUtc, args.endUtc)) }, key);
+      }
+      return api.moveCalendarEvent(
         args.event.id,
         { version: args.event.version, start: args.startUtc, end: args.endUtc },
         key,
-      ),
+      );
+    },
     [],
   );
 
@@ -166,7 +233,7 @@ export function CalendarPage({ timezone }: { timezone: string }) {
 
   useEffect(() => {
     const containerEl = backlogRef.current;
-    if (!containerEl) return;
+    if (!enableDrag || !containerEl) return;
     const draggable = new Draggable(containerEl, {
       itemSelector: '.backlog-item',
       minDistance: 5,
@@ -181,28 +248,29 @@ export function CalendarPage({ timezone }: { timezone: string }) {
             backlogStepId: Number(el.dataset.stepId),
             backlogStepVersion: el.dataset.stepVersion ?? '',
             backlogGoalId: Number(el.dataset.goalId),
+            backlogHabitId: el.dataset.habitId,
           },
         };
       },
     });
     return () => draggable.destroy();
-  }, []);
+  }, [enableDrag, t]);
 
   const visibleEvents = useMemo(
-    () => (eventsQuery.data?.events ?? []).filter((ev) => ev.status !== 'skipped'),
+    () => (eventsQuery.data?.events ?? []).filter((ev) => ev.status !== 'skipped' || ev.habit),
     [eventsQuery.data?.events],
   );
 
   const fcEvents: EventInput[] = useMemo(() => {
     const normalEvents: EventInput[] = visibleEvents.map((ev) => {
       const classes = [`gc-ev-${ev.kind}`];
-      if (ev.status === 'done') classes.push('gc-ev-done');
+      if (ev.status === 'done' || ev.status === 'skipped') classes.push('gc-ev-done');
       return {
         id: String(ev.id),
         title: ev.title,
         start: ev.start,
         end: ev.end,
-        editable: ['planned', 'moved'].includes(ev.status),
+        editable: enableDrag && ['planned', 'moved'].includes(ev.status),
         classNames: classes,
         extendedProps: { rawEvent: ev },
       };
@@ -221,7 +289,7 @@ export function CalendarPage({ timezone }: { timezone: string }) {
     );
 
     return [...protectedBg, ...normalEvents];
-  }, [visibleEvents, availabilityQuery.data?.protected_windows, t]);
+  }, [visibleEvents, availabilityQuery.data?.protected_windows, enableDrag, t]);
 
   const scheduledStepIds = useMemo(() => {
     const ids = new Set<number>();
@@ -254,6 +322,7 @@ export function CalendarPage({ timezone }: { timezone: string }) {
             goalId: goal.id,
             goalTitle: goal.title,
           });
+          break;
         }
       }
     }
@@ -278,18 +347,25 @@ export function CalendarPage({ timezone }: { timezone: string }) {
     }
   };
 
-  const handleNav = (dir: 'prev' | 'next' | 'today') => {
+  const handleNav = (dir: 'prev' | 'next') => {
     const apiFc = calendarRef.current?.getApi();
     if (!apiFc) return;
     if (dir === 'prev') apiFc.prev();
-    else if (dir === 'next') apiFc.next();
-    else apiFc.today();
+    else apiFc.next();
   };
 
   const handleDateJump = (isoDate: string) => {
     if (!isoDate) return;
     setAnchorDate(isoDate);
     calendarRef.current?.getApi().gotoDate(isoDate);
+  };
+
+  const handleNavLinkDayClick = (date: Date) => {
+    const iso = DateTime.fromJSDate(date, { zone: timezone }).toISODate();
+    if (!iso) return;
+    setAnchorDate(iso);
+    setViewMode('day');
+    calendarRef.current?.getApi().changeView('timeGridDay', iso);
   };
 
   const openNewEventAt = (startDt: DateTime, endDt?: DateTime) => {
@@ -317,7 +393,9 @@ export function CalendarPage({ timezone }: { timezone: string }) {
 
   const handleEventClick = (info: EventClickArg) => {
     const raw = info.event.extendedProps?.rawEvent as CalendarEvent | undefined;
-    if (raw) {
+    if (raw?.habit) {
+      setSelectedHabit({ item: raw.habit });
+    } else if (raw) {
       setSelectedEvent(raw);
     }
   };
@@ -342,7 +420,20 @@ export function CalendarPage({ timezone }: { timezone: string }) {
       backlogStepId?: number;
       backlogStepVersion?: string;
       backlogGoalId?: number;
+      backlogHabitId?: string;
     };
+    if (props.backlogHabitId) {
+      const item = backlogHabits.find((habit) => habit.id === props.backlogHabitId);
+      const start = calendarStrToUtcIso(info.event.startStr, timezone);
+      const targetDate = start && item ? DateTime.fromISO(start).setZone(item.timezone).toISODate() : null;
+      info.revert();
+      if (item && start && targetDate) {
+        const body: HabitActionBody = { action: 'schedule', date: item.date, version: item.version,
+          target_date: targetDate, start };
+        void habitAction.run({ id: item.habit_id, body });
+      }
+      return;
+    }
     if (
       scheduleStepAction.isPending ||
       !props.backlogStepId ||
@@ -372,12 +463,13 @@ export function CalendarPage({ timezone }: { timezone: string }) {
       return <div>{arg.event.title}</div>;
     }
     const statusPair = STATUS_BADGE[raw.status];
-    const statusText = statusPair ? t(statusPair[0], statusPair[1]) : undefined;
+    const statusText = raw.habit?.status === 'skipped' ? habitLabels.status.skipped : statusPair ? t(statusPair[0], statusPair[1]) : undefined;
     const timeText = formatTimeRange(raw.start, raw.end, timezone);
     return (
       <div>
         <div style={{ fontWeight: 620, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {statusText ? `[${statusText}] ` : ''}
+          {raw.habit && <span aria-label={habitLabels.habit} title={habitLabels.habit}>↻ </span>}
           {raw.kind === 'buffer' ? `${t('缓冲', 'Buffer')} · ${raw.title}` : raw.title}
         </div>
         <div className="tabular-nums" style={{ opacity: 0.85, fontSize: 9 }}>
@@ -387,51 +479,131 @@ export function CalendarPage({ timezone }: { timezone: string }) {
     );
   };
 
+  const showDragCopy = enableDrag && !isSingleColumn;
+  const emptyBannerText = showDragCopy
+    ? viewMode === 'day'
+      ? t('当天暂无日程，点击空白处新建或从右侧拖入。', 'No events today — click a slot to add or drag from Unscheduled.')
+      : t('本周暂无日程，点击空白处新建或从右侧拖入。', 'No events this week — click a slot to add or drag from Unscheduled.')
+    : viewMode === 'day'
+      ? t('当天暂无日程，点击空白处新建，或通过「尚未安排」找时间。', 'No events today — tap a slot to add or find time from Unscheduled.')
+      : t('本周暂无日程，点击空白处新建，或通过「尚未安排」找时间。', 'No events this week — tap a slot to add or find time from Unscheduled.');
+
+  const backlogBody = (
+    <>
+      <div className="backlog-copy">
+        {showDragCopy
+          ? t('拖入日历，或点找时间', 'Drag to calendar, or click Find time')
+          : t('点击「找时间」挑推荐空档，或自选开始时间', 'Click Find time for open slots or a custom time')}
+      </div>
+
+      {goalsQuery.isLoading ? (
+        <div className="muted" style={{ fontSize: 11 }}>
+          {t('加载中…', 'Loading…')}
+        </div>
+      ) : goalsQuery.isError ? (
+        <ErrorBanner error={goalsQuery.error} onRetry={() => void goalsQuery.refetch()} />
+      ) : backlogSteps.length === 0 ? (
+        backlogCount === 0 ? <EmptyState title={t('暂无待安排事项', 'Nothing unscheduled')} /> : null
+      ) : (
+        backlogSteps.map((item) => (
+          <div
+            key={item.stepId}
+            className={`backlog-item${enableDrag ? '' : ' no-drag'}`}
+            data-step-id={item.stepId}
+            data-step-version={item.stepVersion}
+            data-goal-id={item.goalId}
+            data-est-min={item.estMin}
+            data-title={item.stepTitle}
+          >
+            <div className="backlog-item-title">{item.stepTitle}</div>
+            <div className="backlog-item-meta">
+              {item.estMin} {t('分钟', 'min')} · {item.goalTitle}
+            </div>
+            <button
+              type="button"
+              className="btn small"
+              disabled={proposeAction.isPending || scheduleStepAction.isPending}
+              onPointerDown={(e) => e.stopPropagation()}
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={() => void proposeAction.run(item.stepId)}
+            >
+              {t('找时间 →', 'Find time →')}
+            </button>
+          </div>
+        ))
+      )}
+      {backlogHabits.map((item) => (
+        <div key={item.id} className={`backlog-item${enableDrag ? '' : ' no-drag'}`}
+          data-habit-id={item.id} data-est-min={item.est_min} data-title={item.title}>
+          <div className="backlog-item-title">{item.title}</div>
+          <div className="backlog-item-meta">{habitLabels.habit} · {item.date} · {item.est_min} {t('分钟', 'min')}</div>
+          {item.reason && <div className="backlog-item-meta">{habitLabels.reason(item.reason)}</div>}
+          <button type="button" className="btn small" onPointerDown={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()} onClick={() => setSelectedHabit({ item, edit: true })}>{t('找时间 →', 'Find time →')}</button>
+        </div>
+      ))}
+      {backlogHabitWeeks.map((week) => {
+        const currentMonday = DateTime.fromISO(week.today, { zone: week.timezone }).startOf('week').toISODate();
+        const weekLabel = week.week === currentMonday
+          ? t(`本周 ${week.done}/${week.target} 次`, `This week ${week.done}/${week.target}`)
+          : t(`${week.week.slice(5)} 周 ${week.done}/${week.target} 次`, `Week of ${week.week.slice(5)} · ${week.done}/${week.target}`);
+        return (
+          <div key={`${week.habit_id}:${week.week}`} className="habit-week-card">
+            <strong>{week.title}</strong>
+            <span className="backlog-item-meta">{weekLabel}</span>
+            {week.schedule_from && (
+              <button type="button" className="btn small" onClick={() => setSelectedWeek(week)}>{t('找时间 →', 'Find time →')}</button>
+            )}
+          </div>
+        );
+      })}
+    </>
+  );
+
+  const backlogAside = (
+    <aside
+      ref={backlogRef}
+      className={`card-flat backlog${isMobile ? ' backlog-mobile' : ''}${isMobile && backlogSteps.length + backlogCount > 0 ? ' has-items' : ''}`}
+      aria-label={t('尚未安排的事项', 'Unscheduled items')}
+    >
+      {isMobile ? (
+        <>
+          <button
+            type="button"
+            className="backlog-toggle-btn"
+            aria-expanded={backlogOpen}
+            onClick={() => setBacklogOpen((prev) => !prev)}
+          >
+            <span className="backlog-toggle-left">
+              <span className="backlog-title">{t('尚未安排', 'Unscheduled')}</span>
+              {goalsQuery.isLoading ? (
+                <span className="backlog-toggle-hint">· {t('加载中…', 'Loading…')}</span>
+              ) : backlogSteps.length + backlogCount > 0 ? (
+                <span className="backlog-count">{backlogSteps.length + backlogCount}</span>
+              ) : (
+                <span className="backlog-toggle-hint">· {t('暂无待安排步骤', 'Nothing unscheduled')}</span>
+              )}
+            </span>
+            <span className="backlog-toggle-state">
+              {backlogOpen ? t('收起 ▴', 'Hide ▴') : t('展开 ▾', 'Show ▾')}
+            </span>
+          </button>
+          {backlogOpen ? <div className="backlog-mobile-body">{backlogBody}</div> : null}
+        </>
+      ) : (
+        <>
+          <div className="backlog-title">{t('尚未安排', 'Unscheduled')}</div>
+          {backlogBody}
+        </>
+      )}
+    </aside>
+  );
+
   return (
     <div className="calendar-page">
       <div className="topbar">
         <h1>{t('日历', 'Calendar')}</h1>
-        <div className="calendar-controls">
-          <button type="button" className="btn small" onClick={() => handleNav('prev')}>
-            {viewMode === 'day' ? t('上一天', 'Prev day') : t('上一周', 'Prev week')}
-          </button>
-          <button type="button" className="btn small" onClick={() => handleNav('today')}>
-            {t('今天', 'Today')}
-          </button>
-          <button type="button" className="btn small" onClick={() => handleNav('next')}>
-            {viewMode === 'day' ? t('下一天', 'Next day') : t('下一周', 'Next week')}
-          </button>
-
-          {isMobile ? (
-            <label className="sr-only" htmlFor="calendar-mobile-date">
-              {t('选择日期', 'Pick date')}
-            </label>
-          ) : null}
-          <input
-            id="calendar-mobile-date"
-            type="date"
-            aria-label={t('跳转日期', 'Jump to date')}
-            className="input"
-            style={{ width: 'auto', minHeight: 31, padding: '4px 8px', fontSize: 12 }}
-            value={anchorDate}
-            onChange={(e) => handleDateJump(e.target.value)}
-          />
-
-          <button
-            type="button"
-            className={`btn small${viewMode === 'week' ? ' primary' : ''}`}
-            onClick={() => switchView('week')}
-          >
-            {t('周', 'Week')}
-          </button>
-          <button
-            type="button"
-            className={`btn small${viewMode === 'day' ? ' primary' : ''}`}
-            onClick={() => switchView('day')}
-          >
-            {t('日', 'Day')}
-          </button>
-
+        <div className="topbar-actions">
           <button
             type="button"
             className="assistant-trigger"
@@ -442,7 +614,7 @@ export function CalendarPage({ timezone }: { timezone: string }) {
           </button>
           <button
             type="button"
-            className="btn primary small"
+            className="btn primary"
             onClick={() => {
               const now = DateTime.now().setZone(timezone).plus({ hours: 1 }).startOf('hour');
               openNewEventAt(now);
@@ -453,30 +625,77 @@ export function CalendarPage({ timezone }: { timezone: string }) {
         </div>
       </div>
 
-      <p className="subtitle">
-        {t('固定日程与目标时间块', 'Fixed events & goal blocks')}
+      <p className="subtitle calendar-subtitle">
+        {t('固定日程、目标和习惯', 'Fixed events, goals & habits')}
       </p>
+
+      <div className="calendar-toolbar">
+        <div className="calendar-date-nav">
+          <button
+            type="button"
+            className="calendar-nav-arrow"
+            aria-label={viewMode === 'day' ? t('上一天', 'Prev day') : t('上一周', 'Prev week')}
+            onClick={() => handleNav('prev')}
+          >
+            ‹
+          </button>
+          <input
+            id="calendar-mobile-date"
+            type="date"
+            aria-label={t('跳转日期', 'Jump to date')}
+            className="calendar-date-input tabular-nums"
+            value={anchorDate}
+            onChange={(e) => handleDateJump(e.target.value)}
+          />
+          <button
+            type="button"
+            className="calendar-nav-arrow next"
+            aria-label={viewMode === 'day' ? t('下一天', 'Next day') : t('下一周', 'Next week')}
+            onClick={() => handleNav('next')}
+          >
+            ›
+          </button>
+        </div>
+
+        <div className="calendar-view-seg" role="group" aria-label={t('视图切换', 'Switch view')}>
+          <button
+            type="button"
+            className={`calendar-seg-btn${viewMode === 'week' ? ' active' : ''}`}
+            aria-pressed={viewMode === 'week'}
+            onClick={() => switchView('week')}
+          >
+            {t('周', 'Week')}
+          </button>
+          <button
+            type="button"
+            className={`calendar-seg-btn${viewMode === 'day' ? ' active' : ''}`}
+            aria-pressed={viewMode === 'day'}
+            onClick={() => switchView('day')}
+          >
+            {t('日', 'Day')}
+          </button>
+        </div>
+      </div>
 
       <ErrorBanner
         error={
           eventsQuery.error ??
           moveAction.actionError ??
           scheduleStepAction.actionError ??
-          proposeAction.actionError
+          proposeAction.actionError ??
+          habitAction.actionError
         }
         onRetry={eventsQuery.isError ? () => void eventsQuery.refetch() : undefined}
         onRefresh={() => void invalidateAfterWrite(queryClient)}
       />
 
-      <div className="calendar-layout">
+      {isMobile ? backlogAside : null}
+
+      <div className={`calendar-layout${isMobile ? ' is-mobile' : ''}`}>
         <div>
           {!eventsQuery.isLoading && !eventsQuery.isError && visibleEvents.length === 0 ? (
             <div className="status-banner info" role="status">
-              <div className="status-banner-body">
-                {viewMode === 'day'
-                  ? t('当天暂无日程，点击空白处新建或从右侧拖入。', 'No events today — click a slot to add or drag from Unscheduled.')
-                  : t('本周暂无日程，点击空白处新建或从右侧拖入。', 'No events this week — click a slot to add or drag from Unscheduled.')}
-              </div>
+              <div className="status-banner-body">{emptyBannerText}</div>
             </div>
           ) : null}
 
@@ -499,10 +718,12 @@ export function CalendarPage({ timezone }: { timezone: string }) {
               eventTimeFormat={{ hour: '2-digit', minute: '2-digit', hour12: false }}
               height={640}
               nowIndicator
-              selectable
-              selectMirror
-              editable
-              droppable
+              navLinks={viewMode === 'week'}
+              navLinkDayClick={handleNavLinkDayClick}
+              selectable={enableDrag}
+              selectMirror={enableDrag}
+              editable={enableDrag}
+              droppable={enableDrag}
               eventInteractive
               events={fcEvents}
               datesSet={handleDatesSet}
@@ -521,6 +742,7 @@ export function CalendarPage({ timezone }: { timezone: string }) {
               <i className="legend-swatch goal" aria-hidden="true" />
               {t('目标时间块', 'Goal block')}
             </span>
+            <span className="legend-item"><span aria-hidden="true">↻</span>{habitLabels.habit}</span>
             <span className="legend-item">
               <i className="legend-swatch" aria-hidden="true" />
               {t('固定日程', 'Fixed event')}
@@ -532,49 +754,7 @@ export function CalendarPage({ timezone }: { timezone: string }) {
           </div>
         </div>
 
-        <aside ref={backlogRef} className="card-flat backlog" aria-label={t('尚未安排的步骤', 'Unscheduled steps')}>
-          <div className="backlog-title">{t('尚未安排', 'Unscheduled')}</div>
-          <div className="backlog-copy">
-            {t('拖入日历，或点找时间', 'Drag to calendar, or click Find time')}
-          </div>
-
-          {goalsQuery.isLoading ? (
-            <div className="muted" style={{ fontSize: 11 }}>
-              {t('加载中…', 'Loading…')}
-            </div>
-          ) : goalsQuery.isError ? (
-            <ErrorBanner error={goalsQuery.error} onRetry={() => void goalsQuery.refetch()} />
-          ) : backlogSteps.length === 0 ? (
-            <EmptyState title={t('暂无待安排步骤', 'Nothing unscheduled')} />
-          ) : (
-            backlogSteps.map((item) => (
-              <div
-                key={item.stepId}
-                className="backlog-item"
-                data-step-id={item.stepId}
-                data-step-version={item.stepVersion}
-                data-goal-id={item.goalId}
-                data-est-min={item.estMin}
-                data-title={item.stepTitle}
-              >
-                <div className="backlog-item-title">{item.stepTitle}</div>
-                <div className="backlog-item-meta">
-                  {item.estMin} {t('分钟', 'min')} · {item.goalTitle}
-                </div>
-                <button
-                  type="button"
-                  className="btn small"
-                  disabled={proposeAction.isPending || scheduleStepAction.isPending}
-                  onPointerDown={(e) => e.stopPropagation()}
-                  onMouseDown={(e) => e.stopPropagation()}
-                  onClick={() => void proposeAction.run(item.stepId)}
-                >
-                  {t('找时间 →', 'Find time →')}
-                </button>
-              </div>
-            ))
-          )}
-        </aside>
+        {!isMobile ? backlogAside : null}
       </div>
 
       {(() => {
@@ -596,8 +776,23 @@ export function CalendarPage({ timezone }: { timezone: string }) {
           initialStartLocal={newEventRange.startLocal}
           initialEndLocal={newEventRange.endLocal}
           onClose={() => setNewEventRange(null)}
+          onNewHabit={(start, end) => {
+            const startDate = DateTime.fromISO(start, { zone: timezone });
+            const endDate = DateTime.fromISO(end, { zone: timezone });
+            const minutes = Math.round(endDate.diff(startDate, 'minutes').minutes);
+            setNewEventRange(null);
+            setNewHabit({ date: startDate.toISODate() || todayIsoDateInZone(timezone),
+              time: startDate.isValid ? startDate.toFormat('HH:mm') : '',
+              minutes: minutes >= 5 && minutes <= 480 ? minutes : 30 });
+          }}
         />
       ) : null}
+      {newHabit && <HabitForm timezone={timezone} initial={newHabit} onClose={() => setNewHabit(null)} />}
+      {selectedHabit && <HabitOccurrenceDialog
+        occurrence={[...backlogHabits, ...habitItems].find((item) => item.id === selectedHabit.item.id) ?? selectedHabit.item}
+        startInEditor={selectedHabit.edit} onClose={() => setSelectedHabit(null)} />}
+      {selectedWeek && <HabitOccurrenceDialog week={[...backlogHabitWeeks, ...habitWeeks].find((week) => week.habit_id === selectedWeek.habit_id && week.week === selectedWeek.week) ?? selectedWeek}
+        onClose={() => setSelectedWeek(null)} />}
     </div>
   );
 }

@@ -61,7 +61,8 @@ relation:
 - "clarify": the message is too ambiguous; ask one short clarifying question.
 
 intent: one of add_event, move_event, delete_event, query_events, create_goal,
-delete_goal, resume_goal (user wants to resume a PAUSED goal; put the goal title
+delete_goal, pause_goal (user wants to pause an ACTIVE goal; put the goal title
+in target if named), resume_goal (user wants to resume a PAUSED goal; put the goal title
 in target if named), schedule_step, schedule_all, refine_steps, log_progress,
 set_state, chat. Use "chat" when nothing should be executed.
 
@@ -107,7 +108,7 @@ class TurnDecision(BaseModel):
     """L1 唯一允许输出的结构；字段白名单校验，多余字段直接丢弃。"""
 
     relation: Relation
-    intent: Intent
+    intent: Intent | Literal["create_habit"]
     reply: str = ""
     title: str | None = None
     when_text: str | None = None
@@ -121,6 +122,8 @@ class TurnDecision(BaseModel):
     offer_intent: str | None = None
     offer_target: str | None = None
     offer_when_text: str | None = None
+    habit_weekly_target: int | None = None
+    habit_weekdays: list[int] | None = None
 
 
 def to_action(decision: TurnDecision, text: str, now: datetime) -> Action:
@@ -130,6 +133,8 @@ def to_action(decision: TurnDecision, text: str, now: datetime) -> Action:
     """
     # Deterministic two-way guard: advice questions and explicit negations never
     # write, while an explicit calendar command cannot disappear into chat prose.
+    if decision.intent == "create_habit":
+        return Action(intent="chat", raw=text, confidence=0.2)
     if decision.intent in {"add_event", "schedule_step", "schedule_all", "create_goal"} and (
         ADVICE_QUESTION.search(text) or NO_SCHEDULE.search(text)
     ):
@@ -212,6 +217,7 @@ def decide(
     client=None,
     breaker: CircuitBreaker | None = None,
     lang: str | None = None,
+    habit_drafts: bool = False,
 ) -> TurnDecision | None:
     """返回本轮决定；不可用/失败/非法一律 None（调用方走降级路径）。"""
     if client is None:
@@ -249,11 +255,27 @@ def decide(
     system = SYSTEM.format(
         now=now.strftime("%Y-%m-%d %H:%M"), tz=tz, weekday=now.strftime("%A")
     )
+    if habit_drafts:
+        system += """
+10. Use create_habit to draft a recurring action, e.g. “我想每周跑三次步”
+    or “I want to read every morning”. Use create_goal for an outcome
+    (e.g. “run a marathon in June”), even if training repeats. For create_habit,
+    title is the action without its cadence. Include habit_weekly_target (1–7)
+    for a flexible weekly count, or habit_weekdays (Monday=0, Sunday=6) for
+    explicitly stated weekdays or daily (all seven). Leave both null if
+    unspecified. Use duration_min and when_text only for a supplied session
+    length and fixed time. Drafts require review; they change nothing.
+    For managing existing habits, point to Habits → Edit rule (「习惯」页→「修改规则」)
+    using chat (do NOT invent "reminder settings") and do not
+    propose goal steps or create an event. For advice requests, use chat.
+"""
     try:
         data = client.complete_json(system, json.dumps(payload, ensure_ascii=False))
         if not isinstance(data, dict) or not {"relation", "intent", "reply"}.issubset(data):
             raise ValueError("L1 decision missing required fields")
         decision = TurnDecision.model_validate(data)
+        if decision.intent == "create_habit" and not habit_drafts:
+            raise ValueError("Habit drafts are unavailable on this surface")
     except AuthError:
         raise  # expired login must reach runtime.session_scope, not trip the circuit
     except LLMUnavailable:

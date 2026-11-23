@@ -106,6 +106,8 @@ export function GoalsPage({ timezone }: { timezone: string }) {
   // Goal title edit state (preserved on 409)
   const [editingGoalTitle, setEditingGoalTitle] = useState(false);
   const [goalTitleDraft, setGoalTitleDraft] = useState('');
+  const [editingDeadline, setEditingDeadline] = useState(false);
+  const [deadlineDraft, setDeadlineDraft] = useState('');
 
   // Step inline edit state (preserved on 409)
   const [editingStepId, setEditingStepId] = useState<number | null>(null);
@@ -117,11 +119,12 @@ export function GoalsPage({ timezone }: { timezone: string }) {
   useEffect(() => {
     setSelectedPhase(null);
     setShowFinishedSteps(false);
+    setEditingDeadline(false);
   }, [activeGoalId]);
 
   const updateGoalFn = useCallback(
     async (
-      args: { id: number; version: string; title?: string; status?: string; pinned?: boolean },
+      args: { id: number; version: string; title?: string; status?: string; pinned?: boolean; deadline?: string },
       key: string,
     ) => {
       const { id, ...body } = args;
@@ -135,6 +138,9 @@ export function GoalsPage({ timezone }: { timezone: string }) {
       recordMutationResult(res);
       if (args.title != null) {
         setEditingGoalTitle(false);
+      }
+      if (args.deadline !== undefined) {
+        setEditingDeadline(false);
       }
       await invalidateAfterWrite(queryClient, { goalId: args.id });
       if (args.status === 'archived' && hasExplicitSelection) {
@@ -295,46 +301,55 @@ export function GoalsPage({ timezone }: { timezone: string }) {
           className={`goals-layout${hasExplicitSelection ? ' mobile-has-selection' : ''}`}
         >
           <div className="card goal-list" aria-label={t('目标列表', 'Goals list')}>
-            <div className="goal-list-label">
-              {t('目标', 'Goals')} · {goals.length}
-            </div>
-            {goals.map((g) => {
-              const doneCount = g.steps.filter((s) => s.status === 'done').length;
-              const pct = Math.round((g.progress ?? 0) * 100);
-              const isSelected = activeGoalId === g.id;
-              const statusPair = GOAL_STATUS_LABEL[g.status];
+            {(['active', 'paused', 'done'] as const).map((statusKey) => {
+              const group = goals.filter((g) => g.status === statusKey);
+              if (group.length === 0) return null;
+              const labelPair = GOAL_STATUS_LABEL[statusKey];
+              const groupLabel = labelPair ? t(labelPair[0], labelPair[1]) : statusKey;
               return (
-                <button
-                  key={g.id}
-                  type="button"
-                  className={`goal-row${isSelected ? ' active' : ''}`}
-                  aria-current={isSelected ? 'true' : undefined}
-                  onClick={() => navigate(`/goals/${g.id}`)}
-                >
-                  <div className="goal-row-title">
-                    {g.pinned ? t('置顶 · ', 'Pinned · ') : ''}
-                    {g.title}
+                <section key={statusKey} aria-label={groupLabel}>
+                  <div className="goal-list-label">
+                    {groupLabel} · {group.length}
                   </div>
-                  <div className="goal-row-meta">
-                    {statusPair ? t(statusPair[0], statusPair[1]) : g.status} · {formatDeadlineSummary(g, timezone, lang)}
-                  </div>
-                  <div
-                    className="progress"
-                    role="progressbar"
-                    aria-label={t(`${g.title} 进度`, `${g.title} progress`)}
-                    aria-valuemin={0}
-                    aria-valuemax={100}
-                    aria-valuenow={pct}
-                  >
-                    <span style={{ width: `${pct}%` }} />
-                  </div>
-                  <div className="goal-row-foot">
-                    <span>
-                      {doneCount} / {g.steps.length} {t('步', 'steps')}
-                    </span>
-                    <span>{pct}%</span>
-                  </div>
-                </button>
+                  {group.map((g) => {
+                    const doneCount = g.steps.filter((s) => s.status === 'done').length;
+                    const pct = Math.round((g.progress ?? 0) * 100);
+                    const isSelected = activeGoalId === g.id;
+                    return (
+                      <button
+                        key={g.id}
+                        type="button"
+                        className={`goal-row${isSelected ? ' active' : ''}`}
+                        aria-current={isSelected ? 'true' : undefined}
+                        onClick={() => navigate(`/goals/${g.id}`)}
+                      >
+                        <div className="goal-row-title">
+                          {g.pinned ? t('置顶 · ', 'Pinned · ') : ''}
+                          {g.title}
+                        </div>
+                        <div className="goal-row-meta">
+                          {formatDeadlineSummary(g, timezone, lang)}
+                        </div>
+                        <div
+                          className="progress"
+                          role="progressbar"
+                          aria-label={t(`${g.title} 进度`, `${g.title} progress`)}
+                          aria-valuemin={0}
+                          aria-valuemax={100}
+                          aria-valuenow={pct}
+                        >
+                          <span style={{ width: `${pct}%` }} />
+                        </div>
+                        <div className="goal-row-foot">
+                          <span>
+                            {doneCount} / {g.steps.length} {t('步', 'steps')}
+                          </span>
+                          <span>{pct}%</span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </section>
               );
             })}
           </div>
@@ -453,7 +468,73 @@ export function GoalsPage({ timezone }: { timezone: string }) {
                           {t('已置顶', 'Pinned')}
                         </span>
                       ) : null}
-                      <span>{formatDeadlineSummary(detailGoal, timezone, lang)}</span>
+                      {editingDeadline ? (
+                        <form
+                          style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            void updateGoalAction.run({
+                              id: detailGoal.id,
+                              version: detailGoal.version,
+                              deadline: deadlineDraft,
+                            });
+                          }}
+                        >
+                          <label className="sr-only" htmlFor="edit-goal-deadline-input">
+                            {t('截止日期', 'Deadline')}
+                          </label>
+                          <input
+                            id="edit-goal-deadline-input"
+                            type="date"
+                            className="input tabular-nums"
+                            style={{ height: 31, padding: '0 8px', width: 'auto' }}
+                            value={deadlineDraft}
+                            onChange={(e) => setDeadlineDraft(e.target.value)}
+                            disabled={isBusy}
+                          />
+                          <button type="submit" className="btn small primary" disabled={isBusy}>
+                            {t('保存', 'Save')}
+                          </button>
+                          {detailGoal.deadline ? (
+                            <button
+                              type="button"
+                              className="btn small"
+                              disabled={isBusy}
+                              onClick={() =>
+                                void updateGoalAction.run({
+                                  id: detailGoal.id,
+                                  version: detailGoal.version,
+                                  deadline: '',
+                                })
+                              }
+                            >
+                              {t('清除', 'Clear')}
+                            </button>
+                          ) : null}
+                          <button
+                            type="button"
+                            className="btn small"
+                            disabled={isBusy}
+                            onClick={() => setEditingDeadline(false)}
+                          >
+                            {t('取消', 'Cancel')}
+                          </button>
+                        </form>
+                      ) : (
+                        <button
+                          type="button"
+                          className="inline-link-btn"
+                          style={{ fontSize: 12, color: 'var(--muted)' }}
+                          title={t('点击修改截止日期', 'Click to edit deadline')}
+                          disabled={isBusy}
+                          onClick={() => {
+                            setDeadlineDraft(detailGoal.deadline ?? '');
+                            setEditingDeadline(true);
+                          }}
+                        >
+                          {formatDeadlineSummary(detailGoal, timezone, lang)} ✎
+                        </button>
+                      )}
                     </div>
                   </div>
 
@@ -472,6 +553,23 @@ export function GoalsPage({ timezone }: { timezone: string }) {
                     >
                       {detailGoal.pinned ? t('取消置顶', 'Unpin') : t('置顶', 'Pin')}
                     </button>
+                    {detailGoal.status === 'active' ? (
+                      <button
+                        type="button"
+                        className="btn small"
+                        disabled={isBusy}
+                        onClick={(e) =>
+                          openAssistant(e.currentTarget, {
+                            prompt: t(
+                              `帮我重新规划「${detailGoal.title}」`,
+                              `Help me replan "${detailGoal.title}"`,
+                            ),
+                          })
+                        }
+                      >
+                        {t('重新规划', 'Replan')}
+                      </button>
+                    ) : null}
                     {detailGoal.status === 'paused' ? (
                       <button
                         type="button"
@@ -486,6 +584,21 @@ export function GoalsPage({ timezone }: { timezone: string }) {
                         }
                       >
                         {t('恢复', 'Resume')}
+                      </button>
+                    ) : detailGoal.status === 'active' ? (
+                      <button
+                        type="button"
+                        className="btn small"
+                        disabled={isBusy}
+                        onClick={() =>
+                          void updateGoalAction.run({
+                            id: detailGoal.id,
+                            version: detailGoal.version,
+                            status: 'paused',
+                          })
+                        }
+                      >
+                        {t('暂停', 'Pause')}
                       </button>
                     ) : null}
                     <button

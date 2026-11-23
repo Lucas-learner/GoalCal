@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { DateTime } from 'luxon';
 import { api } from '../api/client';
 import { invalidateAfterWrite, queryKeys } from '../api/queryKeys';
 import type { Proposal } from '../api/types';
@@ -172,6 +173,16 @@ export function ProposalModal({ timezone }: { timezone: string }) {
     { key: 'tomorrow', label: t('明天', 'Tomorrow') },
   ];
 
+  const computedEndLabel = (() => {
+    if (!currentStep || !customStartLocal) return null;
+    const startDt = DateTime.fromISO(customStartLocal, { zone: timezone });
+    if (!startDt.isValid) return null;
+    const endDt = startDt.plus({ minutes: currentStep.est_min });
+    return endDt.hasSame(startDt, 'day')
+      ? endDt.toFormat('HH:mm')
+      : endDt.toFormat('MM/dd HH:mm');
+  })();
+
   return (
     <Modal title={t('选择时间', 'Pick a time')} onClose={closeProposalModal}>
       <div style={{ marginBottom: 12 }}>
@@ -180,21 +191,31 @@ export function ProposalModal({ timezone }: { timezone: string }) {
       </div>
 
       <div
+        className="proposal-mode-tabs"
         role="group"
-        aria-label={t('筛选推荐时段', 'Filter candidate windows')}
-        style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 14 }}
+        aria-label={t('排期方式', 'Scheduling mode')}
       >
-        {periodOptions.map((opt) => (
-          <button
-            key={opt.key}
-            type="button"
-            className={`btn small${activePeriod === opt.key ? ' primary' : ''}`}
-            disabled={isBusy}
-            onClick={() => void regenerateAction.run({ stepId: activeProposal.step_id, period: opt.key })}
-          >
-            {opt.label}
-          </button>
-        ))}
+        <button
+          type="button"
+          aria-pressed={!showCustomTime}
+          className={`proposal-mode-tab${!showCustomTime ? ' active' : ''}`}
+          disabled={isBusy}
+          onClick={() => {
+            setShowCustomTime(false);
+            setCustomError(null);
+          }}
+        >
+          {t('推荐空档', 'Open slots')}
+        </button>
+        <button
+          type="button"
+          aria-pressed={showCustomTime}
+          className={`proposal-mode-tab${showCustomTime ? ' active' : ''}`}
+          disabled={isBusy}
+          onClick={() => setShowCustomTime(true)}
+        >
+          {t('自定义时间 →', 'Custom time →')}
+        </button>
       </div>
 
       <ErrorBanner
@@ -202,120 +223,141 @@ export function ProposalModal({ timezone }: { timezone: string }) {
         onRefresh={() => void invalidateAfterWrite(queryClient, { goalId: activeProposal.goal_id })}
       />
 
-      {expired ? (
-        <div className="status-banner info" role="status">
-          <div className="status-banner-body">
-            <div className="status-banner-title">{t('该时间提议已过期或已被取代', 'This proposal has expired or been replaced')}</div>
-            <div>{t('请重新生成可用时间候选后再选择。', 'Generate fresh slots before choosing.')}</div>
+      {!showCustomTime ? (
+        <>
+          <div
+            role="group"
+            aria-label={t('筛选推荐时段', 'Filter candidate windows')}
+            style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 14 }}
+          >
+            {periodOptions.map((opt) => (
+              <button
+                key={opt.key}
+                type="button"
+                className={`btn small${activePeriod === opt.key ? ' primary' : ''}`}
+                disabled={isBusy}
+                onClick={() => void regenerateAction.run({ stepId: activeProposal.step_id, period: opt.key })}
+              >
+                {opt.label}
+              </button>
+            ))}
           </div>
-          <div className="status-banner-actions">
-            <button
-              type="button"
-              className="btn small primary"
-              disabled={isBusy}
-              onClick={() => void regenerateAction.run({ stepId: activeProposal.step_id, period: activePeriod })}
-            >
-              {regenerateAction.isPending ? t('生成中…', 'Finding…') : t('重新找时间', 'Find new slots')}
-            </button>
-          </div>
-        </div>
-      ) : null}
 
-      {activeProposal.candidates.length === 0 ? (
-        <EmptyState
-          title={t('该时段暂无空档', 'No open slots in this range')}
-          actions={
+          {expired ? (
+            <div className="status-banner info" role="status">
+              <div className="status-banner-body">
+                <div className="status-banner-title">{t('该时间提议已过期或已被取代', 'This proposal has expired or been replaced')}</div>
+                <div>{t('请重新生成可用时间候选后再选择。', 'Generate fresh slots before choosing.')}</div>
+              </div>
+              <div className="status-banner-actions">
+                <button
+                  type="button"
+                  className="btn small primary"
+                  disabled={isBusy}
+                  onClick={() => void regenerateAction.run({ stepId: activeProposal.step_id, period: activePeriod })}
+                >
+                  {regenerateAction.isPending ? t('生成中…', 'Finding…') : t('重新找时间', 'Find new slots')}
+                </button>
+              </div>
+            </div>
+          ) : null}
+
+          {activeProposal.candidates.length === 0 ? (
+            <EmptyState
+              title={t('该时段暂无空档', 'No open slots in this range')}
+              actions={
+                <>
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={isBusy}
+                    onClick={() => void regenerateAction.run({ stepId: activeProposal.step_id, period: 'all' })}
+                  >
+                    {regenerateAction.isPending ? t('查找中…', 'Finding…') : t('查看全部', 'Show all')}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn primary"
+                    disabled={isBusy}
+                    onClick={() => setShowCustomTime(true)}
+                  >
+                    {t('改用自定义时间', 'Pick custom time')}
+                  </button>
+                </>
+              }
+            />
+          ) : (
+            <div>
+              <div className="field-help" style={{ marginBottom: 8 }}>
+                {t('点击时段即可安排', 'Click any slot to schedule')}
+              </div>
+              {activeProposal.candidates.map((cand, index) => {
+                const label = formatDateTimeLabel(cand.start, cand.end, timezone, lang);
+                return (
+                  <button
+                    key={`${cand.start}-${index}`}
+                    type="button"
+                    className="slot-btn"
+                    aria-label={`${label} · ${activeProposal.goal_title} · ${activeProposal.step_title}`}
+                    disabled={expired || isBusy}
+                    onClick={() =>
+                      void acceptAction.run({
+                        proposalId: activeProposal.id,
+                        version: activeProposal.version,
+                        index,
+                      })
+                    }
+                  >
+                    <div className="slot-time">
+                      {label}
+                      {acceptAction.isPending && selectedIndex === index ? t('（安排中…）', ' (Scheduling…)') : ''}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </>
+      ) : (
+        <form onSubmit={handleCustomSubmit} noValidate className="proposal-custom-form">
+          <label className="field-label" htmlFor="custom-schedule-start">
+            {t(`开始时间（${timezone}）`, `Start time (${timezone})`)}
+          </label>
+          <input
+            id="custom-schedule-start"
+            type="datetime-local"
+            className="input tabular-nums"
+            value={customStartLocal}
+            onChange={(e) => setCustomStartLocal(e.target.value)}
+            disabled={isBusy}
+          />
+          {currentStep && computedEndLabel ? (
+            <div className="field-help tabular-nums" style={{ marginTop: 8 }}>
+              {t(
+                `预计 ${currentStep.est_min} 分钟 · 自动推算结束：${computedEndLabel}`,
+                `Est. ${currentStep.est_min} min · Ends at ${computedEndLabel}`,
+              )}
+            </div>
+          ) : null}
+          {customError ? <div className="field-error">{customError}</div> : null}
+          <div className="proposal-custom-actions">
             <button
               type="button"
               className="btn"
               disabled={isBusy}
-              onClick={() => void regenerateAction.run({ stepId: activeProposal.step_id, period: 'all' })}
+              onClick={() => {
+                setShowCustomTime(false);
+                setCustomError(null);
+              }}
             >
-              {regenerateAction.isPending ? t('查找中…', 'Finding…') : t('查看全部', 'Show all')}
+              {t('返回推荐空档', 'Back to open slots')}
             </button>
-          }
-        />
-      ) : (
-        <div>
-          <div className="field-help" style={{ marginBottom: 8 }}>
-            {t('点击时段即可安排', 'Click any slot to schedule')}
+            <button type="submit" className="btn primary" disabled={isBusy || !currentStep}>
+              {scheduleAction.isPending ? t('安排中…', 'Scheduling…') : t('安排', 'Schedule')}
+            </button>
           </div>
-          {activeProposal.candidates.map((cand, index) => {
-            const label = formatDateTimeLabel(cand.start, cand.end, timezone, lang);
-            return (
-              <button
-                key={`${cand.start}-${index}`}
-                type="button"
-                className="slot-btn"
-                aria-label={`${label} · ${activeProposal.goal_title} · ${activeProposal.step_title}`}
-                disabled={expired || isBusy}
-                onClick={() =>
-                  void acceptAction.run({
-                    proposalId: activeProposal.id,
-                    version: activeProposal.version,
-                    index,
-                  })
-                }
-              >
-                <div className="slot-time">
-                  {label}
-                  {acceptAction.isPending && selectedIndex === index ? t('（安排中…）', ' (Scheduling…)') : ''}
-                </div>
-              </button>
-            );
-          })}
-        </div>
+        </form>
       )}
-
-      <div
-        style={{
-          marginTop: 14,
-          paddingTop: 12,
-          borderTop: '1px solid var(--line)',
-        }}
-      >
-        {!showCustomTime ? (
-          <button
-            type="button"
-            className="inline-link-btn"
-            onClick={() => setShowCustomTime(true)}
-          >
-            {t('自定义时间 →', 'Custom time →')}
-          </button>
-        ) : (
-          <form onSubmit={handleCustomSubmit} noValidate>
-            <label className="field-label" htmlFor="custom-schedule-start">
-              {t(`开始时间（${timezone}）`, `Start time (${timezone})`)}
-            </label>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-              <input
-                id="custom-schedule-start"
-                type="datetime-local"
-                className="input tabular-nums"
-                style={{ flex: 1, minWidth: 200 }}
-                value={customStartLocal}
-                onChange={(e) => setCustomStartLocal(e.target.value)}
-                disabled={isBusy}
-              />
-              <button type="submit" className="btn small primary" disabled={isBusy || !currentStep}>
-                {scheduleAction.isPending ? t('安排中…', 'Scheduling…') : t('安排', 'Schedule')}
-              </button>
-              <button
-                type="button"
-                className="btn small"
-                disabled={isBusy}
-                onClick={() => {
-                  setShowCustomTime(false);
-                  setCustomError(null);
-                }}
-              >
-                {t('收起', 'Cancel')}
-              </button>
-            </div>
-            {customError ? <div className="field-error">{customError}</div> : null}
-          </form>
-        )}
-      </div>
     </Modal>
   );
 }

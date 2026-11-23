@@ -152,8 +152,10 @@ def section(res: dict) -> str:
 
 
 def model_line() -> str:
-    os.environ["GOALCAL_DB_URL"] = "sqlite:////Users/macmini/projects/GoalCal/var/goalcal-production.db"
-    sys.path.insert(0, "/Users/macmini/projects/GoalCal")
+    os.environ["GOALCAL_DB_URL"] = "sqlite:///:memory:"
+    os.environ["GOALCAL_PRODUCTION"] = "false"
+    os.environ.setdefault("GOALCAL_ENV_FILE", os.devnull)
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
     from goalcal.config import settings
     return f"`{settings.llm_model}` @ {settings.llm_base_url}，temperature=0.0，response_format=json_object"
 

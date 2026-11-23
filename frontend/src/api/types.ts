@@ -4,6 +4,7 @@ export interface User {
   email?: string | null;
   timezone: string;
   lang?: string;
+  theme?: string;
 }
 
 export type StepStatus = 'todo' | 'done' | 'dropped';
@@ -39,7 +40,7 @@ export interface Goal {
   template_key?: string;
 }
 
-export type EventKind = 'block' | 'external' | 'buffer';
+export type EventKind = 'block' | 'external' | 'buffer' | 'habit';
 export type EventStatus = 'planned' | 'done' | 'partial' | 'missed' | 'skipped' | 'moved';
 
 export interface CalendarEvent {
@@ -50,9 +51,115 @@ export interface CalendarEvent {
   kind: EventKind | string;
   status: EventStatus | string;
   step_id: number | null;
+  step_version?: string | null;
   goal_id: number | null;
   goal_title: string | null;
   version: string;
+  habit?: HabitOccurrence;
+}
+
+export type HabitStatus = 'active' | 'paused' | 'archived';
+
+export interface HabitRule {
+  title: string;
+  mode: 'fixed' | 'weekly';
+  weekdays: number[];
+  est_min: number;
+  start_time: string | null;
+  weekly_target: number | null;
+}
+
+export interface HabitOccurrence {
+  id: string;
+  habit_id: number;
+  title: string;
+  date: string;
+  today: string;
+  timezone: string;
+  mode: HabitRule['mode'];
+  est_min: number;
+  status: 'pending' | 'done' | 'skipped' | 'missed';
+  can_record: boolean;
+  reason: string | null;
+  event_id: number | null;
+  start: string | null;
+  end: string | null;
+  version: string;
+  habit_version: string;
+}
+
+export interface HabitProgress {
+  habit_id: number;
+  title: string;
+  est_min: number;
+  version: string;
+  timezone: string;
+  week: string;
+  end: string;
+  today: string;
+  done: number;
+  target: number;
+  mode: HabitRule['mode'];
+  schedule_from: string | null;
+  partial: boolean;
+  offer?: HabitOccurrence;
+}
+
+export interface Habit {
+  id: number;
+  status: HabitStatus;
+  pinned?: boolean;
+  goal_id: number | null;
+  goal_title: string | null;
+  goal_status: string | null;
+  timezone: string;
+  today: string;
+  start_date: string;
+  version: string;
+  rule: HabitRule;
+  upcoming_rule: { date: string; rule: HabitRule } | null;
+  progress: HabitProgress | null;
+  next: HabitOccurrence | null;
+  next_unscheduled?: HabitOccurrence | null;
+  next_week?: HabitProgress | null;
+}
+
+export interface HabitSlotCandidate {
+  start: string;
+  end: string;
+  date: string;
+  reasons: string[];
+}
+
+export interface HabitDetail extends Habit {
+  through: string;
+  week_items: HabitOccurrence[];
+  history: HabitOccurrence[];
+  weeks: HabitProgress[];
+  scheduled: HabitOccurrence[];
+}
+
+export interface HabitPreview {
+  effective_date: string;
+  week: string;
+  weekly_target: number | null;
+  slots: { date: string; start: string | null; end: string | null; reason: string | null }[];
+  replaces: string[];
+}
+
+export interface HabitActionBody {
+  date: string;
+  version?: string;
+  habit_version?: string;
+  action: 'schedule' | 'done' | 'skip' | 'cancel' | 'restore' | 'start';
+  target_date?: string;
+  start?: string;
+  minutes?: number;
+}
+
+export interface HabitRange {
+  items: HabitOccurrence[];
+  weeks: HabitProgress[];
 }
 
 export type ExecutionStatus = 'running' | 'completed' | 'adjusted';
@@ -60,7 +167,9 @@ export type ExecutionStatus = 'running' | 'completed' | 'adjusted';
 export interface Execution {
   id: string | number;
   event_id: number | null;
-  step_id: number;
+  step_id: number | null;
+  habit_id?: number | null;
+  habit_occurrence_id?: string | null;
   goal_title: string;
   step_title: string;
   started_at: string;
@@ -166,16 +275,40 @@ export interface CreateGoalIntent {
   deadline?: string | null;
 }
 
+export interface CreateHabitIntent {
+  title: string;
+  weekdays?: number[];
+  weekly_target?: number;
+  est_min?: number;
+  start_time?: string;
+}
+
+export interface ReplanGoalIntent {
+  goal_id: number;
+  goal_title: string;
+  goal_version: string;
+  deadline?: string | null;
+  previous_deadline?: string | null;
+  steps_changed?: boolean;
+  outline: string[];
+  steps: DraftStep[];
+  source?: string;
+  instruction?: string;
+}
+
 export interface AssistantState {
   messages: AssistantMessage[];
   proposal: Proposal | null;
   version: string;
   create_goal?: CreateGoalIntent;
+  create_habit?: CreateHabitIntent;
+  replan_goal?: ReplanGoalIntent;
 }
 
 export interface AssistantTurnResponse extends AssistantState {
   message?: string;
   operation_id?: string;
+  goal?: Goal;
 }
 
 export interface TodayNext {
@@ -191,6 +324,8 @@ export interface TodayResponse {
   execution: Execution | null;
   recovery: CalendarEvent[];
   events: CalendarEvent[];
+  habits?: HabitRange;
+  habit_next?: HabitOccurrence | null;
 }
 
 export interface GoalsListResponse {
@@ -199,6 +334,7 @@ export interface GoalsListResponse {
 
 export interface CalendarEventsResponse {
   events: CalendarEvent[];
+  habits?: HabitRange;
 }
 
 export interface StepUpdateResponse {
