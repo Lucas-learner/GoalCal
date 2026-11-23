@@ -20,7 +20,11 @@ def connect(path=None):
     path = Path(path or database_path())
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     con = sqlite3.connect(path, timeout=10)
-    os.chmod(path, 0o600)
+    try:
+        if (path.stat().st_mode & 0o777) != 0o600:
+            os.chmod(path, 0o600)
+    except OSError:
+        os.chmod(path, 0o600)
     con.row_factory = sqlite3.Row
     con.execute('PRAGMA foreign_keys=ON')
     con.execute('PRAGMA busy_timeout=10000')

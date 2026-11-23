@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { lazy, Suspense, useCallback, useEffect, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
@@ -6,11 +6,15 @@ import { invalidateAfterWrite, queryKeys } from '../api/queryKeys';
 import type { User } from '../api/types';
 import { useIdempotentAction } from '../lib/useIdempotentMutation';
 import { useI18n } from '../i18n';
+import { loadAssistantDrawer, preloadRoute } from '../lib/routePreload';
 import { useAppState } from '../state/AppStateContext';
-import { AssistantDrawer } from './AssistantDrawer';
 import { CalendarIcon, HomeIcon, RepeatIcon, SettingsIcon, TargetIcon } from './Icons';
 import { ProposalModal } from './ProposalModal';
 import { ErrorBanner } from './StateFeedback';
+
+const AssistantDrawer = lazy(() =>
+  loadAssistantDrawer().then((module) => ({ default: module.AssistantDrawer })),
+);
 
 function getInitials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -117,6 +121,8 @@ export function AppShell({
               key={item.to}
               to={item.to}
               end={item.end}
+              onMouseEnter={() => preloadRoute(item.to, queryClient)}
+              onFocus={() => preloadRoute(item.to, queryClient)}
               className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}
             >
               {item.icon}
@@ -128,6 +134,8 @@ export function AppShell({
         <div className="sidebar-bottom">
           <NavLink
             to="/settings"
+            onMouseEnter={() => preloadRoute('/settings', queryClient)}
+            onFocus={() => preloadRoute('/settings', queryClient)}
             className={({ isActive }) => `profile${isActive ? ' active' : ''}`}
           >
             <div className="avatar" aria-hidden="true">
@@ -174,7 +182,9 @@ export function AppShell({
       </main>
 
       {assistantOpen ? (
-        <AssistantDrawer timezone={timezone} isModalOverlay={!wideDesktop} />
+        <Suspense fallback={null}>
+          <AssistantDrawer timezone={timezone} isModalOverlay={!wideDesktop} />
+        </Suspense>
       ) : null}
 
       <ProposalModal timezone={timezone} />

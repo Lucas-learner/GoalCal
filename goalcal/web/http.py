@@ -57,13 +57,14 @@ def _effective_lang(request_lang: str | None, session, user_id: int) -> str:
 
 
 @contextmanager
-def scoped(token: str, *, write=False):
+def scoped(token: str, *, write=False, principal=None):
     """Acquire SQLite's cross-process writer lock before reading mutable state.
 
     ORM tenant filtering is retained; explicit SQL is limited to the connection
     transaction command. Domain services cannot commit or use raw SQL.
     """
-    principal = auth.authenticate(token)
+    if principal is None or write:
+        principal = auth.authenticate(token)
     with db.get_engine().connect() as connection:
         if write:
             connection.exec_driver_sql('BEGIN IMMEDIATE')
@@ -214,20 +215,43 @@ def prepare(token, action, resource, body, *, lang: str | None = None):
                     'draft_id': draft.draft_id}}
 
 
-def execute(token, action, resource, body, query, key=None, digest=None, lang: str | None = None):
+def _dispatch_read(svc, action, resource, query):
+    if action == 'goals':
+        return svc.goals(include_archived=query.get('include_archived') in {'1', 'true'})
+    if action in {'me', 'today', 'preferences'}:
+        return getattr(svc, action)()
+    if action == 'goal':
+        return svc.goal(int(resource), include_archived=query.get('include_archived') in {'1', 'true'})
+    if action == 'events':
+        return svc.events(query.get('start'), query.get('end'))
+    if action == 'habits':
+        return svc.habits.list()
+    if action == 'habit':
+        return svc.habits.detail(int(resource), query)
+    if action == 'habit_slots':
+        return svc.habits.slots(int(resource), query)
+    return None
+
+
+def execute(token, action, resource, body, query, key=None, digest=None, lang: str | None = None, *, principal=None):
     from .core import Service, ApiError
     roll_on_read = False
     if key:
-        with scoped(token) as (session, principal):
+        with scoped(token, principal=principal) as (session, principal):
             resolved_lang = _effective_lang(lang, session, principal.user_id)
             cached = replay(session, principal.user_id, key, digest, lang=resolved_lang)
             if cached is not None:
                 return cached
         body = prepare(token, action, resource, body, lang=lang)
     elif action in {'today', 'events', 'habits', 'habit', 'habit_slots'}:
-        with scoped(token) as (session, principal):
-            roll_on_read = Service(session, principal.user_id, principal.tz, datetime.now(timezone.utc)).habits.needs_roll()
-    with scoped(token, write=bool(key) or roll_on_read) as (session, principal):
+        with scoped(token, principal=principal) as (session, principal):
+            resolved_lang = _effective_lang(lang, session, principal.user_id)
+            now = datetime.now(timezone.utc)
+            svc = Service(session, principal.user_id, principal.tz, now, lang=resolved_lang)
+            if not svc.habits.needs_roll():
+                return _dispatch_read(svc, action, resource, query)
+            roll_on_read = True
+    with scoped(token, write=bool(key) or roll_on_read, principal=principal) as (session, principal):
         resolved_lang = _effective_lang(lang, session, principal.user_id)
         if key:
             cached = replay(session, principal.user_id, key, digest, lang=resolved_lang)
@@ -237,20 +261,9 @@ def execute(token, action, resource, body, query, key=None, digest=None, lang: s
         svc = Service(session, principal.user_id, principal.tz, now, lang=resolved_lang)
         if key or roll_on_read:
             svc.habits.roll()
-        if action == 'goals':
-            result = svc.goals(include_archived=query.get('include_archived') in {'1', 'true'})
-        elif action in {'me', 'today', 'preferences'}:
-            result = getattr(svc, action)()
-        elif action == 'goal':
-            result = svc.goal(int(resource), include_archived=query.get('include_archived') in {'1', 'true'})
-        elif action == 'events':
-            result = svc.events(query.get('start'), query.get('end'))
-        elif action == 'habits':
-            result = svc.habits.list()
-        elif action == 'habit':
-            result = svc.habits.detail(int(resource), query)
-        elif action == 'habit_slots':
-            result = svc.habits.slots(int(resource), query)
+        read_result = _dispatch_read(svc, action, resource, query)
+        if read_result is not None:
+            result = read_result
         elif action in {'create_habit', 'preview_habit'}:
             result = svc.habits.create(body) if action == 'create_habit' else svc.habits.preview(body)
         elif action in {'update_habit', 'habit_status', 'habit_action', 'delete_habit'}:
@@ -346,7 +359,7 @@ async def endpoint(request: Request, *, action, schema=None):
     token = request.cookies.get(COOKIE)
     lang = _request_lang(request)
     try:
-        await run_in_threadpool(auth.authenticate, token)
+        principal = await run_in_threadpool(auth.authenticate, token)
         body = {}
         key = digest = None
         if request.method != 'GET':
@@ -371,7 +384,8 @@ async def endpoint(request: Request, *, action, schema=None):
                 return error('invalid_input', pick(lang, '输入格式有误，请检查必填项和时间。', 'Invalid input format; check required fields and times.'), 422)
             digest = fingerprint(request.method, request.url.path, body)
         result = await run_in_threadpool(execute, token, action, request.path_params.get('id'),
-                                         body, dict(request.query_params), key, digest, lang)
+                                         body, dict(request.query_params), key, digest, lang,
+                                         principal=principal)
         return response(result)
     except auth.AuthError:
         return error('unauthenticated', pick(lang, '登录已过期，请重新登录。', 'Your session has expired. Please log in again.'), 401)
@@ -426,15 +440,24 @@ api = Starlette(routes=[Route(path, partial(endpoint, action=action, schema=sche
 
 
 async def frontend(request):
+    dist = (ROOT / 'frontend' / 'dist').resolve()
+    assets_dir = (dist / 'assets').resolve()
+    path = request.path_params.get('path', '')
+    candidate = (dist / path).resolve()
+    if not candidate.is_relative_to(dist):
+        return PlainTextResponse('Not found', status_code=404)
+    # Content-hashed Vite build assets under dist/assets/ contain no user data
+    # and can be cached publicly at the browser and CDN edge without DB auth.
+    if path.startswith('assets/') and candidate.is_relative_to(assets_dir) and candidate.is_file():
+        return FileResponse(candidate, headers={
+            'Cache-Control': 'public, max-age=31536000, immutable',
+            'X-Content-Type-Options': 'nosniff',
+            'Referrer-Policy': 'same-origin',
+        })
     try:
         await run_in_threadpool(auth.authenticate, request.cookies.get(COOKIE))
     except auth.AuthError:
         return RedirectResponse('/_goalcal/login?next=/app/', status_code=303)
-    dist = ROOT / 'frontend' / 'dist'
-    path = request.path_params.get('path','')
-    candidate = (dist / path).resolve()
-    if not candidate.is_relative_to(dist.resolve()):
-        return PlainTextResponse('Not found', status_code=404)
     if not path or not candidate.is_file():
         if Path(path).suffix:
             return PlainTextResponse('Not found', status_code=404)
@@ -444,5 +467,6 @@ async def frontend(request):
     return FileResponse(candidate, headers={
         'Cache-Control': 'no-store' if candidate.name == 'index.html' else 'private, max-age=3600',
         'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
-        'X-Content-Type-Options':'nosniff', 'Referrer-Policy':'same-origin',
+        'X-Content-Type-Options': 'nosniff',
+        'Referrer-Policy': 'same-origin',
     })

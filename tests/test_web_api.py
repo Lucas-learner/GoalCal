@@ -226,16 +226,47 @@ def test_new_tables_tenant_isolation_and_foreign_references(accounts):
 
 
 def test_frontend_requires_login_and_prevents_traversal(accounts,tmp_path,monkeypatch):
-    root=tmp_path/'site';dist=root/'frontend'/'dist';dist.mkdir(parents=True)
+    root=tmp_path/'site';dist=root/'frontend'/'dist';assets=dist/'assets';assets.mkdir(parents=True)
     (dist/'index.html').write_text('<!doctype html><title>GoalCal</title>')
+    payload = 'console.log("goalcal");' * 100
+    (assets/'index-abc12345.js').write_text(payload)
     monkeypatch.setattr(http,'ROOT',root)
     async def check():
         async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=app),base_url=ORIGIN) as c:
             assert (await c.get('/app/')).status_code==303
+            # Content-hashed assets are publicly cacheable without a session cookie.
+            asset = await c.get('/app/assets/index-abc12345.js', headers={'Accept-Encoding': 'gzip'})
+            assert asset.status_code == 200
+            assert asset.headers['cache-control'] == 'public, max-age=31536000, immutable'
+            assert asset.headers.get('content-encoding') == 'gzip'
+            assert asset.text == payload
+            head_asset = await c.head('/app/assets/index-abc12345.js')
+            assert head_asset.status_code == 200
+            assert head_asset.headers['cache-control'] == 'public, max-age=31536000, immutable'
+            # Traversal out of assets/ must still be blocked and never expose index.html unauthenticated.
+            assert (await c.get('/app/assets/%2e%2e/index.html')).status_code in {303, 404}
+            assert (await c.get('/app/assets/missing.js')).status_code == 303
             c.cookies.set('goalcal_session',accounts[1][0])
             r=await c.get('/app/goals');assert r.status_code==200
+            assert r.headers['cache-control']=='no-store'
             assert "script-src 'self'" in r.headers['content-security-policy']
             assert (await c.get('/app/missing.js')).status_code==404
+    asyncio.run(check())
+
+
+def test_gzip_compresses_large_api_and_auth_responses(accounts):
+    _, tokens = accounts
+    async def check():
+        async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=app), base_url=ORIGIN) as c:
+            reg = await c.get('/_goalcal/register', headers={'Accept-Encoding': 'gzip'})
+            assert reg.status_code == 200
+            assert reg.headers.get('content-encoding') == 'gzip'
+            assert 'accept-encoding' in reg.headers.get('vary', '').lower()
+            assert (await c.head('/_goalcal/health')).status_code in {200, 503}
+            c.cookies.set('goalcal_session', tokens[0])
+            today = await c.get('/api/v1/today', headers={'Accept-Encoding': 'gzip'})
+            assert today.status_code == 200
+            assert today.headers['cache-control'] == 'no-store'
     asyncio.run(check())
 
 

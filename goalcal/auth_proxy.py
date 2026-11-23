@@ -20,6 +20,8 @@ import httpx2
 import websockets
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
+from starlette.middleware import Middleware
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response, JSONResponse
 from starlette.routing import Route, WebSocketRoute, Mount
@@ -552,15 +554,18 @@ async def proxy_websocket(websocket: WebSocket) -> None:
 from .web.http import api as web_api, frontend as web_frontend
 
 
-app = Starlette(routes=[
-    Route("/_goalcal/health", health, methods=["GET"]),
-    Mount("/api/v1", app=web_api),
-    Route("/app/{path:path}", web_frontend, methods=["GET"]),
-    Route("/app", lambda request: RedirectResponse("/app/", status_code=307)),
-    Route("/_goalcal/login", login, methods=["GET", "POST"]),
-    Route("/_goalcal/register", register, methods=["GET", "POST"]),
-    Route("/_goalcal/logout", logout, methods=["POST"]),
-    Route("/_goalcal/lang", set_language, methods=["GET"]),
-    Route("/{path:path}", proxy_http, methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]),
-    WebSocketRoute("/{path:path}", proxy_websocket),
-])
+app = Starlette(
+    routes=[
+        Route("/_goalcal/health", health, methods=["GET", "HEAD"]),
+        Mount("/api/v1", app=web_api),
+        Route("/app/{path:path}", web_frontend, methods=["GET", "HEAD"]),
+        Route("/app", lambda request: RedirectResponse("/app/", status_code=307)),
+        Route("/_goalcal/login", login, methods=["GET", "POST"]),
+        Route("/_goalcal/register", register, methods=["GET", "POST"]),
+        Route("/_goalcal/logout", logout, methods=["POST"]),
+        Route("/_goalcal/lang", set_language, methods=["GET"]),
+        Route("/{path:path}", proxy_http, methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]),
+        WebSocketRoute("/{path:path}", proxy_websocket),
+    ],
+    middleware=[Middleware(GZipMiddleware, minimum_size=500)],
+)

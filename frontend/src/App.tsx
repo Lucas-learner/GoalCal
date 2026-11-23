@@ -1,32 +1,45 @@
 import { lazy, Suspense, useEffect } from 'react';
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
-import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ApiError, api } from './api/client';
 import { queryKeys } from './api/queryKeys';
 import { AppShell } from './components/AppShell';
 import { ErrorBanner, SkeletonCard } from './components/StateFeedback';
-const CalendarPage = lazy(() => import('./pages/CalendarPage').then((module) => ({ default: module.CalendarPage })));
 import { useI18n } from './i18n';
-import { useTheme } from './theme';
-import { GoalsPage } from './pages/GoalsPage';
-import { HabitsPage, NewHabitPage } from './pages/HabitsPage';
-import { NewGoalPage } from './pages/NewGoalPage';
-import { SettingsPage } from './pages/SettingsPage';
+import {
+  loadCalendarPage,
+  loadGoalsPage,
+  loadHabitsPage,
+  loadNewGoalPage,
+  loadSettingsPage,
+  prefetchRouteData,
+} from './lib/routePreload';
 import { TodayPage } from './pages/TodayPage';
 import { AppStateProvider } from './state/AppStateContext';
+import { useTheme } from './theme';
+
+const CalendarPage = lazy(() => loadCalendarPage().then((module) => ({ default: module.CalendarPage })));
+const GoalsPage = lazy(() => loadGoalsPage().then((module) => ({ default: module.GoalsPage })));
+const NewGoalPage = lazy(() => loadNewGoalPage().then((module) => ({ default: module.NewGoalPage })));
+const HabitsPage = lazy(() => loadHabitsPage().then((module) => ({ default: module.HabitsPage })));
+const NewHabitPage = lazy(() => loadHabitsPage().then((module) => ({ default: module.NewHabitPage })));
+const SettingsPage = lazy(() => loadSettingsPage().then((module) => ({ default: module.SettingsPage })));
+
+export function shouldRetryQuery(failureCount: number, error: unknown): boolean {
+  if (error instanceof ApiError && error.status >= 400 && error.status < 500) {
+    return false;
+  }
+  return failureCount < 2;
+}
 
 export function createAppQueryClient() {
   return new QueryClient({
     defaultOptions: {
       queries: {
-        staleTime: 15_000,
+        staleTime: 30_000,
         refetchOnWindowFocus: true,
-        retry: (failureCount, error) => {
-          if (error instanceof ApiError && (error.status === 401 || error.status === 403 || error.status === 404)) {
-            return false;
-          }
-          return failureCount < 1;
-        },
+        retry: shouldRetryQuery,
+        retryDelay: (attemptIndex) => Math.min(400 * 2 ** attemptIndex, 2000),
       },
     },
   });
@@ -35,10 +48,20 @@ export function createAppQueryClient() {
 export function AppContent() {
   const { t, syncFromUser } = useI18n();
   const { syncFromUser: syncThemeFromUser } = useTheme();
+  const location = useLocation();
+  const queryClient = useQueryClient();
+
   const meQuery = useQuery({
     queryKey: queryKeys.me,
     queryFn: api.getMe,
+    staleTime: 5 * 60_000,
   });
+
+  // Start fetching the initial route's primary data in parallel with /me
+  // to avoid a 2-RTT waterfall on cold page loads.
+  useEffect(() => {
+    prefetchRouteData(location.pathname, queryClient);
+  }, [location.pathname, queryClient]);
 
   const user = meQuery.data;
   const timezone = user?.timezone || 'UTC';

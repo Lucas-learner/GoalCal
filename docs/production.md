@@ -11,7 +11,7 @@
 | 环境文件 | 仓库根目录 `.env.production`，权限 600 |
 | 数据库 | `var/production/goalcal.db`，schema 11，SQLite WAL |
 | 日志 / 备份 | `var/production/logs/` / `var/production/backups/` |
-| 当前发布 | `var/releases/habits-v11-assistant-20261123/`，包含源码、`frontend/dist/` 和 `SHA256SUMS` |
+| 当前发布 | `var/releases/perf-v11-20261123/`，包含源码、`frontend/dist/` 和 `SHA256SUMS`（同 schema 回滚包：`var/releases/habits-v11-assistant-20261123/`） |
 | 后台服务 | `local.goalcal-v2.app`、`.tunnel`、`.backup` |
 | 健康检查 | `http://127.0.0.1:8521/_goalcal/health` |
 

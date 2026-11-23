@@ -42,6 +42,9 @@ def _get_engine(url: str | None = None) -> Engine:
                 connection.execute("PRAGMA foreign_keys=ON")
                 connection.execute("PRAGMA busy_timeout=10000")
                 connection.execute("PRAGMA journal_mode=WAL")
+                connection.execute("PRAGMA synchronous=NORMAL")
+                connection.execute("PRAGMA temp_store=MEMORY")
+                connection.execute("PRAGMA cache_size=-16000")
         _engine_url = target
         _SessionFactory = sessionmaker(bind=_engine, expire_on_commit=False)
     return _engine

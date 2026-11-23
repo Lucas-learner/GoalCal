@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ApiError, apiWrite, setUnauthorizedHandler } from '../api/client';
+import { shouldRetryQuery } from '../App';
 
 describe('apiWrite idempotency and retry semantics', () => {
   it('automatically retries transient network error once with the exact same Idempotency-Key', async () => {
@@ -91,5 +92,23 @@ describe('apiWrite idempotency and retry semantics', () => {
     ).rejects.toMatchObject({ status: 401 });
     expect(onUnauth).toHaveBeenCalledTimes(1);
     setUnauthorizedHandler(null);
+  });
+});
+
+describe('shouldRetryQuery transient error policy', () => {
+  it('skips retries for 4xx client errors and retries network/5xx up to 2 times', () => {
+    expect(shouldRetryQuery(0, new ApiError({ status: 401, code: 'unauthenticated', message: 'auth' }))).toBe(false);
+    expect(shouldRetryQuery(0, new ApiError({ status: 404, code: 'not_found', message: 'missing' }))).toBe(false);
+    expect(shouldRetryQuery(0, new ApiError({ status: 422, code: 'invalid_input', message: 'bad' }))).toBe(false);
+
+    const gatewayErr = new ApiError({ status: 502, code: 'http_502', message: 'bad gateway' });
+    expect(shouldRetryQuery(0, gatewayErr)).toBe(true);
+    expect(shouldRetryQuery(1, gatewayErr)).toBe(true);
+    expect(shouldRetryQuery(2, gatewayErr)).toBe(false);
+
+    const timeoutErr = new ApiError({ status: 0, code: 'timeout', message: 'timed out' });
+    expect(shouldRetryQuery(0, timeoutErr)).toBe(true);
+    expect(shouldRetryQuery(1, timeoutErr)).toBe(true);
+    expect(shouldRetryQuery(2, timeoutErr)).toBe(false);
   });
 });

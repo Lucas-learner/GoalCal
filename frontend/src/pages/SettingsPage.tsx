@@ -38,11 +38,13 @@ export function SettingsPage({ user }: { user: User | undefined }) {
   const availabilityQuery = useQuery({
     queryKey: queryKeys.availability,
     queryFn: api.getAvailability,
+    enabled: section === 'schedule',
   });
 
   const metricsQuery = useQuery({
     queryKey: queryKeys.metrics,
     queryFn: api.getMetrics,
+    enabled: section === 'metrics',
   });
 
   const archivedGoalsQuery = useQuery({
