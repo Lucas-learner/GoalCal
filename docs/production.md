@@ -11,7 +11,7 @@
 | 环境文件 | 仓库根目录 `.env.production`，权限 600 |
 | 数据库 | `var/production/goalcal.db`，schema 12，SQLite WAL |
 | 日志 / 备份 | `var/production/logs/` / `var/production/backups/` |
-| 当前发布 | `var/releases/calendar-sync-v12-20261124/`，包含源码、`frontend/dist/` 和 `SHA256SUMS`（上一版本 v11 跨 schema 回滚包：`var/releases/perf-v11-20261123/`，切换前备份路径记录在 `var/releases/calendar-sync-v12-20261124/CUTOVER_BACKUP`） |
+| 当前发布 | `var/releases/calendar-sync-ui-v12-20261124/`，包含源码、`frontend/dist/` 和 `SHA256SUMS`（同 schema 回滚包：`var/releases/calendar-sync-v12-20261124/`；上一版本 v11 跨 schema 回滚包：`var/releases/perf-v11-20261123/`，切换前备份路径记录在 `var/releases/calendar-sync-v12-20261124/CUTOVER_BACKUP`） |
 | 后台服务 | `local.goalcal-v2.app`、`.tunnel`、`.backup` |
 | 健康检查 | `http://127.0.0.1:8521/_goalcal/health` |
 
@@ -82,6 +82,6 @@ curl -fsS http://127.0.0.1:8521/_goalcal/health
 
 恢复命令需要停服：`.venv/bin/python -m goalcal.admin restore /绝对路径/备份.db --app-stopped`。恢复会撤销登录会话；备份之后的数据需另行恢复，不能声称回滚无损保留所有新写入。
 
-当前发布加入双向 `.ics` 日历同步（只读订阅导出 `/calendar/feed/{token}.ics` + 外部 `.ics`/`webcal://` 定时拉取与取消清理 + 日历页快捷跳转），并将数据库升级至 Schema `v12`。升级前的在线备份与停服切换备份分别记录在 `var/releases/calendar-sync-v12-20261124/ONLINE_BACKUP` 与 `CUTOVER_BACKUP`，回滚至 v11 需停服恢复 `CUTOVER_BACKUP` 并切回 `var/releases/perf-v11-20261123/`。恢复 v8 所需源码与构建保存在 `var/releases/rollback-3b022e1-v8/`。
+当前发布基于 Schema `v12` 的同 schema 更新（精简日历同步文案、补充外部链接获取指南、并将手动 `.ics` 导入折叠收纳，源码与构建位于 `var/releases/calendar-sync-ui-v12-20261124/`；同 schema 回滚可切回 `var/releases/calendar-sync-v12-20261124/`）。前一发布加入双向 `.ics` 日历同步（只读订阅导出 `/calendar/feed/{token}.ics` + 外部 `.ics`/`webcal://` 定时拉取与取消清理 + 日历页快捷跳转），并将数据库升级至 Schema `v12`。升级前的在线备份与停服切换备份分别记录在 `var/releases/calendar-sync-v12-20261124/ONLINE_BACKUP` 与 `CUTOVER_BACKUP`，回滚至 v11 需停服恢复 `CUTOVER_BACKUP` 并切回 `var/releases/perf-v11-20261123/`。恢复 v8 所需源码与构建保存在 `var/releases/rollback-3b022e1-v8/`。
 
 本次归并的快照、旧数据与旧配置位置见 [整合记录](records/consolidation-2026-11-17.md)。旧数据只归档，不合并进正式新版库。

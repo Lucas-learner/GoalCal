@@ -708,14 +708,15 @@ describe('GoalCal critical interactions', () => {
     ).toBe(true);
     await user.type(screen.getByLabelText('日历名称'), '公司日历');
     await user.type(
-      screen.getByLabelText('外部日历订阅地址（.ics / webcal://）'),
+      screen.getByLabelText('订阅链接（https:// 或 webcal://）'),
       'https://cal.example/work.ics',
     );
     await user.click(screen.getByRole('button', { name: '添加并同步' }));
     expect(
       calls.some((c) => c.url === '/api/v1/calendar/sync/sources' && c.method === 'POST'),
     ).toBe(true);
-    expect(screen.getByLabelText('选择 .ics 文件（上限 5 MB）')).toBeInTheDocument();
+    await user.click(screen.getByText('一次性导入本地 .ics 文件'));
+    expect(screen.getByLabelText('选择 .ics 文件（上限 5 MB）')).toBeVisible();
     expect(screen.queryByText('近 7 天指标')).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: '指标与反馈' }));
@@ -749,7 +750,7 @@ describe('GoalCal critical interactions', () => {
     // Clicking Calendar Sync button on Calendar page navigates straight to Settings -> Calendar Sync section
     await user.click(syncBtn);
     expect(await screen.findByRole('heading', { name: '设置' })).toBeInTheDocument();
-    expect(await screen.findByText('导出到外部日历（.ics 订阅）')).toBeInTheDocument();
+    expect(await screen.findByText('同步到外部日历')).toBeInTheDocument();
   });
 
   it('calibrates mismatched or vague goals before drafting and distills a clean goal title', async () => {

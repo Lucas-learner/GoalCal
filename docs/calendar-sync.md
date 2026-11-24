@@ -1,6 +1,6 @@
 # 日历同步设计与演进
 
-> 更新日期：2026-11-23
+> 更新日期：2026-11-24
 > Schema 版本：`v12`
 
 GoalCal 采用「**先通过 ICS 双向订阅覆盖全平台，数据与接口底座兼容后续原生双向协议**」的分阶段同步架构。
@@ -10,7 +10,7 @@ GoalCal 采用「**先通过 ICS 双向订阅覆盖全平台，数据与接口�
 ## 一、已实现能力（第一阶段：ICS 双向订阅）
 
 ### 1. GoalCal → 外部日历（只读 `.ics` 订阅导出）
-- 入口：`设置 → 日历同步 → 导出到外部日历`
+- 入口：`设置 → 日历同步 → 同步到外部日历`
 - 公开订阅地址：`GET / HEAD /calendar/feed/{token}.ics`
   - 每用户独立 256-bit 随机 URL-safe Token，支持随时停用或一键重置（旧链接立即返回 404）。
   - 响应携带 `Content-Type: text/calendar; charset=utf-8`、`Cache-Control: private, no-cache`、`ETag`（支持 `If-None-Match` → `304 Not Modified`）、`X-Robots-Tag: noindex, nofollow`，并附带 `REFRESH-INTERVAL;VALUE=DURATION:PT15M` 与 `X-PUBLISHED-TTL:PT15M` 刷新建议。
@@ -21,7 +21,7 @@ GoalCal 采用「**先通过 ICS 双向订阅覆盖全平台，数据与接口�
   - 导出窗口为近 30 天至未来 180 天；已完成事项标题自动加 `✓ ` 前缀，描述包含目标/阶段/状态及 GoalCal 日历页链接。
 
 ### 2. 外部日历 → GoalCal（自动定时拉取 + 手动刷新）
-- 入口：`设置 → 日历同步 → 自动同步外部日历`
+- 入口：`设置 → 日历同步 → 从外部日历同步`
 - 支持绑定多个外部日历的 `https://`、`http://` 或 `webcal://` / `webcals://` 订阅链接（单账号上限 10 个，支持 15 分钟至每天 1 次频率）。
 - 安全与并发边界：
   - 所有外部拉取经由 [safe_fetch.py](../goalcal/safe_fetch.py) 执行：禁止内网/回环/保留 IP、DNS 固定解析防重绑定、强制校验 TLS、禁用环境代理、限制重定向次数（≤3）、响应体上限 5 MB、总超时 15 秒。
@@ -34,7 +34,7 @@ GoalCal 采用「**先通过 ICS 双向订阅覆盖全平台，数据与接口�
   - 与已确认习惯占用的冲突时段自动跳过（同手动 `.ics` 导入规则）。
 
 ### 3. 手动导入（`.ics` 文件）
-- 保留在 `设置 → 日历同步 → 手动导入` 区域，与自动订阅源相互独立（`source="import", sync_source_id IS NULL`）。
+- 折叠收纳于 `设置 → 日历同步 → 从外部日历同步 → 一次性导入本地 .ics 文件`，适合无订阅链接或静态课表等场景，与自动订阅源相互独立（`source="import", sync_source_id IS NULL`）。
 
 ---
 

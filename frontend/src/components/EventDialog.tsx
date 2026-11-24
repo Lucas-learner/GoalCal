@@ -194,8 +194,8 @@ export function EventDialog({ event, timezone, onClose }: EventDialogProps) {
       {event.source === 'sync' ? (
         <div className="muted" style={{ fontSize: 11.5, marginBottom: 12, lineHeight: 1.5 }}>
           {t(
-            '此日程来自外部日历订阅同步；下次同步时会以源日历的时间为准。',
-            'Synced from an external calendar subscription; future syncs will reflect updates from the source calendar.',
+            '来自外部日历同步；本地修改会在下次同步时被覆盖。',
+            'Synced from an external calendar; local edits will be overwritten on the next sync.',
           )}
         </div>
       ) : null}

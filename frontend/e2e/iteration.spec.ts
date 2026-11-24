@@ -104,6 +104,7 @@ test('settings save persists and ICS import deduplicates', async ({ page }) => {
   await page.getByRole('button', { name: '时间偏好', exact: true }).click();
   await expect(page.locator('#pref-max-minutes')).toHaveValue('255');
   await page.getByRole('button', { name: '日历同步', exact: true }).click();
+  await page.getByText('一次性导入本地 .ics 文件', { exact: true }).click();
   const file = { name:'qa.ics', mimeType:'text/calendar', buffer: Buffer.from('BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:goalcal-ui-qa\r\nDTSTART:20300101T020000Z\r\nDTEND:20300101T023000Z\r\nSUMMARY:导入验收日程\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n') };
   await page.locator('#ics-file-input').setInputFiles(file);
   for (let i=0;i<2;i++) {

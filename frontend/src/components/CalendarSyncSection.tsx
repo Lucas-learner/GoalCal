@@ -390,14 +390,14 @@ export function CalendarSyncSection({ timezone }: { timezone: string }) {
 
   return (
     <>
-      <section className="settings-section" aria-label={t('导出到外部日历', 'Subscribe in external calendars')}>
+      <section className="settings-section" aria-label={t('同步到外部日历', 'Sync to external calendars')}>
         <div className="settings-section-title">
-          {t('导出到外部日历（.ics 订阅）', 'Export to external calendars (.ics feed)')}
+          {t('同步到外部日历', 'Sync to external calendars')}
         </div>
         <p className="settings-section-copy">
           {t(
-            '生成专属只读订阅链接，在 Apple 日历、Google Calendar、Outlook 等日历中查看 GoalCal 安排。自动排除外部导入日程，避免重复。',
-            'Generate a private read-only subscription URL for Apple Calendar, Google Calendar, Outlook, and more. External imported events are excluded to prevent duplicates.',
+            '在系统日历或第三方日历中只读查看 GoalCal 安排（自动排除外部日程）。',
+            'View your GoalCal schedule read-only in external calendar apps (external events are excluded).',
           )}
         </p>
 
@@ -411,11 +411,11 @@ export function CalendarSyncSection({ timezone }: { timezone: string }) {
 
             <div className="sync-feed-header">
               <div>
-                <div className="setting-name">{t('启用订阅链接', 'Enable subscription feed')}</div>
+                <div className="setting-name">{t('订阅链接', 'Subscription link')}</div>
                 <div className="sync-hint">
                   {feed?.enabled
-                    ? t('任何持有该链接的日历客户端均可只读拉取你的 GoalCal 日程，请妥善保管。', 'Anyone with this private link can read your GoalCal schedule. Rotate it anytime if leaked.')
-                    : t('启用后将为你生成一个专属 .ics 订阅链接。', 'Enable to generate your private .ics subscription URL.')}
+                    ? t('私有链接，泄露可随时重置。', 'Private link — rotate anytime if shared.')
+                    : t('开启后生成专属链接。', 'Turn on to generate your private link.')}
                 </div>
               </div>
               <button
@@ -427,46 +427,48 @@ export function CalendarSyncSection({ timezone }: { timezone: string }) {
                 {updateFeedAction.isPending
                   ? t('更新中…', 'Updating…')
                   : feed?.enabled
-                    ? t('停用链接', 'Disable')
-                    : t('生成订阅链接', 'Enable feed')}
+                    ? t('停用', 'Disable')
+                    : t('生成订阅链接', 'Enable link')}
               </button>
             </div>
 
-            <div className="sync-scope-group" role="group" aria-label={t('导出范围', 'Included items')}>
-              <span className="sync-scope-label">{t('包含内容', 'Include')}</span>
-              <label className="sync-check">
-                <input
-                  type="checkbox"
-                  checked={feed?.include_blocks ?? true}
-                  disabled={updateFeedAction.isPending || !feed?.enabled}
-                  onChange={(e) => handleFeedChange({ include_blocks: e.target.checked })}
-                />
-                <span>{t('目标执行块', 'Goal blocks')}</span>
-              </label>
-              <label className="sync-check">
-                <input
-                  type="checkbox"
-                  checked={feed?.include_habits ?? true}
-                  disabled={updateFeedAction.isPending || !feed?.enabled}
-                  onChange={(e) => handleFeedChange({ include_habits: e.target.checked })}
-                />
-                <span>{t('习惯安排', 'Habit sessions')}</span>
-              </label>
-              <label className="sync-check">
-                <input
-                  type="checkbox"
-                  checked={feed?.include_manual ?? true}
-                  disabled={updateFeedAction.isPending || !feed?.enabled}
-                  onChange={(e) => handleFeedChange({ include_manual: e.target.checked })}
-                />
-                <span>{t('手动添加的日程', 'Manual events')}</span>
-              </label>
-            </div>
+            {feed?.enabled ? (
+              <div className="sync-scope-group" role="group" aria-label={t('导出范围', 'Included items')}>
+                <span className="sync-scope-label">{t('包含内容', 'Include')}</span>
+                <label className="sync-check">
+                  <input
+                    type="checkbox"
+                    checked={feed?.include_blocks ?? true}
+                    disabled={updateFeedAction.isPending}
+                    onChange={(e) => handleFeedChange({ include_blocks: e.target.checked })}
+                  />
+                  <span>{t('目标执行块', 'Goal blocks')}</span>
+                </label>
+                <label className="sync-check">
+                  <input
+                    type="checkbox"
+                    checked={feed?.include_habits ?? true}
+                    disabled={updateFeedAction.isPending}
+                    onChange={(e) => handleFeedChange({ include_habits: e.target.checked })}
+                  />
+                  <span>{t('习惯安排', 'Habit sessions')}</span>
+                </label>
+                <label className="sync-check">
+                  <input
+                    type="checkbox"
+                    checked={feed?.include_manual ?? true}
+                    disabled={updateFeedAction.isPending}
+                    onChange={(e) => handleFeedChange({ include_manual: e.target.checked })}
+                  />
+                  <span>{t('手动日程', 'Manual events')}</span>
+                </label>
+              </div>
+            ) : null}
 
             {feed?.enabled && feedUrls ? (
               <div className="sync-feed-box">
                 <label className="field-label" htmlFor="calendar-feed-url">
-                  {t('专属订阅链接', 'Private subscription URL')}
+                  {t('订阅链接', 'Subscription link')}
                 </label>
                 <div className="sync-url-row">
                   <input
@@ -496,14 +498,14 @@ export function CalendarSyncSection({ timezone }: { timezone: string }) {
                   </button>
                   {feed.last_accessed_at ? (
                     <span className="sync-meta tabular-nums">
-                      {t('上次外部拉取：', 'Last fetched: ')}
+                      {t('上次拉取：', 'Last fetched: ')}
                       {formatTimestamp(feed.last_accessed_at, timezone, lang)}
                     </span>
                   ) : null}
                 </div>
 
                 <details className="sync-guide">
-                  <summary>{t('如何订阅到 Apple / Google / Outlook 日历？', 'How to subscribe in Apple / Google / Outlook?')}</summary>
+                  <summary>{t('如何订阅到 Apple / Google / Outlook？', 'How to subscribe in Apple / Google / Outlook?')}</summary>
                   <ul>
                     <li>
                       <strong>{t('Apple 日历（iPhone / Mac）', 'Apple Calendar (iOS / macOS)')}</strong>：
@@ -534,14 +536,14 @@ export function CalendarSyncSection({ timezone }: { timezone: string }) {
         )}
       </section>
 
-      <section className="settings-section" aria-label={t('自动同步外部日历', 'External calendar subscriptions')}>
+      <section className="settings-section" aria-label={t('从外部日历同步', 'Sync from external calendars')}>
         <div className="settings-section-title">
-          {t('自动同步外部日历（订阅源）', 'Auto-sync external calendars')}
+          {t('从外部日历同步', 'Sync from external calendars')}
         </div>
         <p className="settings-section-copy">
           {t(
-            '添加 Apple、Google、Outlook、飞书等外部日历的 .ics / webcal:// 私密链接，GoalCal 会按频率自动拉取更新并清理已取消日程，排期时自动避让。',
-            'Connect private .ics or webcal:// URLs from Apple, Google, Outlook, or other calendars. GoalCal refreshes them automatically and clears cancelled events.',
+            '定时拉取外部日历日程，排期时自动避让。',
+            'Automatically pull events from external calendars so scheduling avoids conflicts.',
           )}
         </p>
 
@@ -570,7 +572,6 @@ export function CalendarSyncSection({ timezone }: { timezone: string }) {
                     <div className="sync-source-head">
                       <div className="sync-source-title-row">
                         <span className="sync-source-name">{src.name}</span>
-                        <span className="chip">{t('ICS 订阅', 'ICS feed')}</span>
                         <span className={statusBadge.cls}>{statusBadge.text}</span>
                       </div>
                       <div className="sync-source-actions">
@@ -648,14 +649,14 @@ export function CalendarSyncSection({ timezone }: { timezone: string }) {
                 );
               })}
             </div>
-          ) : (
-            <div className="sync-empty-hint">
-              {t('尚未添加外部日历订阅源。在下方粘贴外部日历的 .ics / webcal:// 链接即可开始自动同步。', 'No external calendar subscriptions yet. Add an .ics or webcal:// URL below to start auto-syncing.')}
-            </div>
-          )}
+          ) : null}
 
-          <form className="sync-add-form" onSubmit={handleAddSource} noValidate>
-            <div className="sync-form-title">{t('添加外部日历链接', 'Add external calendar URL')}</div>
+          <form
+            className={sources.length > 0 ? 'sync-add-form' : 'sync-add-form sync-add-form-first'}
+            onSubmit={handleAddSource}
+            noValidate
+          >
+            <div className="sync-form-title">{t('添加日历链接', 'Add calendar URL')}</div>
             {sourceLocalError ? (
               <div className="field-error" role="alert" style={{ marginBottom: 12 }}>
                 {sourceLocalError}
@@ -681,7 +682,7 @@ export function CalendarSyncSection({ timezone }: { timezone: string }) {
 
               <div className="field" style={{ marginBottom: 0 }}>
                 <label className="field-label" htmlFor="sync-source-interval">
-                  {t('自动同步频率', 'Sync frequency')}
+                  {t('同步频率', 'Sync interval')}
                 </label>
                 <select
                   id="sync-source-interval"
@@ -701,7 +702,7 @@ export function CalendarSyncSection({ timezone }: { timezone: string }) {
 
             <div className="field" style={{ marginTop: 12 }}>
               <label className="field-label" htmlFor="sync-source-url">
-                {t('外部日历订阅地址（.ics / webcal://）', 'Calendar subscription URL (.ics / webcal://)')}
+                {t('订阅链接（https:// 或 webcal://）', 'Subscription URL (https:// or webcal://)')}
               </label>
               <input
                 id="sync-source-url"
@@ -719,54 +720,81 @@ export function CalendarSyncSection({ timezone }: { timezone: string }) {
               {createSourceAction.isPending ? t('验证并同步中…', 'Validating & syncing…') : t('添加并同步', 'Add & sync')}
             </button>
           </form>
-        </div>
-      </section>
 
-      <section className="settings-section" aria-label={t('手动导入', 'Manual import')}>
-        <div className="settings-section-title">{t('手动导入（.ics 文件）', 'Manual import (.ics file)')}</div>
-        <p className="settings-section-copy">
-          {t(
-            '适合一次性导入本地导出的日历快照；与上方自动订阅源相互独立，不会互相覆盖。',
-            'Import a one-off local .ics snapshot. Kept separate from auto-synced external calendars.',
-          )}
-        </p>
-        <div className="card-flat sync-card">
-          <ErrorBanner error={importAction.actionError} />
-          {icsLocalError ? (
-            <div className="field-error" role="alert" style={{ marginBottom: 12 }}>
-              {icsLocalError}
-            </div>
-          ) : null}
-          {icsResultMsg ? (
-            <div className="status-banner info" role="status">
-              <div className="status-banner-body">{icsResultMsg}</div>
-            </div>
-          ) : null}
+          <details className="sync-guide">
+            <summary>{t('如何获取外部日历链接？', 'Where to find a calendar URL?')}</summary>
+            <ul>
+              <li>
+                <strong>{t('Apple iCloud 日历', 'Apple iCloud Calendar')}</strong>：
+                {t(
+                  '在日历 App 或 iCloud.com 中右键目标日历，开启「共享日历」即可复制订阅链接。',
+                  'Right-click a calendar in Apple Calendar or iCloud.com and enable "Public Calendar" to copy its link.',
+                )}
+              </li>
+              <li>
+                <strong>Google Calendar</strong>：
+                {t(
+                  '网页端打开「日历设置」→「整合日历」，复制「iCal 格式的秘密地址」。',
+                  'On web, open "Settings and sharing" → "Integrate calendar" and copy the "Secret address in iCal format".',
+                )}
+              </li>
+              <li>
+                <strong>{t('Outlook / 飞书等', 'Outlook / Lark / Others')}</strong>：
+                {t(
+                  '在对应日历设置中发布或获取以 .ics 结尾或 webcal:// 开头的订阅地址。',
+                  'Publish or copy the .ics / webcal:// subscription address from your calendar settings.',
+                )}
+              </li>
+            </ul>
+          </details>
 
-          <div className="field">
-            <label className="field-label" htmlFor="ics-file-input">
-              {t('选择 .ics 文件（上限 5 MB）', 'Choose .ics file (max 5 MB)')}
-            </label>
-            <input
-              id="ics-file-input"
-              type="file"
-              accept=".ics,text/calendar"
-              className="input"
-              disabled={importAction.isPending}
-              onChange={(e) => {
-                setIcsLocalError(null);
-                setIcsFile(e.target.files?.[0] ?? null);
-              }}
-            />
-          </div>
-          <button
-            type="button"
-            className="btn"
-            disabled={importAction.isPending || !icsFile}
-            onClick={() => void handleImportIcs()}
-          >
-            {importAction.isPending ? t('导入中…', 'Importing…') : t('导入', 'Import')}
-          </button>
+          <details className="sync-manual-import">
+            <summary>{t('一次性导入本地 .ics 文件', 'Import a local .ics file')}</summary>
+            <div className="sync-manual-import-body">
+              <p className="sync-hint" style={{ margin: '0 0 10px' }}>
+                {t(
+                  '适用于无法开启订阅链接的日历或课表等静态日程文件，与自动同步互不覆盖。',
+                  'For calendars without a subscription URL or one-off files like timetables; kept separate from auto-sync.',
+                )}
+              </p>
+              <ErrorBanner error={importAction.actionError} />
+              {icsLocalError ? (
+                <div className="field-error" role="alert" style={{ marginBottom: 12 }}>
+                  {icsLocalError}
+                </div>
+              ) : null}
+              {icsResultMsg ? (
+                <div className="status-banner info" role="status">
+                  <div className="status-banner-body">{icsResultMsg}</div>
+                </div>
+              ) : null}
+
+              <div className="field">
+                <label className="field-label" htmlFor="ics-file-input">
+                  {t('选择 .ics 文件（上限 5 MB）', 'Choose .ics file (max 5 MB)')}
+                </label>
+                <input
+                  id="ics-file-input"
+                  type="file"
+                  accept=".ics,text/calendar"
+                  className="input"
+                  disabled={importAction.isPending}
+                  onChange={(e) => {
+                    setIcsLocalError(null);
+                    setIcsFile(e.target.files?.[0] ?? null);
+                  }}
+                />
+              </div>
+              <button
+                type="button"
+                className="btn"
+                disabled={importAction.isPending || !icsFile}
+                onClick={() => void handleImportIcs()}
+              >
+                {importAction.isPending ? t('导入中…', 'Importing…') : t('导入', 'Import')}
+              </button>
+            </div>
+          </details>
         </div>
       </section>
 
