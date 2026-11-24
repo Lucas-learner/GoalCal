@@ -565,7 +565,7 @@ describe('GoalCal critical interactions', () => {
         });
       }
       if (url.startsWith('/api/v1/calendar/events')) {
-        return jsonResponse({ events: [] });
+        return jsonResponse({ events: [], sync_conflicts: [] });
       }
       if (url === '/api/v1/availability' || url === '/api/v1/preferences/availability') {
         if (method === 'PUT') {
@@ -593,7 +593,58 @@ describe('GoalCal critical interactions', () => {
             last_accessed_at: null,
             version: null,
           },
+          providers: {
+            caldav: { configured: true, label: 'Apple iCloud / CalDAV' },
+            google: { configured: false, label: 'Google Calendar' },
+            outlook: { configured: false, label: 'Outlook / Microsoft 365' },
+          },
+          connections: [],
           sources: [],
+          conflicts: [],
+        });
+      }
+      if (url === '/api/v1/calendar/sync/connections/caldav' && method === 'POST') {
+        const body = JSON.parse(String(init?.body || '{}'));
+        return jsonResponse({
+          message: `已连接 ${body.username}（发现 1 个日历），正在后台同步。`,
+          connection: {
+            id: 5,
+            provider: 'caldav',
+            account_label: body.username,
+            server_url: 'https://caldav.icloud.com/',
+            username: body.username,
+            status: 'active',
+            last_error: '',
+            created_at: '2026-11-24T03:00:00Z',
+            version: 'conn1',
+          },
+          sources: [
+            {
+              id: 9,
+              connection_id: 5,
+              provider: 'caldav',
+              direction: 'bidirectional',
+              name: 'GoalCal',
+              url: 'https://caldav.icloud.com/goalcal/',
+              color: '#6b7f89',
+              blocks_scheduling: false,
+              all_day_mode: 'ignore',
+              writable: true,
+              is_goalcal_calendar: true,
+              outbox_pending: 1,
+              enabled: true,
+              sync_interval_minutes: 15,
+              last_synced_at: null,
+              last_status: 'idle',
+              last_error: '',
+              last_added: 0,
+              last_updated: 0,
+              last_removed: 0,
+              last_skipped: 0,
+              version: 'cs9',
+            },
+          ],
+          queued_push: 1,
         });
       }
       if (url === '/api/v1/calendar/sync/feed' && method === 'PUT') {
@@ -699,8 +750,17 @@ describe('GoalCal critical interactions', () => {
     await user.click(screen.getByRole('button', { name: '恢复' }));
     expect(screen.getByText('「旧版阅读计划」已恢复至目标', { selector: '.undo-toast span' })).toBeVisible();
 
-    // Calendar sync (outbound feed + inbound subscription + manual ICS) & Metrics/Feedback are separated
+    // Calendar sync (native providers + outbound feed + inbound subscription + manual ICS) & Metrics/Feedback are separated
     await user.click(screen.getByRole('button', { name: '日历同步' }));
+    expect(await screen.findByText('原生双向同步')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '连接 Apple / CalDAV' }));
+    await user.type(screen.getByLabelText('账号 / Apple ID 邮箱'), 'alice@icloud.com');
+    await user.type(screen.getByLabelText('应用专用密码'), 'abcd-efgh-ijkl-mnop');
+    await user.click(screen.getByRole('button', { name: '验证并连接' }));
+    expect(
+      calls.some((c) => c.url === '/api/v1/calendar/sync/connections/caldav' && c.method === 'POST'),
+    ).toBe(true);
+
     expect(await screen.findByRole('button', { name: '生成订阅链接' })).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: '生成订阅链接' }));
     expect(

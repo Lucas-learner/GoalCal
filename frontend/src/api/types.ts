@@ -52,6 +52,10 @@ export interface CalendarEvent {
   status: EventStatus | string;
   source?: string;
   sync_source_id?: number | null;
+  all_day?: boolean;
+  sync_source_name?: string | null;
+  sync_source_color?: string | null;
+  blocks_scheduling?: boolean;
   step_id: number | null;
   step_version?: string | null;
   goal_id: number | null;
@@ -328,6 +332,7 @@ export interface TodayResponse {
   events: CalendarEvent[];
   habits?: HabitRange;
   habit_next?: HabitOccurrence | null;
+  sync_conflicts?: SyncConflict[];
 }
 
 export interface GoalsListResponse {
@@ -337,6 +342,7 @@ export interface GoalsListResponse {
 export interface CalendarEventsResponse {
   events: CalendarEvent[];
   habits?: HabitRange;
+  sync_conflicts?: SyncConflict[];
 }
 
 export interface StepUpdateResponse {
@@ -361,12 +367,53 @@ export interface CalendarFeed {
   version: string | null;
 }
 
+export interface ProviderCapability {
+  configured: boolean;
+  label: string;
+}
+
+export interface CalendarConnection {
+  id: number;
+  provider: 'caldav' | 'google' | 'outlook' | string;
+  account_label: string;
+  server_url: string;
+  username: string;
+  status: 'active' | 'reauth_required' | 'error' | string;
+  last_error: string;
+  created_at: string | null;
+  version: string;
+}
+
+export interface SyncConflict {
+  block_event_id: number;
+  block_title: string;
+  block_start: string;
+  block_end: string;
+  step_id: number | null;
+  goal_id: number | null;
+  goal_title: string | null;
+  external_event_id: number;
+  external_title: string;
+  external_start: string;
+  external_end: string;
+  source_name: string;
+  source_color: string;
+}
+
 export interface CalendarSource {
   id: number;
-  provider: 'ics_url' | string;
+  connection_id?: number | null;
+  provider: 'ics_url' | 'caldav' | 'google' | 'outlook' | string;
   direction: 'inbound' | 'outbound' | 'bidirectional' | string;
   name: string;
   url: string;
+  remote_calendar_id?: string;
+  color?: string;
+  blocks_scheduling?: boolean;
+  all_day_mode?: 'ignore' | 'show' | 'busy' | string;
+  writable?: boolean;
+  is_goalcal_calendar?: boolean;
+  outbox_pending?: number;
   enabled: boolean;
   sync_interval_minutes: number;
   last_synced_at: string | null;
@@ -381,7 +428,22 @@ export interface CalendarSource {
 
 export interface CalendarSyncState {
   feed: CalendarFeed;
+  providers?: Record<string, ProviderCapability>;
+  connections?: CalendarConnection[];
   sources: CalendarSource[];
+  conflicts?: SyncConflict[];
+}
+
+export interface CalendarConnectionMutationResponse {
+  connection: CalendarConnection;
+  sources: CalendarSource[];
+  queued_push?: number;
+  message: string;
+}
+
+export interface CalendarConnectionDeleteResponse {
+  removed_events: number;
+  message: string;
 }
 
 export interface CalendarFeedMutationResponse {

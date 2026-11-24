@@ -1,5 +1,6 @@
 """Bounded public HTTP(S) fetch, pinned DNS, verified TLS, no environment proxy."""
 from dataclasses import dataclass
+import gzip
 import http.client
 import ipaddress
 import socket
@@ -196,6 +197,150 @@ def fetch_ics_conditional(
             if isinstance(exc, FetchError):
                 raise
             raise FetchError('Calendar download failed or exceeded limits') from None
+        finally:
+            timer.cancel()
+            connection.close()
+    raise FetchError('Redirect limit exceeded')
+
+
+def normalize_caldav_url(url: str) -> str:
+    """Validate an HTTPS public CalDAV base URL (no embedded credentials or custom ports)."""
+    cleaned = (url or '').strip()
+    parts = urlsplit(cleaned)
+    try:
+        port = parts.port or (443 if parts.scheme == 'https' else 80)
+        host = (parts.hostname or '').encode('idna').decode('ascii')
+    except (ValueError, UnicodeError):
+        raise FetchError('Invalid URL') from None
+    if (parts.scheme != 'https' or not host or parts.username is not None
+            or parts.password is not None or port != 443
+            or any(ord(c) < 33 or ord(c) == 127 for c in cleaned) or '\\' in cleaned):
+        raise FetchError('Only standard HTTPS CalDAV URLs are supported')
+    try:
+        public_address(str(ipaddress.ip_address(host)))
+    except ValueError as exc:
+        if isinstance(exc, FetchError):
+            raise
+    return cleaned
+
+
+def safe_http_request(
+    method: str,
+    url: str,
+    *,
+    headers: dict[str, str] | None = None,
+    body: bytes | None = None,
+    timeout: float = TIMEOUT,
+    max_bytes: int = MAX_BYTES,
+    follow_redirects: int = 3,
+    require_https: bool = True,
+) -> tuple[int, dict[str, str], bytes]:
+    """Perform a bounded SSRF-safe HTTP(S) request using pinned DNS resolution."""
+    deadline = time.monotonic() + timeout
+    req_method = method.upper()
+    req_body = body
+    req_headers = dict(headers or {})
+    cur_url = url
+    initial_origin: tuple[str, str, int] | None = None
+
+    for redirect in range(follow_redirects + 1):
+        parts = urlsplit(cur_url)
+        try:
+            port = parts.port or (443 if parts.scheme == 'https' else 80)
+            host = (parts.hostname or '').encode('idna').decode('ascii')
+        except (ValueError, UnicodeError):
+            raise FetchError('Invalid URL') from None
+        allowed_schemes = ('https',) if require_https else ('http', 'https')
+        expected_port = 443 if parts.scheme == 'https' else 80
+        if (parts.scheme not in allowed_schemes or not host or parts.username is not None
+                or parts.password is not None or port != expected_port
+                or any(ord(c) < 33 or ord(c) == 127 for c in cur_url) or '\\' in cur_url):
+            raise FetchError('Only standard HTTPS URLs are supported' if require_https else 'Only standard HTTP/HTTPS URLs are supported')
+
+        cur_origin = (parts.scheme, host.lower(), port)
+        if initial_origin is None:
+            initial_origin = cur_origin
+
+        addresses = resolve(host, deadline)
+        connection = PinnedConnection(host, port, addresses[0], parts.scheme == 'https', deadline)
+
+        def abort(connection=connection):
+            active = getattr(connection, 'active_socket', connection.sock)
+            if active:
+                try:
+                    active.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+                connection.close()
+
+        timer = threading.Timer(max(0.001, deadline - time.monotonic()), abort)
+        timer.daemon = True
+        timer.start()
+        try:
+            target = parts.path or '/'
+            if parts.query:
+                target += '?' + parts.query
+            send_headers = {
+                'Host': f'[{host}]' if ':' in host else host,
+                'Accept-Encoding': 'identity',
+                'User-Agent': 'GoalCal/2',
+            }
+            for k, v in req_headers.items():
+                lk = k.lower()
+                if lk in {'host', 'accept-encoding', 'content-length'}:
+                    continue
+                if lk == 'authorization' and cur_origin != initial_origin:
+                    same_icloud = (
+                        initial_origin[0] == cur_origin[0] == 'https'
+                        and initial_origin[1].endswith('.icloud.com')
+                        and cur_origin[1].endswith('.icloud.com')
+                    )
+                    if not same_icloud:
+                        continue
+                send_headers[k] = v
+            if req_body is not None:
+                send_headers['Content-Length'] = str(len(req_body))
+            connection.request(req_method, target, body=req_body, headers=send_headers)
+            response = connection.getresponse()
+            if response.status in (301, 302, 303, 307, 308):
+                location = response.getheader('Location')
+                if redirect >= follow_redirects or not location:
+                    raise FetchError('Redirect limit exceeded')
+                cur_url = urljoin(cur_url, location)
+                if response.status == 303 and req_method not in {'GET', 'HEAD'}:
+                    req_method = 'GET'
+                    req_body = None
+                continue
+
+            length = response.getheader('Content-Length')
+            if length and int(length) > max_bytes:
+                raise FetchError('Response exceeds size limit')
+            output = bytearray()
+            while True:
+                if time.monotonic() >= deadline:
+                    raise FetchError('Request deadline exceeded')
+                chunk = response.read(min(65536, max_bytes + 1 - len(output)))
+                if not chunk:
+                    break
+                output.extend(chunk)
+                if len(output) > max_bytes:
+                    raise FetchError('Response exceeds size limit')
+            if time.monotonic() >= deadline:
+                raise FetchError('Request deadline exceeded')
+            raw = bytes(output)
+            encoding = (response.getheader('Content-Encoding') or 'identity').strip().lower()
+            if encoding == 'gzip':
+                raw = gzip.decompress(raw)
+                if len(raw) > max_bytes:
+                    raise FetchError('Response exceeds size limit')
+            elif encoding != 'identity':
+                raise FetchError('Unsupported response encoding')
+            resp_headers = {k.lower(): v for k, v in response.getheaders()}
+            return response.status, resp_headers, raw
+        except (OSError, http.client.HTTPException, ValueError) as exc:
+            if isinstance(exc, FetchError):
+                raise
+            raise FetchError('Remote calendar request failed or exceeded limits') from None
         finally:
             timer.cancel()
             connection.close()

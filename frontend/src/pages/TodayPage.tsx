@@ -209,6 +209,50 @@ export function TodayPage({ fallbackTimezone }: { fallbackTimezone: string }) {
         <>
           <ErrorBanner error={anyError} onRefresh={() => void todayQuery.refetch()} />
 
+          {(data.sync_conflicts?.length ?? 0) > 0 ? (
+            <div className="sync-conflict-banner" role="alert">
+              <div className="sync-conflict-head">
+                <strong>
+                  {t(
+                    `外部日程与 ${data.sync_conflicts!.length} 个目标安排冲突`,
+                    `External calendar overlaps ${data.sync_conflicts!.length} goal block(s)`,
+                  )}
+                </strong>
+              </div>
+              <div className="sync-conflict-list">
+                {data.sync_conflicts!.map((conflict) => (
+                  <div key={conflict.block_event_id} className="sync-conflict-row">
+                    <div className="sync-conflict-copy">
+                      <span
+                        className="sync-color-dot"
+                        style={{ backgroundColor: conflict.source_color || '#6b7f89' }}
+                        aria-hidden="true"
+                      />
+                      <span>
+                        {conflict.goal_title ? `${conflict.goal_title} · ` : ''}
+                        <strong>{conflict.block_title}</strong>
+                        {' '}
+                        <span className="tabular-nums">({formatTimeRange(conflict.block_start, conflict.block_end, tz)})</span>
+                        {t(' 与 ', ' overlaps ')}
+                        <strong>{conflict.external_title}</strong>
+                      </span>
+                    </div>
+                    {conflict.step_id != null ? (
+                      <button
+                        type="button"
+                        className="btn small"
+                        disabled={proposeAction.isPending}
+                        onClick={() => void proposeAction.run(conflict.step_id!)}
+                      >
+                        {t('重新找时间', 'Find new time')}
+                      </button>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
           {execution ? (
             <section className="focus-card" aria-label={t('当前执行', 'Active session')}>
               <div className="section-label">

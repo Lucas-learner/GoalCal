@@ -116,6 +116,13 @@ export function CalendarPage({ timezone }: { timezone: string }) {
     startLocal: string;
     endLocal: string;
   } | null>(null);
+  const [hiddenSourceIds, setHiddenSourceIds] = useState<number[]>([]);
+
+  const toggleSourceVisibility = (sourceId: number) => {
+    setHiddenSourceIds((prev) =>
+      prev.includes(sourceId) ? prev.filter((id) => id !== sourceId) : [...prev, sourceId],
+    );
+  };
 
   const eventsQuery = useQuery({
     queryKey: queryKeys.calendarRange(range.startUtc, range.endUtc),
@@ -258,10 +265,31 @@ export function CalendarPage({ timezone }: { timezone: string }) {
     return () => draggable.destroy();
   }, [enableDrag, t]);
 
+  const syncedSources = useMemo(() => {
+    const map = new Map<number, { id: number; name: string; color: string }>();
+    for (const ev of eventsQuery.data?.events ?? []) {
+      if (ev.sync_source_id != null && !map.has(ev.sync_source_id)) {
+        map.set(ev.sync_source_id, {
+          id: ev.sync_source_id,
+          name: ev.sync_source_name || t('同步日历', 'Synced'),
+          color: ev.sync_source_color || '#6b7f89',
+        });
+      }
+    }
+    return Array.from(map.values());
+  }, [eventsQuery.data?.events, t]);
+
   const visibleEvents = useMemo(
-    () => (eventsQuery.data?.events ?? []).filter((ev) => ev.status !== 'skipped' || ev.habit),
-    [eventsQuery.data?.events],
+    () =>
+      (eventsQuery.data?.events ?? []).filter(
+        (ev) =>
+          (ev.status !== 'skipped' || ev.habit) &&
+          (ev.sync_source_id == null || !hiddenSourceIds.includes(ev.sync_source_id)),
+      ),
+    [eventsQuery.data?.events, hiddenSourceIds],
   );
+
+  const hasAllDay = useMemo(() => visibleEvents.some((ev) => Boolean(ev.all_day)), [visibleEvents]);
 
   const fcEvents: EventInput[] = useMemo(() => {
     const normalEvents: EventInput[] = visibleEvents.map((ev) => {
@@ -272,6 +300,7 @@ export function CalendarPage({ timezone }: { timezone: string }) {
         title: ev.title,
         start: ev.start,
         end: ev.end,
+        allDay: Boolean(ev.all_day),
         editable: enableDrag && ['planned', 'moved'].includes(ev.status),
         classNames: classes,
         extendedProps: { rawEvent: ev },
@@ -470,12 +499,19 @@ export function CalendarPage({ timezone }: { timezone: string }) {
     return (
       <div>
         <div style={{ fontWeight: 620, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {raw.sync_source_color ? (
+            <span
+              className="sync-color-dot"
+              style={{ backgroundColor: raw.sync_source_color, marginRight: 4 }}
+              aria-hidden="true"
+            />
+          ) : null}
           {statusText ? `[${statusText}] ` : ''}
           {raw.habit && <span aria-label={habitLabels.habit} title={habitLabels.habit}>↻ </span>}
           {raw.kind === 'buffer' ? `${t('缓冲', 'Buffer')} · ${raw.title}` : raw.title}
         </div>
         <div className="tabular-nums" style={{ opacity: 0.85, fontSize: 9 }}>
-          {timeText}
+          {raw.all_day ? t('全天', 'All day') : timeText}
         </div>
       </div>
     );
@@ -701,8 +737,72 @@ export function CalendarPage({ timezone }: { timezone: string }) {
 
       {isMobile ? backlogAside : null}
 
+      {(eventsQuery.data?.sync_conflicts?.length ?? 0) > 0 ? (
+        <div className="sync-conflict-banner" role="alert">
+          <div className="sync-conflict-head">
+            <strong>
+              {t(
+                `外部日程与 ${eventsQuery.data!.sync_conflicts!.length} 个目标安排冲突`,
+                `External calendar overlaps ${eventsQuery.data!.sync_conflicts!.length} goal block(s)`,
+              )}
+            </strong>
+          </div>
+          <div className="sync-conflict-list">
+            {eventsQuery.data!.sync_conflicts!.map((conflict) => (
+              <div key={conflict.block_event_id} className="sync-conflict-row">
+                <div className="sync-conflict-copy">
+                  <span
+                    className="sync-color-dot"
+                    style={{ backgroundColor: conflict.source_color || '#6b7f89' }}
+                    aria-hidden="true"
+                  />
+                  <span>
+                    {conflict.goal_title ? `${conflict.goal_title} · ` : ''}
+                    <strong>{conflict.block_title}</strong>
+                    {' '}
+                    <span className="tabular-nums">({formatTimeRange(conflict.block_start, conflict.block_end, timezone)})</span>
+                    {t(' 与 ', ' overlaps ')}
+                    <strong>{conflict.external_title}</strong>
+                  </span>
+                </div>
+                {conflict.step_id != null ? (
+                  <button
+                    type="button"
+                    className="btn small"
+                    disabled={proposeAction.isPending}
+                    onClick={() => void proposeAction.run(conflict.step_id!)}
+                  >
+                    {t('找新时间', 'Find new time')}
+                  </button>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
       <div className={`calendar-layout${isMobile ? ' is-mobile' : ''}`}>
         <div>
+          {syncedSources.length > 0 ? (
+            <div className="calendar-source-filters" role="group" aria-label={t('筛选日历来源', 'Filter calendar sources')}>
+              {syncedSources.map((src) => {
+                const isHidden = hiddenSourceIds.includes(src.id);
+                return (
+                  <button
+                    key={src.id}
+                    type="button"
+                    className={`calendar-filter-chip${isHidden ? ' hidden-source' : ''}`}
+                    aria-pressed={!isHidden}
+                    onClick={() => toggleSourceVisibility(src.id)}
+                  >
+                    <span className="sync-color-dot" style={{ backgroundColor: src.color }} aria-hidden="true" />
+                    <span>{src.name}</span>
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
+
           {!eventsQuery.isLoading && !eventsQuery.isError && visibleEvents.length === 0 ? (
             <div className="status-banner info" role="status">
               <div className="status-banner-body">{emptyBannerText}</div>
@@ -719,7 +819,7 @@ export function CalendarPage({ timezone }: { timezone: string }) {
               locale={lang === 'zh' ? zhCnLocale : 'en'}
               firstDay={1}
               headerToolbar={false}
-              allDaySlot={false}
+              allDaySlot={hasAllDay}
               slotMinTime="00:00:00"
               slotMaxTime="24:00:00"
               scrollTime="08:00:00"

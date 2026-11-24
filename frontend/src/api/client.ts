@@ -3,6 +3,8 @@ import type {
   AssistantState,
   AssistantTurnResponse,
   Availability,
+  CalendarConnectionDeleteResponse,
+  CalendarConnectionMutationResponse,
   CalendarEventsResponse,
   CalendarFeedMutationResponse,
   CalendarSourceDeleteResponse,
@@ -436,12 +438,32 @@ export const api = {
   rotateCalendarFeed: (body: { version?: string } = {}, idempotencyKey?: string) =>
     apiWrite<CalendarFeedMutationResponse>('/calendar/sync/feed/rotate', 'POST', body, { idempotencyKey }),
 
+  connectCalDav: (
+    body: {
+      preset: 'icloud' | 'fastmail' | 'custom';
+      server_url?: string;
+      username: string;
+      password: string;
+      enable_two_way?: boolean;
+    },
+    idempotencyKey?: string,
+  ) => apiWrite<CalendarConnectionMutationResponse>('/calendar/sync/connections/caldav', 'POST', body, { idempotencyKey }),
+
+  refreshCalendarConnection: (id: number, body: { version?: string } = {}, idempotencyKey?: string) =>
+    apiWrite<CalendarConnectionMutationResponse>(`/calendar/sync/connections/${id}/refresh`, 'POST', body, { idempotencyKey }),
+
+  deleteCalendarConnection: (id: number, body: { version: string }, idempotencyKey?: string) =>
+    apiWrite<CalendarConnectionDeleteResponse>(`/calendar/sync/connections/${id}`, 'DELETE', body, { idempotencyKey }),
+
   createCalendarSource: (
     body: {
       name: string;
       url: string;
       provider?: 'ics_url';
       sync_interval_minutes?: number;
+      color?: string;
+      blocks_scheduling?: boolean;
+      all_day_mode?: 'ignore' | 'show' | 'busy';
     },
     idempotencyKey?: string,
   ) => apiWrite<CalendarSourceMutationResponse>('/calendar/sync/sources', 'POST', body, { idempotencyKey }),
@@ -454,6 +476,10 @@ export const api = {
       url?: string;
       enabled?: boolean;
       sync_interval_minutes?: number;
+      color?: string;
+      blocks_scheduling?: boolean;
+      all_day_mode?: 'ignore' | 'show' | 'busy';
+      writable?: boolean;
     },
     idempotencyKey?: string,
   ) => apiWrite<CalendarSourceMutationResponse>(`/calendar/sync/sources/${id}`, 'PATCH', body, { idempotencyKey }),

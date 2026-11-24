@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
-from ..models import Base, CalendarFeed, CalendarSource
+from ..models import Base, CalendarConnection, CalendarFeed, CalendarSource, EventSyncLink, SyncOutbox
 
 
 class WebProposal(Base):
@@ -91,11 +91,14 @@ class HabitOccurrence(Base):
 
 
 __all__ = [
+    "CalendarConnection",
     "CalendarFeed",
     "CalendarSource",
+    "EventSyncLink",
     "Habit",
     "HabitOccurrence",
     "HabitRule",
+    "SyncOutbox",
     "WebDraft",
     "WebExecution",
     "WebOperation",

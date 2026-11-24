@@ -18,7 +18,7 @@ import threading
 from typing import Protocol
 
 from icalendar import Calendar, Event as ICalEvent, vDuration
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from .. import db, memory
@@ -283,9 +283,10 @@ def apply_source_sync(
         fetched.content,
         tz,
         now=now_naive,
-        slot_allowed=slot_allowed,
+        slot_allowed=slot_allowed if source.blocks_scheduling else None,
         sync_source_id=source.id,
         prune_missing=True,
+        all_day_mode=source.all_day_mode or "ignore",
     )
     source.last_status = "ok"
     source.last_error = ""
@@ -297,6 +298,118 @@ def apply_source_sync(
     source.last_modified = fetched.last_modified[:128] if fetched.last_modified else None
     session.flush()
     return result
+
+
+def event_blocks_scheduling(event: Event, sources_by_id: dict[int, CalendarSource]) -> bool:
+    """Return True if an Event occupies scheduling capacity."""
+    if event.sync_source_id is not None:
+        src = sources_by_id.get(event.sync_source_id)
+        if src is not None:
+            if not src.blocks_scheduling:
+                return False
+            if event.all_day and src.all_day_mode != "busy":
+                return False
+        elif event.all_day:
+            return False
+    elif event.all_day:
+        return False
+    return True
+
+
+def _utc_iso_z(dt: datetime) -> str:
+    return _as_utc_aware(dt).isoformat().replace("+00:00", "Z")
+
+
+def detect_sync_conflicts(
+    session: Session,
+    user_id: int,
+    now_naive: datetime,
+    *,
+    horizon_days: int = 14,
+) -> list[dict]:
+    """Find planned/moved future or active GoalCal blocks overlapped by blocking external events."""
+    horizon_end = now_naive + timedelta(days=horizon_days)
+    sources_by_id = {
+        src.id: src
+        for src in session.scalars(select(CalendarSource).where(CalendarSource.user_id == user_id))
+    }
+    blocks = list(
+        session.scalars(
+            select(Event)
+            .where(
+                Event.user_id == user_id,
+                Event.kind == "block",
+                Event.status.in_(("planned", "moved")),
+                Event.end_utc > now_naive,
+                Event.start_utc < horizon_end,
+            )
+            .order_by(Event.start_utc, Event.id)
+        )
+    )
+    if not blocks:
+        return []
+
+    external_rows = list(
+        session.scalars(
+            select(Event)
+            .where(
+                Event.user_id == user_id,
+                Event.kind == "external",
+                Event.status != "skipped",
+                or_(Event.sync_source_id.is_not(None), Event.source.in_(("sync", "import"))),
+                Event.end_utc > now_naive,
+                Event.start_utc < horizon_end,
+            )
+            .order_by(Event.start_utc, Event.id)
+        )
+    )
+    blocking_externals = [ev for ev in external_rows if event_blocks_scheduling(ev, sources_by_id)]
+    if not blocking_externals:
+        return []
+
+    step_ids = {b.step_id for b in blocks if b.step_id is not None}
+    steps_by_id = (
+        {s.id: s for s in session.scalars(select(Step).where(Step.id.in_(step_ids)))}
+        if step_ids
+        else {}
+    )
+    goal_ids = {s.goal_id for s in steps_by_id.values()}
+    goals_by_id = (
+        {g.id: g for g in session.scalars(select(Goal).where(Goal.id.in_(goal_ids)))}
+        if goal_ids
+        else {}
+    )
+
+    conflicts: list[dict] = []
+    seen_blocks: set[int] = set()
+    for block in blocks:
+        if block.id in seen_blocks:
+            continue
+        step = steps_by_id.get(block.step_id) if block.step_id is not None else None
+        goal = goals_by_id.get(step.goal_id) if step is not None else None
+        if goal is not None and goal.status != "active":
+            continue
+        for ext in blocking_externals:
+            if block.start_utc < ext.end_utc and block.end_utc > ext.start_utc:
+                src = sources_by_id.get(ext.sync_source_id) if ext.sync_source_id is not None else None
+                conflicts.append({
+                    "block_event_id": block.id,
+                    "block_title": block.title,
+                    "block_start": _utc_iso_z(block.start_utc),
+                    "block_end": _utc_iso_z(block.end_utc),
+                    "step_id": block.step_id,
+                    "goal_id": goal.id if goal else None,
+                    "goal_title": goal.title if goal else None,
+                    "external_event_id": ext.id,
+                    "external_title": ext.title,
+                    "external_start": _utc_iso_z(ext.start_utc),
+                    "external_end": _utc_iso_z(ext.end_utc),
+                    "source_name": src.name if src else ("Manual import" if ext.source == "import" else "External"),
+                    "source_color": src.color if src else "#6b7f89",
+                })
+                seen_blocks.add(block.id)
+                break
+    return conflicts
 
 
 def record_source_error(source: CalendarSource, message: str, *, now: datetime) -> None:
@@ -344,7 +457,8 @@ def sync_due_sources_once(*, now: datetime | None = None) -> int:
     now_aware = _as_utc_aware(now or now_utc())
     now_naive = now_aware.replace(tzinfo=None)
 
-    candidates: list[tuple[int, int, str, str, str, str | None, str | None]] = []
+    ics_candidates: list[tuple[int, int, str, str, str, str | None, str | None]] = []
+    native_candidates: list[int] = []
     session = db.new_session()
     try:
         rows = session.execute(
@@ -359,14 +473,17 @@ def sync_due_sources_once(*, now: datetime | None = None) -> int:
             interval = max(MIN_SYNC_INTERVAL_MINUTES, int(source.sync_interval_minutes or DEFAULT_SYNC_INTERVAL_MINUTES))
             if source.last_synced_at is not None and (now_naive - source.last_synced_at) < timedelta(minutes=interval):
                 continue
-            candidates.append(
-                (source.id, user.id, user.tz or "Asia/Shanghai", source.provider, source.url, source.etag, source.last_modified)
-            )
+            if source.provider == "ics_url":
+                ics_candidates.append(
+                    (source.id, user.id, user.tz or "Asia/Shanghai", source.provider, source.url, source.etag, source.last_modified)
+                )
+            elif source.provider in {"caldav", "google", "outlook"} and source.connection_id:
+                native_candidates.append(source.id)
     finally:
         session.close()
 
     synced = 0
-    for source_id, user_id, tz, provider_name, url, etag, last_modified in candidates:
+    for source_id, user_id, tz, provider_name, url, etag, last_modified in ics_candidates:
         if not try_acquire_source(source_id):
             continue
         try:
@@ -413,6 +530,13 @@ def sync_due_sources_once(*, now: datetime | None = None) -> int:
                     ws.close()
         finally:
             release_source(source_id)
+
+    if native_candidates:
+        from .bidirectional_sync import sync_native_source_once
+
+        for source_id in native_candidates:
+            if sync_native_source_once(source_id, now=now_aware) is not None:
+                synced += 1
     return synced
 
 
@@ -486,6 +610,8 @@ __all__ = [
     "apply_source_sync",
     "build_ics_feed",
     "delete_source_events",
+    "detect_sync_conflicts",
+    "event_blocks_scheduling",
     "fetch_source_content",
     "get_provider",
     "new_feed_token",

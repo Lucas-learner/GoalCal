@@ -183,7 +183,19 @@ export function EventDialog({ event, timezone, onClose }: EventDialogProps) {
           {statusPair ? t(statusPair[0], statusPair[1]) : event.status}
         </span>
         {event.source === 'sync' ? (
-          <span className="chip">{t('外部同步', 'Synced')}</span>
+          <span className="chip">
+            {event.sync_source_color ? (
+              <span
+                className="sync-color-dot"
+                style={{ backgroundColor: event.sync_source_color, marginRight: 5 }}
+                aria-hidden="true"
+              />
+            ) : null}
+            {event.sync_source_name || t('外部同步', 'Synced')}
+          </span>
+        ) : null}
+        {event.source === 'sync' && event.blocks_scheduling === false ? (
+          <span className="chip">{t('仅展示（不阻塞排期）', 'Reference only')}</span>
         ) : null}
       </div>
 

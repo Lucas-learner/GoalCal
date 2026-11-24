@@ -16,7 +16,8 @@ from .models import (
 )
 
 from .web.models import (
-    CalendarFeed, CalendarSource, Habit, HabitOccurrence, HabitRule,
+    CalendarConnection, CalendarFeed, CalendarSource, EventSyncLink,
+    Habit, HabitOccurrence, HabitRule, SyncOutbox,
     WebProposal, WebOperation, WebExecution, WebDraft,
 )
 from .web.transport_models import WebRequest, WebThread
@@ -43,8 +44,11 @@ def criteria(uid):
         WebRequest: WebRequest.user_id == uid, WebThread: WebThread.user_id == uid,
         Habit: Habit.user_id == uid, HabitRule: HabitRule.user_id == uid,
         HabitOccurrence: HabitOccurrence.user_id == uid,
+        CalendarConnection: CalendarConnection.user_id == uid,
         CalendarSource: CalendarSource.user_id == uid,
         CalendarFeed: CalendarFeed.user_id == uid,
+        EventSyncLink: EventSyncLink.user_id == uid,
+        SyncOutbox: SyncOutbox.user_id == uid,
         User: User.id == uid, Goal: Goal.user_id == uid,
         Step: Step.goal_id.in_(goals), Event: Event.user_id == uid,
         Checkin: Checkin.step_id.in_(steps), StateLog: StateLog.user_id == uid,
@@ -86,6 +90,7 @@ def validate_object(session, row):
         'goal_id': Goal, 'step_id': Step, 'event_id': Event,
         'new_event_id': Event, 'conversation_id': Conversation, 'focus_goal_id': Goal,
         'proposal_id': WebProposal, 'habit_id': Habit, 'sync_source_id': CalendarSource,
+        'connection_id': CalendarConnection, 'source_id': CalendarSource,
     }
     for field in ('user_id', *references):
         if field in state.attrs and state.persistent and state.attrs[field].history.deleted:

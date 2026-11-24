@@ -380,14 +380,21 @@ def test_inbound_source_crud_sync_pruning_and_isolation(accounts, monkeypatch):
     assert failed.json()["source"]["last_status"] == "error"
     assert failed.json()["source"]["last_error"]
 
-    # Update settings with stale version -> 409; with fresh version -> 200
-    assert api_request(token0, "PATCH", f"/calendar/sync/sources/{src['id']}", {"version": src["version"], "name": "新名字"}).status_code == 409
+    # Update settings with fresh version -> 200; reusing stale version afterwards -> 409
     fresh_ver = failed.json()["source"]["version"]
+    first_patch = api_request(
+        token0,
+        "PATCH",
+        f"/calendar/sync/sources/{src['id']}",
+        {"version": fresh_ver, "name": "新名字"},
+    )
+    assert first_patch.status_code == 200
+    assert api_request(token0, "PATCH", f"/calendar/sync/sources/{src['id']}", {"version": fresh_ver, "name": "旧版本冲突"}).status_code == 409
     patched = api_request(
         token0,
         "PATCH",
         f"/calendar/sync/sources/{src['id']}",
-        {"version": fresh_ver, "name": "工作日程", "sync_interval_minutes": 60, "enabled": False},
+        {"version": first_patch.json()["source"]["version"], "name": "工作日程", "sync_interval_minutes": 60, "enabled": False},
     )
     assert patched.status_code == 200
     assert patched.json()["source"]["name"] == "工作日程"

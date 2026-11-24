@@ -16,8 +16,12 @@ from sqlalchemy import inspect, or_, select
 from .. import memory, metrics
 from ..data.goal_templates import first_batch, full_steps, milestones, pick_template
 from ..domain import goals as goal_service, recovery, scheduler
+from ..domain.calendar_sync import detect_sync_conflicts, event_blocks_scheduling
 from ..i18n import format_when, normalize_lang, pick
-from ..models import CalendarFeed, Checkin, Event, Goal, Interaction, Step, User, RescheduleLog
+from ..models import (
+    CalendarConnection, CalendarFeed, CalendarSource, Checkin, Event, Goal,
+    Interaction, Step, User, RescheduleLog,
+)
 from .availability import allows, validate_availability
 from .models import Habit, HabitOccurrence, WebDraft, WebExecution, WebOperation, WebProposal
 from .transport_models import WebThread
@@ -48,6 +52,28 @@ def version_token(row) -> str:
     if isinstance(row, CalendarFeed):
         # Background feed polling updates last_accessed_at; do not cause false 409 conflicts on settings edits.
         values.pop("last_accessed_at", None)
+    if isinstance(row, CalendarSource):
+        for col in (
+            "last_synced_at",
+            "last_status",
+            "last_error",
+            "last_added",
+            "last_updated",
+            "last_removed",
+            "last_skipped",
+            "etag",
+            "last_modified",
+            "sync_token",
+            "webhook_channel_id",
+            "webhook_resource_id",
+            "webhook_secret",
+            "webhook_expires_at",
+            "updated_at",
+        ):
+            values.pop(col, None)
+    if isinstance(row, CalendarConnection):
+        for col in ("token_expires_at", "encrypted_secrets", "updated_at"):
+            values.pop(col, None)
     if isinstance(row, Goal):
         # A goal is an aggregate: a legacy step change also updates its DTO version.
         values["steps"] = [(s.id, version_token(s)) for s in sorted(row.steps, key=lambda s: (s.seq, s.id))]
@@ -153,9 +179,24 @@ class Service:
                 "progress": goal_service.progress(goal), "outline": goal_service.outline_phases(goal),
                 "steps": [self.serialize_step(s) for s in sorted(goal.steps, key=lambda s: (s.seq, s.id))]}
 
+    def _sources_by_id(self) -> dict[int, CalendarSource]:
+        cached = getattr(self, "_cached_sources_by_id", None)
+        if cached is None:
+            cached = {
+                s.id: s
+                for s in self.session.scalars(select(CalendarSource).where(CalendarSource.user_id == self.user_id))
+            }
+            self._cached_sources_by_id = cached
+        return cached
+
+    def _blocks_scheduling(self, event: Event) -> bool:
+        return event_blocks_scheduling(event, self._sources_by_id())
+
     def serialize_event(self, event: Event) -> dict:
         step = self._get(Step, event.step_id) if event.step_id is not None else None
         goal = self._get(Goal, step.goal_id) if step else None
+        src = self._sources_by_id().get(event.sync_source_id) if event.sync_source_id is not None else None
+        blocks_scheduling = self._blocks_scheduling(event)
         title = event.title
         if event.kind == "block" and goal is not None:
             for sep in (" · ", ": ", "："):
@@ -166,6 +207,10 @@ class Service:
         return {"id": event.id, "title": title, "start": _iso(event.start_utc),
                 "end": _iso(event.end_utc), "kind": event.kind, "status": event.status,
                 "source": event.source, "sync_source_id": event.sync_source_id,
+                "all_day": bool(event.all_day),
+                "sync_source_name": src.name if src else None,
+                "sync_source_color": src.color if src else None,
+                "blocks_scheduling": blocks_scheduling,
                 "step_id": event.step_id, "step_version": version_token(step) if step else None,
                 "goal_id": goal.id if goal else None,
                 "goal_title": goal.title if goal else None, "version": version_token(event)}
@@ -271,7 +316,10 @@ class Service:
             if goal and goal.deadline and local_end > datetime.combine(goal.deadline + timedelta(days=1), time(), self.zone):
                 raise ApiError("deadline", self._t("该时间超过目标截止日期", "That time passes the goal deadline"))
         buffer = timedelta(minutes=config["buffer_minutes"])
-        occupied = [e for e in self._events() if e.id not in ignore and e.status not in ("skipped", "missed")]
+        occupied = [
+            e for e in self._events()
+            if e.id not in ignore and e.status not in ("skipped", "missed") and self._blocks_scheduling(e)
+        ]
         def overlaps(e):
             pad = buffer if goal_block or habit_block or e.kind == "habit" else timedelta(0)
             return start < _utc(e.end_utc) + pad and end > _utc(e.start_utc) - pad
@@ -389,7 +437,8 @@ class Service:
         return {"date": day.isoformat(), "timezone": self.tz, "next": chosen,
                 "execution": self.serialize_execution(running) if running else None,
                 "recovery": [self.serialize_event(e) for e in recovery_events], "events": events,
-                "habits": habits, "habit_next": habit_next}
+                "habits": habits, "habit_next": habit_next,
+                "sync_conflicts": detect_sync_conflicts(self.session, self.user_id, self.now_naive)}
 
     def _step_defs(self, values):
         if not isinstance(values, list) or not 1 <= len(values) <= 100:
@@ -794,7 +843,11 @@ class Service:
                 occurrence = occurrences[event.id]
                 status = "planned" if occurrence["status"] == "pending" else occurrence["status"]
                 events.append({**self.serialize_event(event), "status": status, "habit": occurrence})
-        return {"events": sorted(events, key=lambda event: (event["start"], event["id"])), "habits": habits}
+        return {
+            "events": sorted(events, key=lambda event: (event["start"], event["id"])),
+            "habits": habits,
+            "sync_conflicts": detect_sync_conflicts(self.session, self.user_id, self.now_naive),
+        }
 
     def create_event(self, body):
         title = _text(body.get("title"), lang=self.lang)
@@ -868,7 +921,8 @@ class Service:
         # Web proposals use the same materialized constraints as all later writes.
         prefs.web_availability = self._availability()
         busy = [scheduler.BusyBlock(_utc(e.start_utc).astimezone(self.zone), _utc(e.end_utc).astimezone(self.zone), e.kind)
-                for e in self._events() if e.id not in ignore and e.status not in ("skipped", "missed")]
+                for e in self._events()
+                if e.id not in ignore and e.status not in ("skipped", "missed") and self._blocks_scheduling(e)]
         candidates = scheduler.propose(scheduler.Requirement(est_min=step.est_min, energy=step.energy, kind=step.kind, min_chunk=min(20, step.est_min)),
                                        self.now.astimezone(self.zone), busy, prefs=prefs, top_n=6, deadline=goal.deadline,
                                        window=(start.astimezone(self.zone), end.astimezone(self.zone)), lang=self.lang) if end > start else []
@@ -985,7 +1039,11 @@ class Service:
                 pad = timedelta(minutes=config["buffer_minutes"] if "block" in (event.kind, other.kind) else 0)
                 if start < parse_datetime(other_before["end"], lang=self.lang) + pad and end > parse_datetime(other_before["start"], lang=self.lang) - pad:
                     raise ApiError("undo_conflict", self._t("恢复的日程相互冲突", "Restored events conflict with each other"))
-        existing = [e for e in self._events() if e.id not in ids and e.kind == "block" and e.status not in ("skipped", "missed")]
+        existing = [
+            e for e in self._events()
+            if e.id not in ids and e.kind == "block" and e.status not in ("skipped", "missed")
+            and self._blocks_scheduling(e)
+        ]
         for event, before in restored:
             if event.kind != "block" or parse_datetime(before["start"], lang=self.lang) < self.now:
                 continue

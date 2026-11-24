@@ -4,7 +4,7 @@ from .models import Base
 from .web import models as _web_models
 from .web import transport_models as _transport_models
 
-VERSION = 12
+VERSION = 13
 
 
 def migrate(engine):
@@ -96,7 +96,33 @@ def migrate(engine):
                     'ALTER TABLE events ADD COLUMN sync_source_id INTEGER '
                     'REFERENCES calendar_sources(id) ON DELETE CASCADE'
                 )
+            if event_columns and 'all_day' not in event_columns:
+                con.exec_driver_sql('ALTER TABLE events ADD COLUMN all_day BOOLEAN NOT NULL DEFAULT 0')
             con.exec_driver_sql('CREATE INDEX IF NOT EXISTS ix_events_sync_source_id ON events(sync_source_id)')
+            source_columns = {r[1] for r in con.exec_driver_sql('PRAGMA table_info(calendar_sources)')}
+            if source_columns:
+                source_alters = [
+                    ('connection_id', 'INTEGER REFERENCES calendar_connections(id) ON DELETE CASCADE'),
+                    ('remote_calendar_id', "VARCHAR(500) NOT NULL DEFAULT ''"),
+                    ('color', "VARCHAR(16) NOT NULL DEFAULT '#6b7f89'"),
+                    ('blocks_scheduling', 'BOOLEAN NOT NULL DEFAULT 1'),
+                    ('all_day_mode', "VARCHAR(16) NOT NULL DEFAULT 'ignore'"),
+                    ('writable', 'BOOLEAN NOT NULL DEFAULT 0'),
+                    ('is_goalcal_calendar', 'BOOLEAN NOT NULL DEFAULT 0'),
+                    ('webhook_channel_id', 'VARCHAR(128)'),
+                    ('webhook_resource_id', 'VARCHAR(255)'),
+                    ('webhook_secret', 'VARCHAR(128)'),
+                    ('webhook_expires_at', 'DATETIME'),
+                ]
+                for col_name, col_ddl in source_alters:
+                    if col_name not in source_columns:
+                        con.exec_driver_sql(f'ALTER TABLE calendar_sources ADD COLUMN {col_name} {col_ddl}')
+                con.exec_driver_sql(
+                    'CREATE INDEX IF NOT EXISTS ix_calendar_sources_connection_id ON calendar_sources(connection_id)'
+                )
+                con.exec_driver_sql(
+                    'CREATE INDEX IF NOT EXISTS ix_calendar_sources_webhook_channel_id ON calendar_sources(webhook_channel_id)'
+                )
             if con.exec_driver_sql('PRAGMA foreign_key_check').first():
                 raise RuntimeError('Database has invalid foreign keys; repair the development copy before import')
             con.exec_driver_sql(f'PRAGMA user_version={VERSION}')

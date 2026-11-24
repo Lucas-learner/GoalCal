@@ -1,7 +1,7 @@
 # GoalCal 待办清单（TODO）
 
 > 更新日期：2026-11-24
-> 当前已上线版本：Web 日历同步首版（`goalcal.zhang.sarl` / Cloudflare Tunnel `goalcal-v2` / 正式数据库 `var/production/goalcal.db` Schema `v12`）
+> 当前已上线版本：日历同步 V2.2 全能力版（`goalcal.zhang.sarl` / Cloudflare Tunnel `goalcal-v2` / 正式数据库 `var/production/goalcal.db` Schema `v13`）
 
 ---
 
@@ -18,8 +18,8 @@
   - 在 `EventDialog` 支持按“仅此事件 / 此后全部”批量改期或取消。
 - [x] **ICS 双向订阅同步（只读导出 + 外部链接定时拉取）**
   - 已实现用户专属只读 `.ics` 订阅导出地址（支持 `https://`、`webcal://`、内容筛选、ETag 与重置链接）及外部 `.ics`/`webcal://` 订阅源定时自动拉取与取消清理，详见 [日历同步设计](calendar-sync.md)。
-- [ ] **原生双向读写同步（Google OAuth / Apple CalDAV / Outlook Graph）**
-  - 基于现有 `calendar_sources` 与 `SyncProvider` 抽象按需扩展原生双向写入，解决 Google 日历 ICS 订阅刷新慢及外部拖动回写需求。
+- [x] **原生双向读写同步与智能联动（V2.0–V2.2）**
+  - 已实现 `blocks_scheduling` / `all_day_mode` / 标识色控制、同步冲突检测与一键重排、Apple iCloud / 通用 CalDAV、Google Calendar OAuth + Watch Webhook、Microsoft Outlook Graph OAuth + Delta + Webhook，以及 `sync_outbox` 异步推送与 `event_sync_links` 防循环双向合并，详见 [日历同步设计](calendar-sync.md)。
 - [ ] **日历弹窗就地完成 & 颜色图例**
   - 在 `CalendarPage` 顶部增加各状态色块图例（计划中 / 已完成 / 部分完成 / 未完成 / 外部固定日程）。
   - 在 `EventDialog` 为已排期目标块增加一步点选“已完成 / 部分 / 跳过”，无需再经“开始执行”或跳回目标页。

@@ -11,7 +11,7 @@ import re
 from urllib.parse import urlsplit
 
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import event as sa_event, select
 from sqlalchemy.exc import OperationalError, IntegrityError
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
@@ -72,11 +72,71 @@ def scoped(token: str, *, write=False, principal=None):
             bind=connection, expire_on_commit=False, join_transaction_mode='rollback_only',
             info={'principal': principal, 'token': token, 'wrote': write},
         )
+        pending_upsert_ids: list[int] = []
+        capturing_sync = False
+
+        if write:
+            from ..models import Event as _EventModel
+            from ..domain.bidirectional_sync import enqueue_event_sync, is_exportable_goalcal_event
+
+            def _on_before_flush(sess, _ctx, _instances):
+                nonlocal capturing_sync
+                if capturing_sync:
+                    return
+                capturing_sync = True
+                try:
+                    now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+                    suppress = sess.info.get('sync_suppress_outbox_source_id')
+                    for obj in list(sess.deleted):
+                        if isinstance(obj, _EventModel) and obj.user_id == principal.user_id and is_exportable_goalcal_event(obj):
+                            enqueue_event_sync(
+                                sess,
+                                principal.user_id,
+                                obj,
+                                action='delete',
+                                now_naive=now_naive,
+                                suppress_source_id=suppress,
+                            )
+                finally:
+                    capturing_sync = False
+
+            def _on_after_flush(sess, _ctx):
+                if capturing_sync:
+                    return
+                for obj in sess.new | sess.dirty:
+                    if isinstance(obj, _EventModel) and obj.user_id == principal.user_id and obj.id is not None:
+                        if is_exportable_goalcal_event(obj) and obj.id not in pending_upsert_ids:
+                            pending_upsert_ids.append(obj.id)
+
+            sa_event.listen(session, 'before_flush', _on_before_flush)
+            sa_event.listen(session, 'after_flush', _on_after_flush)
+
         ctx = tenancy.current_session.set(session)
         try:
             yield session, principal
             if write:
                 session.flush()
+                if pending_upsert_ids:
+                    from ..models import Event as _EventModel
+                    from ..domain.bidirectional_sync import enqueue_event_sync
+
+                    capturing_sync = True
+                    try:
+                        now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+                        suppress = session.info.get('sync_suppress_outbox_source_id')
+                        for eid in pending_upsert_ids:
+                            ev = session.get(_EventModel, eid)
+                            if ev is not None:
+                                enqueue_event_sync(
+                                    session,
+                                    principal.user_id,
+                                    ev,
+                                    now_naive=now_naive,
+                                    suppress_source_id=suppress,
+                                )
+                        session.flush()
+                    finally:
+                        capturing_sync = False
                 auth.authenticate(token)
                 connection.commit()
         except BaseException:
@@ -110,8 +170,91 @@ def replay(session, uid, key, digest, *, lang: str = 'zh'):
 def prepare(token, action, resource, body, *, lang: str | None = None):
     """External model / network requests run before the write lock, authenticated and metered."""
     from .core import ApiError
+    if action == 'connect_caldav':
+        from ..domain.sync_providers import CalDavAdapter, SyncAuthError, SyncProviderError
+        from ..safe_fetch import FetchError
+        from .calendar_sync import _localized_fetch_error
+
+        with scoped(token) as (session, principal):
+            resolved_lang = _effective_lang(lang, session, principal.user_id)
+        try:
+            server_url = CalDavAdapter.resolve_server_url(body.get('preset', 'icloud'), body.get('server_url'))
+            discovered = CalDavAdapter.discover(
+                server_url,
+                body['username'].strip(),
+                body['password'],
+                ensure_goalcal=bool(body.get('enable_two_way', True)),
+            )
+            return {**body, '_discovered': discovered}
+        except SyncAuthError as exc:
+            raise ApiError('caldav_auth_failed', _localized_fetch_error(resolved_lang, str(exc)), 422) from None
+        except (FetchError, SyncProviderError, ValueError) as exc:
+            raise ApiError('caldav_connect_failed', _localized_fetch_error(resolved_lang, str(exc)), 422) from None
+
+    if action == 'refresh_calendar_connection':
+        from ..crypto import CredentialError, decrypt_secrets
+        from ..domain.sync_providers import (
+            CalDavAdapter,
+            GoogleCalendarAdapter,
+            OutlookCalendarAdapter,
+            SyncAuthError,
+            SyncProviderError,
+        )
+        from ..models import CalendarConnection
+        from ..safe_fetch import FetchError
+        from .calendar_sync import _localized_fetch_error
+
+        with scoped(token) as (session, principal):
+            resolved_lang = _effective_lang(lang, session, principal.user_id)
+            tz = principal.tz
+            conn = session.get(CalendarConnection, int(resource))
+            if conn is None or conn.user_id != principal.user_id:
+                raise ApiError('not_found', pick(resolved_lang, '记录不存在', 'Record not found'), 404)
+            conn_provider = conn.provider
+            conn_server = conn.server_url
+            conn_user = conn.username
+            try:
+                secrets_dict = decrypt_secrets(conn.encrypted_secrets)
+            except CredentialError as exc:
+                raise ApiError('reauth_required', _localized_fetch_error(resolved_lang, str(exc)), 422) from None
+
+        try:
+            updated_secrets = None
+            updated_expires = None
+            if conn_provider == 'caldav':
+                discovered = CalDavAdapter.discover(
+                    conn_server,
+                    conn_user,
+                    str(secrets_dict.get('password') or ''),
+                    ensure_goalcal=True,
+                )
+            elif conn_provider == 'google':
+                active_secrets, exp, mutated = GoogleCalendarAdapter.ensure_fresh_token(secrets_dict)
+                if mutated:
+                    updated_secrets, updated_expires = active_secrets, exp
+                discovered = ('', GoogleCalendarAdapter.discover(active_secrets, tz=tz, ensure_goalcal=True))
+            elif conn_provider == 'outlook':
+                active_secrets, exp, mutated = OutlookCalendarAdapter.ensure_fresh_token(secrets_dict)
+                if mutated:
+                    updated_secrets, updated_expires = active_secrets, exp
+                discovered = ('', OutlookCalendarAdapter.discover(active_secrets, ensure_goalcal=True))
+            else:
+                raise SyncProviderError(f'Unsupported provider: {conn_provider}')
+            return {
+                **body,
+                '_discovered': discovered,
+                '_updated_secrets': updated_secrets,
+                '_updated_expires': updated_expires,
+            }
+        except SyncAuthError as exc:
+            return {**body, '_auth_error': str(exc)}
+        except (FetchError, SyncProviderError, ValueError) as exc:
+            raise ApiError('refresh_failed', _localized_fetch_error(resolved_lang, str(exc)), 422) from None
+
     if action in {'create_calendar_source', 'sync_calendar_source'}:
         from icalendar import Calendar as ICal
+        from ..crypto import CredentialError, decrypt_secrets
+        from ..domain.bidirectional_sync import pull_native_for_source
         from ..domain.calendar_sync import (
             MAX_SOURCES_PER_USER,
             fetch_source_content,
@@ -119,28 +262,31 @@ def prepare(token, action, resource, body, *, lang: str | None = None):
             release_source,
             try_acquire_source,
         )
-        from ..models import CalendarSource
+        from ..domain.sync_providers import SyncAuthError, SyncProviderError
+        from ..models import CalendarConnection, CalendarSource
         from ..safe_fetch import FetchError
         from .calendar_sync import _localized_fetch_error
 
         with scoped(token) as (session, principal):
             resolved_lang = _effective_lang(lang, session, principal.user_id)
+            tz = principal.tz
             if action == 'create_calendar_source':
                 provider_name = body.get('provider', 'ics_url')
                 try:
                     normalized_url = get_provider(provider_name).normalize_url(body.get('url', ''))
                 except (FetchError, ValueError) as exc:
                     raise ApiError('invalid_url', _localized_fetch_error(resolved_lang, str(exc)), 422) from None
-                existing = list(
-                    session.scalars(select(CalendarSource).where(CalendarSource.user_id == principal.user_id))
-                )
+                existing = [
+                    s for s in session.scalars(select(CalendarSource).where(CalendarSource.user_id == principal.user_id))
+                    if s.provider == 'ics_url'
+                ]
                 if len(existing) >= MAX_SOURCES_PER_USER:
                     raise ApiError(
                         'limit_exceeded',
                         pick(
                             resolved_lang,
-                            f'最多可添加 {MAX_SOURCES_PER_USER} 个外部日历订阅源。',
-                            f'You can connect up to {MAX_SOURCES_PER_USER} external calendars.',
+                            f'最多可添加 {MAX_SOURCES_PER_USER} 个外部 ICS 订阅源。',
+                            f'You can connect up to {MAX_SOURCES_PER_USER} external ICS subscriptions.',
                         ),
                         422,
                     )
@@ -151,11 +297,31 @@ def prepare(token, action, resource, body, *, lang: str | None = None):
                         409,
                     )
                 target_provider, target_url, source_id = provider_name, normalized_url, None
+                native_ctx = None
             else:
                 source = session.get(CalendarSource, int(resource))
                 if source is None or source.user_id != principal.user_id:
                     raise ApiError('not_found', pick(resolved_lang, '记录不存在', 'Record not found'), 404)
                 target_provider, target_url, source_id = source.provider, source.url, source.id
+                native_ctx = None
+                if target_provider in {'caldav', 'google', 'outlook'}:
+                    conn = session.get(CalendarConnection, source.connection_id) if source.connection_id else None
+                    if conn is None or conn.user_id != principal.user_id:
+                        raise ApiError('not_found', pick(resolved_lang, '关联日历账号不存在', 'Linked account not found'), 404)
+                    try:
+                        secrets_dict = decrypt_secrets(conn.encrypted_secrets)
+                    except CredentialError as exc:
+                        return {**body, '_fetch_error': str(exc), '_auth_failed': True}
+                    native_ctx = {
+                        'conn_id': conn.id,
+                        'conn_server_url': conn.server_url,
+                        'conn_username': conn.username,
+                        'secrets_dict': secrets_dict,
+                        'remote_calendar_id': source.remote_calendar_id,
+                        'sync_token': source.sync_token,
+                        'all_day_mode': source.all_day_mode or 'ignore',
+                        'tz': tz,
+                    }
 
         if action == 'create_calendar_source':
             try:
@@ -175,6 +341,32 @@ def prepare(token, action, resource, body, *, lang: str | None = None):
                 409,
             )
         try:
+            if native_ctx is not None:
+                now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+                try:
+                    pull_res, updated_secrets, updated_expires = pull_native_for_source(
+                        target_provider,
+                        conn_server_url=native_ctx['conn_server_url'],
+                        conn_username=native_ctx['conn_username'],
+                        secrets_dict=native_ctx['secrets_dict'],
+                        source_url=target_url,
+                        remote_calendar_id=native_ctx['remote_calendar_id'],
+                        sync_token=native_ctx['sync_token'],
+                        all_day_mode=native_ctx['all_day_mode'],
+                        tz=native_ctx['tz'],
+                        now_naive=now_naive,
+                    )
+                    return {
+                        **body,
+                        '_native_pull': pull_res,
+                        '_conn_id': native_ctx['conn_id'],
+                        '_updated_secrets': updated_secrets,
+                        '_updated_expires': updated_expires,
+                    }
+                except SyncAuthError as exc:
+                    return {**body, '_fetch_error': str(exc), '_auth_failed': True}
+                except (FetchError, SyncProviderError, ValueError) as exc:
+                    return {**body, '_fetch_error': str(exc)}
             fetched = fetch_source_content(target_provider, target_url)
             return {**body, '_fetched': fetched}
         except (FetchError, ValueError) as exc:
@@ -383,6 +575,12 @@ def execute(token, action, resource, body, query, key=None, digest=None, lang: s
             result = svc.calendar_sync.update_feed(body)
         elif action == 'rotate_calendar_feed':
             result = svc.calendar_sync.rotate_feed(body)
+        elif action == 'connect_caldav':
+            result = svc.calendar_sync.connect_caldav(body)
+        elif action == 'refresh_calendar_connection':
+            result = svc.calendar_sync.refresh_connection(int(resource), body)
+        elif action == 'delete_calendar_connection':
+            result = svc.calendar_sync.delete_connection(int(resource), body)
         elif action == 'create_calendar_source':
             result = svc.calendar_sync.create_source(body)
         elif action == 'update_calendar_source':
@@ -522,6 +720,9 @@ SPECS = [
     ('/calendar/sync','GET','calendar_sync',None),
     ('/calendar/sync/feed','PUT','update_calendar_feed',schemas.UpdateCalendarFeed),
     ('/calendar/sync/feed/rotate','POST','rotate_calendar_feed',schemas.RotateCalendarFeed),
+    ('/calendar/sync/connections/caldav','POST','connect_caldav',schemas.ConnectCalDav),
+    ('/calendar/sync/connections/{id:int}/refresh','POST','refresh_calendar_connection',schemas.SyncCalendarSource),
+    ('/calendar/sync/connections/{id:int}','DELETE','delete_calendar_connection',schemas.Version),
     ('/calendar/sync/sources','POST','create_calendar_source',schemas.CreateCalendarSource),
     ('/calendar/sync/sources/{id:int}','PATCH','update_calendar_source',schemas.UpdateCalendarSource),
     ('/calendar/sync/sources/{id:int}/sync','POST','sync_calendar_source',schemas.SyncCalendarSource),

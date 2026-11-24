@@ -172,6 +172,9 @@ class CreateCalendarSource(Input):
     url: str = Field(min_length=1, max_length=2000)
     provider: Literal['ics_url'] = 'ics_url'
     sync_interval_minutes: int = Field(default=30, ge=15, le=1440)
+    color: str = Field(default='#6b7f89', pattern=r'^#[0-9a-fA-F]{6}$')
+    blocks_scheduling: bool = True
+    all_day_mode: Literal['ignore', 'show', 'busy'] = 'ignore'
 
 
 class UpdateCalendarSource(Version):
@@ -179,10 +182,22 @@ class UpdateCalendarSource(Version):
     url: str | None = Field(default=None, min_length=1, max_length=2000)
     enabled: bool | None = None
     sync_interval_minutes: int | None = Field(default=None, ge=15, le=1440)
+    color: str | None = Field(default=None, pattern=r'^#[0-9a-fA-F]{6}$')
+    blocks_scheduling: bool | None = None
+    all_day_mode: Literal['ignore', 'show', 'busy'] | None = None
+    writable: bool | None = None
 
 
 class SyncCalendarSource(Input):
     version: str | None = Field(default=None, max_length=128)
+
+
+class ConnectCalDav(Input):
+    preset: Literal['icloud', 'fastmail', 'custom'] = 'icloud'
+    server_url: str | None = Field(default=None, max_length=500)
+    username: str = Field(min_length=1, max_length=200)
+    password: str = Field(min_length=1, max_length=200)
+    enable_two_way: bool = True
 
 
 class UpdateMe(Input):

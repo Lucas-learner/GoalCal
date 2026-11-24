@@ -90,6 +90,7 @@ class Event(Base):
     sync_source_id: Mapped[int | None] = mapped_column(
         ForeignKey("calendar_sources.id", ondelete="CASCADE"), nullable=True, index=True
     )
+    all_day: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     step_id: Mapped[int | None] = mapped_column(ForeignKey("steps.id"), nullable=True)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
@@ -199,17 +200,45 @@ class Interaction(Base):
     payload: Mapped[str] = mapped_column(Text, default="{}")
 
 
+class CalendarConnection(Base):
+    """Encrypted credential container for a native external calendar account (CalDAV / Google / Outlook)."""
+
+    __tablename__ = "calendar_connections"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    provider: Mapped[str] = mapped_column(String(32))  # caldav|google|outlook
+    account_label: Mapped[str] = mapped_column(String(200), default="")
+    server_url: Mapped[str] = mapped_column(String(500), default="")
+    username: Mapped[str] = mapped_column(String(200), default="")
+    encrypted_secrets: Mapped[str] = mapped_column(Text, default="")
+    token_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    status: Mapped[str] = mapped_column(String(24), default="active")  # active|reauth_required|error
+    last_error: Mapped[str] = mapped_column(String(500), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive, onupdate=utcnow_naive)
+
+
 class CalendarSource(Base):
-    """External calendar sync source (ICS URL today; extensible to OAuth/CalDAV)."""
+    """External calendar sync source (ICS URL, CalDAV, Google Calendar, Outlook Graph)."""
 
     __tablename__ = "calendar_sources"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    connection_id: Mapped[int | None] = mapped_column(
+        ForeignKey("calendar_connections.id", ondelete="CASCADE"), nullable=True, index=True
+    )
     provider: Mapped[str] = mapped_column(String(32), default="ics_url")
     direction: Mapped[str] = mapped_column(String(16), default="inbound")
     name: Mapped[str] = mapped_column(String(120))
     url: Mapped[str] = mapped_column(String(2000), default="")
+    remote_calendar_id: Mapped[str] = mapped_column(String(500), default="")
+    color: Mapped[str] = mapped_column(String(16), default="#6b7f89", server_default="#6b7f89")
+    blocks_scheduling: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
+    all_day_mode: Mapped[str] = mapped_column(String(16), default="ignore", server_default="ignore")
+    writable: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    is_goalcal_calendar: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     sync_interval_minutes: Mapped[int] = mapped_column(Integer, default=30)
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -222,6 +251,53 @@ class CalendarSource(Base):
     etag: Mapped[str | None] = mapped_column(String(255), nullable=True)
     last_modified: Mapped[str | None] = mapped_column(String(128), nullable=True)
     sync_token: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    webhook_channel_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    webhook_resource_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    webhook_secret: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    webhook_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive, onupdate=utcnow_naive)
+
+
+class EventSyncLink(Base):
+    """Bidirectional mapping between a local GoalCal Event and a remote calendar item."""
+
+    __tablename__ = "event_sync_links"
+    __table_args__ = (
+        UniqueConstraint("source_id", "remote_uid", name="uq_event_sync_links_source_remote"),
+        UniqueConstraint("event_id", "source_id", name="uq_event_sync_links_event_source"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"), index=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("calendar_sources.id", ondelete="CASCADE"), index=True)
+    remote_uid: Mapped[str] = mapped_column(String(255))
+    remote_href: Mapped[str] = mapped_column(String(1000), default="")
+    remote_etag: Mapped[str] = mapped_column(String(255), default="")
+    last_synced_hash: Mapped[str] = mapped_column(String(64), default="")
+    last_pushed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    sync_state: Mapped[str] = mapped_column(String(24), default="synced")
+
+
+class SyncOutbox(Base):
+    """Asynchronous outbound push queue from GoalCal writes to native calendars."""
+
+    __tablename__ = "sync_outbox"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("calendar_sources.id", ondelete="CASCADE"), index=True)
+    event_id: Mapped[int | None] = mapped_column(ForeignKey("events.id", ondelete="SET NULL"), nullable=True, index=True)
+    remote_uid: Mapped[str] = mapped_column(String(255), default="")
+    remote_href: Mapped[str] = mapped_column(String(1000), default="")
+    action: Mapped[str] = mapped_column(String(16))  # upsert|delete
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=5)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive, index=True)
+    last_error: Mapped[str] = mapped_column(String(500), default="")
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)  # pending|done|dead
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive, onupdate=utcnow_naive)
 

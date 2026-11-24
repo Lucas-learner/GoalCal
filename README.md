@@ -12,10 +12,10 @@
 - 开始执行、完成/部分完成/调整、过期签到与恢复。
 - 固定日和每周次数习惯，可在今天和日历安排、完成与撤销当次记录。
 - 可视化可用时段/保护时段/偏好、缓冲、每日目标上限。
-- 双向 `.ics` 日历同步（只读订阅导出给 Apple / Google / Outlook 等日历 + 外部日历链接定时自动拉取与取消清理）、手动 `.ics` 文件导入、指标与用户反馈。
+- 全平台日历同步（V2.2）：支持 Apple iCloud / CalDAV、Google Calendar OAuth、Microsoft Outlook Graph 原生双向同步（含专属 `GoalCal` 子日历与 Webhook 增量推送）、双向 `.ics` 订阅、来源配色/全天策略/排期避让控制、冲突检测一键重排，以及一次性 `.ics` 导入。
 - 用户名或邮箱登录；正式环境开放邮箱注册，密码至少 6 个字符。
 
-时区网页修改、连续达成统计、重复日程编辑、推送提醒、原生 OAuth / CalDAV 双向读写和邮件自助找回尚未完成，见 [TODO](docs/TODO.md)。
+时区网页修改、连续达成统计、重复日程编辑、推送提醒和邮件自助找回尚未完成，见 [TODO](docs/TODO.md)。
 
 ## 本地开发
 
@@ -60,7 +60,7 @@ E2E 需要本机 Google Chrome，使用专用 8537 端口。测试不使用生�
 - `goalcal/auth_proxy.py`：同源认证、静态前端、API 挂载和健康检查。
 - `goalcal/web/`：API DTO、请求校验、幂等、事务、执行会话、提议、撤销及助手。
 - `goalcal/domain/`、`goalcal/agent.py`、`goalcal/llm/`：复用的业务、排期、规划与语言理解。
-- `goalcal/models.py`、`migrations.py`、`storage.py`：SQLite schema 12、迁移和备份。
+- `goalcal/models.py`、`migrations.py`、`storage.py`：SQLite schema 13、迁移和备份。
 - `deploy/`：生成可审查的 launchd/Cloudflare 配置；`tools/web_preview.py`：隔离预览。
 - `app.py`、`routes/`、`goalcal/ui/`：仅保留的 Streamlit 兼容回归代码，生产不启动、不开放旧路由。
 - `GoalCalendar_IOS_demo/`：独立 iOS 参考项目，不代表 Web 已实现能力。

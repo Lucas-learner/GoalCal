@@ -2089,6 +2089,136 @@ button.habit-day {
   background: var(--surface-soft);
 }
 
+.sync-provider-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.sync-provider-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+}
+
+.sync-connection-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.sync-connection-card {
+  padding: 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+
+.sync-color-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.sync-color-presets {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.sync-color-btn {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  padding: 0;
+  cursor: pointer;
+}
+
+.sync-color-btn.selected {
+  border-color: var(--ink);
+  transform: scale(1.1);
+}
+
+.sync-conflict-banner {
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(217, 119, 6, 0.35);
+  background: rgba(217, 119, 6, 0.08);
+}
+
+.sync-conflict-head {
+  font-size: 12.5px;
+  color: var(--ink);
+  margin-bottom: 8px;
+}
+
+.sync-conflict-list {
+  display: grid;
+  gap: 8px;
+}
+
+.sync-conflict-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.sync-conflict-copy {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.calendar-source-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.calendar-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 11.5px;
+  font-weight: 540;
+}
+
+.calendar-filter-chip.hidden-source {
+  opacity: 0.45;
+  text-decoration: line-through;
+}
+
+@media (max-width: 720px) {
+  .sync-provider-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .sync-conflict-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
 .sync-form-title {
   font-size: 12.5px;
   font-weight: 620;

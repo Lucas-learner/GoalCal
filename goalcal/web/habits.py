@@ -395,7 +395,8 @@ class HabitService:
         prefs = self.web._prefs()
         prefs.web_availability = self.web._availability()
         busy = [scheduler.BusyBlock(_utc(e.start_utc).astimezone(zone), _utc(e.end_utc).astimezone(zone), e.kind)
-                for e in self.web._events() if e.id not in ignore and e.status not in ("skipped", "missed")]
+                for e in self.web._events()
+                if e.id not in ignore and e.status not in ("skipped", "missed") and self.web._blocks_scheduling(e)]
         raw = scheduler.propose(
             scheduler.Requirement(est_min=est_min, energy=2, kind="habit", min_chunk=min(20, est_min)),
             self.now.astimezone(zone), busy, prefs=prefs, top_n=48 if period != "all" else 24,

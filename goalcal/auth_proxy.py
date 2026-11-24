@@ -11,6 +11,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import html
+import json
 import logging
 import os
 import re
@@ -606,6 +607,379 @@ def _sync_worker_enabled() -> bool:
     return os.getenv("GOALCAL_SYNC_WORKER", "1").strip().lower() not in {"0", "false", "no", "off"}
 
 
+_OAUTH_COOKIE_NAME = "goalcal_oauth_state"
+
+
+def _oauth_redirect_uri(request: Request, provider: str) -> str:
+    base = _public_base_url(request).rstrip("/")
+    return f"{base}/_goalcal/oauth/{provider}/callback"
+
+
+async def oauth_start(request: Request) -> Response:
+    """Start Google / Outlook OAuth 2.0 PKCE flow for an authenticated user."""
+    provider = request.path_params.get("provider", "").strip().lower()
+    if provider not in {"google", "outlook"}:
+        return PlainTextResponse("Not found", status_code=404)
+    token = request.cookies.get(COOKIE_NAME)
+    try:
+        principal = await run_in_threadpool(auth.authenticate, token)
+    except auth.AuthError:
+        return RedirectResponse("/_goalcal/login?next=/app/settings?section=sync", status_code=303)
+
+    from .crypto import sign_oauth_state
+    from .domain.sync_providers import (
+        GoogleCalendarAdapter,
+        OutlookCalendarAdapter,
+        generate_pkce_pair,
+        provider_capabilities,
+    )
+
+    caps = provider_capabilities()
+    if not caps.get(provider, {}).get("configured"):
+        return RedirectResponse("/app/settings?section=sync&oauth_error=not_configured", status_code=303)
+
+    verifier, challenge = generate_pkce_pair()
+    nonce = secrets.token_urlsafe(16)
+    state_token = sign_oauth_state({"uid": principal.user_id, "provider": provider, "nonce": nonce})
+    cookie_token = sign_oauth_state({"uid": principal.user_id, "provider": provider, "nonce": nonce, "verifier": verifier})
+    redirect_uri = _oauth_redirect_uri(request, provider)
+    if provider == "google":
+        auth_url = GoogleCalendarAdapter.authorize_url(redirect_uri=redirect_uri, state=state_token, code_challenge=challenge)
+    else:
+        auth_url = OutlookCalendarAdapter.authorize_url(redirect_uri=redirect_uri, state=state_token, code_challenge=challenge)
+
+    resp = RedirectResponse(auth_url, status_code=302)
+    resp.set_cookie(
+        _OAUTH_COOKIE_NAME,
+        cookie_token,
+        max_age=600,
+        path="/_goalcal/oauth/",
+        secure=_secure_cookie(request),
+        httponly=True,
+        samesite="lax",
+    )
+    return resp
+
+
+def _complete_oauth_sync_db(
+    *,
+    user_id: int,
+    provider: str,
+    account_label: str,
+    secrets_dict: dict,
+    expires_at,
+    calendars: list,
+) -> tuple[int, list[int]]:
+    from datetime import datetime as _dt, timezone as _tz
+    from sqlalchemy import select as _select
+    from sqlalchemy.orm import Session as _Session
+    from . import db as _db
+    from .crypto import encrypt_secrets
+    from .domain.bidirectional_sync import backfill_goalcal_source
+    from .models import CalendarConnection
+    from .web.calendar_sync import upsert_connection_sources
+
+    now_naive = _dt.now(_tz.utc).replace(tzinfo=None)
+    encrypted = encrypt_secrets(secrets_dict)
+    with _db.get_engine().connect() as connection:
+        connection.exec_driver_sql("BEGIN IMMEDIATE")
+        ws = _Session(bind=connection, expire_on_commit=False, join_transaction_mode="rollback_only")
+        try:
+            conn = ws.scalar(
+                _select(CalendarConnection).where(
+                    CalendarConnection.user_id == user_id,
+                    CalendarConnection.provider == provider,
+                    CalendarConnection.account_label == account_label,
+                )
+            )
+            if conn is None:
+                conn = CalendarConnection(
+                    user_id=user_id,
+                    provider=provider,
+                    account_label=account_label[:200],
+                    server_url="",
+                    username=account_label[:200],
+                    encrypted_secrets=encrypted,
+                    token_expires_at=expires_at,
+                    status="active",
+                    last_error="",
+                    created_at=now_naive,
+                    updated_at=now_naive,
+                )
+                ws.add(conn)
+                ws.flush()
+            else:
+                if not secrets_dict.get("refresh_token") and conn.encrypted_secrets:
+                    from .crypto import decrypt_secrets
+                    try:
+                        prev_sec = decrypt_secrets(conn.encrypted_secrets)
+                        if prev_sec.get("refresh_token"):
+                            secrets_dict = {**secrets_dict, "refresh_token": prev_sec["refresh_token"]}
+                            encrypted = encrypt_secrets(secrets_dict)
+                    except Exception:
+                        pass
+                conn.encrypted_secrets = encrypted
+                conn.token_expires_at = expires_at
+                conn.status = "active"
+                conn.last_error = ""
+                conn.updated_at = now_naive
+
+            sources, created = upsert_connection_sources(
+                ws,
+                user_id=user_id,
+                conn=conn,
+                calendars=calendars,
+                now_naive=now_naive,
+                enable_goalcal=True,
+            )
+            for src in created:
+                if src.is_goalcal_calendar and src.enabled:
+                    backfill_goalcal_source(ws, user_id, src, now_naive=now_naive)
+            source_ids = [s.id for s in sources if s.enabled]
+            ws.flush()
+            connection.commit()
+            return conn.id, source_ids
+        except BaseException:
+            connection.rollback()
+            raise
+        finally:
+            ws.close()
+
+
+def _register_webhooks_best_effort(provider: str, public_base: str, secrets_dict: dict, source_ids: list[int]) -> None:
+    if not public_base.startswith("https://") or not source_ids:
+        return
+    from datetime import datetime as _dt, timezone as _tz
+    from sqlalchemy.orm import Session as _Session
+    from . import db as _db
+    from .domain.sync_providers import GoogleCalendarAdapter, OutlookCalendarAdapter
+    from .models import CalendarSource
+
+    now_naive = _dt.now(_tz.utc).replace(tzinfo=None)
+    callback_url = f"{public_base.rstrip('/')}/calendar/webhook/{provider}"
+    session = _db.new_session()
+    targets: list[tuple[int, str]] = []
+    try:
+        for sid in source_ids:
+            src = session.get(CalendarSource, sid)
+            if src is not None and src.remote_calendar_id:
+                targets.append((src.id, src.remote_calendar_id))
+    finally:
+        session.close()
+
+    updates: list[tuple[int, str, str, str, object]] = []
+    for sid, remote_cal_id in targets:
+        try:
+            channel_id = f"gc-{provider}-{sid}-{secrets.token_hex(6)}"
+            wh_secret = secrets.token_urlsafe(24)
+            if provider == "google":
+                res_id, exp = GoogleCalendarAdapter.watch(
+                    remote_cal_id,
+                    secrets_dict,
+                    callback_url=callback_url,
+                    channel_id=channel_id,
+                    token=wh_secret,
+                )
+            else:
+                res_id, exp = OutlookCalendarAdapter.watch(
+                    remote_cal_id,
+                    secrets_dict,
+                    callback_url=callback_url,
+                    client_state=wh_secret,
+                    now_naive=now_naive,
+                )
+            updates.append((sid, channel_id, res_id, wh_secret, exp))
+        except Exception:
+            pass  # Webhook failure never blocks initial OAuth connection; polling still syncs.
+
+    if updates:
+        with _db.get_engine().connect() as connection:
+            connection.exec_driver_sql("BEGIN IMMEDIATE")
+            ws = _Session(bind=connection, expire_on_commit=False, join_transaction_mode="rollback_only")
+            try:
+                for sid, ch_id, res_id, wh_sec, exp in updates:
+                    src = ws.get(CalendarSource, sid)
+                    if src is not None:
+                        src.webhook_channel_id = ch_id[:128]
+                        src.webhook_resource_id = res_id[:255]
+                        src.webhook_secret = wh_sec[:128]
+                        src.webhook_expires_at = exp
+                ws.flush()
+                connection.commit()
+            except BaseException:
+                connection.rollback()
+            finally:
+                ws.close()
+
+
+async def oauth_callback(request: Request) -> Response:
+    """Handle Google / Outlook OAuth callback cleanly outside SQLite write locks."""
+    provider = request.path_params.get("provider", "").strip().lower()
+    if provider not in {"google", "outlook"}:
+        return PlainTextResponse("Not found", status_code=404)
+
+    def _clear_redirect(url: str) -> Response:
+        r = RedirectResponse(url, status_code=302)
+        r.delete_cookie(_OAUTH_COOKIE_NAME, path="/_goalcal/oauth/")
+        return r
+
+    if request.query_params.get("error"):
+        return _clear_redirect("/app/settings?section=sync&oauth_error=denied")
+
+    token = request.cookies.get(COOKIE_NAME)
+    try:
+        principal = await run_in_threadpool(auth.authenticate, token)
+    except auth.AuthError:
+        return _clear_redirect("/_goalcal/login?next=/app/settings?section=sync")
+
+    from .crypto import CredentialError, verify_oauth_state
+    from .domain.sync_providers import GoogleCalendarAdapter, OutlookCalendarAdapter, SyncProviderError
+
+    state_raw = request.query_params.get("state", "")
+    cookie_raw = request.cookies.get(_OAUTH_COOKIE_NAME, "")
+    code = request.query_params.get("code", "")
+    try:
+        state_data = verify_oauth_state(state_raw)
+        cookie_data = verify_oauth_state(cookie_raw)
+    except CredentialError:
+        return _clear_redirect("/app/settings?section=sync&oauth_error=invalid_state")
+
+    if (
+        not code
+        or state_data.get("uid") != principal.user_id
+        or cookie_data.get("uid") != principal.user_id
+        or state_data.get("provider") != provider
+        or cookie_data.get("provider") != provider
+        or not secrets.compare_digest(str(state_data.get("nonce", "")), str(cookie_data.get("nonce", "")))
+    ):
+        return _clear_redirect("/app/settings?section=sync&oauth_error=invalid_state")
+
+    verifier = str(cookie_data.get("verifier") or "")
+    redirect_uri = _oauth_redirect_uri(request, provider)
+    public_base = _public_base_url(request)
+
+    def _finish_exchange():
+        if provider == "google":
+            secrets_dict, expires_at = GoogleCalendarAdapter.exchange_code(
+                code=code, redirect_uri=redirect_uri, code_verifier=verifier
+            )
+            label = GoogleCalendarAdapter.userinfo_email(secrets_dict)
+            calendars = GoogleCalendarAdapter.discover(secrets_dict, tz=principal.tz, ensure_goalcal=True)
+        else:
+            secrets_dict, expires_at = OutlookCalendarAdapter.exchange_code(
+                code=code, redirect_uri=redirect_uri, code_verifier=verifier
+            )
+            label = OutlookCalendarAdapter.userinfo_email(secrets_dict)
+            calendars = OutlookCalendarAdapter.discover(secrets_dict, ensure_goalcal=True)
+        _, source_ids = _complete_oauth_sync_db(
+            user_id=principal.user_id,
+            provider=provider,
+            account_label=label,
+            secrets_dict=secrets_dict,
+            expires_at=expires_at,
+            calendars=calendars,
+        )
+        _register_webhooks_best_effort(provider, public_base, secrets_dict, source_ids)
+        return source_ids
+
+    try:
+        await run_in_threadpool(_finish_exchange)
+    except SyncProviderError:
+        return _clear_redirect("/app/settings?section=sync&oauth_error=exchange_failed")
+    except Exception:
+        logging.getLogger("goalcal.calendar_sync").warning("oauth_callback_failed provider=%s", provider, exc_info=True)
+        return _clear_redirect("/app/settings?section=sync&oauth_error=exchange_failed")
+
+    return _clear_redirect(f"/app/settings?section=sync&connected={provider}")
+
+
+async def google_webhook(request: Request) -> Response:
+    """Receive push notifications from Google Calendar watch channels."""
+    channel_id = request.headers.get("x-goog-channel-id", "").strip()
+    channel_token = request.headers.get("x-goog-channel-token", "").strip()
+    state = request.headers.get("x-goog-resource-state", "").strip().lower()
+    if not channel_id or not channel_token:
+        return PlainTextResponse("Not found", status_code=404)
+
+    from sqlalchemy import select as _select
+    from . import db as _db
+    from .models import CalendarSource
+
+    def _lookup_source():
+        s = _db.new_session()
+        try:
+            src = s.scalar(
+                _select(CalendarSource).where(
+                    CalendarSource.provider == "google",
+                    CalendarSource.webhook_channel_id == channel_id,
+                    CalendarSource.enabled.is_(True),
+                )
+            )
+            if src is None or not src.webhook_secret or not secrets.compare_digest(src.webhook_secret, channel_token):
+                return None
+            return src.id
+        finally:
+            s.close()
+
+    source_id = await run_in_threadpool(_lookup_source)
+    if source_id is None:
+        return PlainTextResponse("Not found", status_code=404)
+    if state != "sync":
+        from .domain.bidirectional_sync import sync_native_source_once
+        await run_in_threadpool(sync_native_source_once, source_id)
+    return Response(status_code=202)
+
+
+async def outlook_webhook(request: Request) -> Response:
+    """Handle Microsoft Graph subscription validation handshake and change notifications."""
+    validation_token = request.query_params.get("validationToken")
+    if validation_token is not None:
+        return PlainTextResponse(validation_token, status_code=200)
+
+    try:
+        payload = json.loads((await request.body()).decode("utf-8") or "{}")
+    except Exception:
+        return PlainTextResponse("Bad request", status_code=400)
+    notifications = payload.get("value") if isinstance(payload, dict) else None
+    if not isinstance(notifications, list):
+        return Response(status_code=202)
+
+    from sqlalchemy import select as _select
+    from . import db as _db
+    from .domain.bidirectional_sync import sync_native_source_once
+    from .models import CalendarSource
+
+    def _matching_sources() -> list[int]:
+        s = _db.new_session()
+        ids: list[int] = []
+        try:
+            for item in notifications:
+                if not isinstance(item, dict):
+                    continue
+                sub_id = str(item.get("subscriptionId") or "").strip()
+                client_state = str(item.get("clientState") or "").strip()
+                if not sub_id or not client_state:
+                    continue
+                src = s.scalar(
+                    _select(CalendarSource).where(
+                        CalendarSource.provider == "outlook",
+                        CalendarSource.webhook_resource_id == sub_id,
+                        CalendarSource.enabled.is_(True),
+                    )
+                )
+                if src is not None and src.webhook_secret and secrets.compare_digest(src.webhook_secret, client_state):
+                    if src.id not in ids:
+                        ids.append(src.id)
+        finally:
+            s.close()
+        return ids
+
+    source_ids = await run_in_threadpool(_matching_sources)
+    for sid in source_ids:
+        await run_in_threadpool(sync_native_source_once, sid)
+    return Response(status_code=202)
+
+
 async def _calendar_sync_loop() -> None:
     from .domain.calendar_sync import sync_due_sources_once
 
@@ -620,16 +994,32 @@ async def _calendar_sync_loop() -> None:
             log.warning("calendar_sync_background_tick_failed", exc_info=True)
 
 
+async def _sync_outbox_loop() -> None:
+    from .domain.bidirectional_sync import process_outbox_once
+
+    log = logging.getLogger("goalcal.bidirectional_sync")
+    while True:
+        try:
+            await asyncio.sleep(3)
+            await run_in_threadpool(process_outbox_once)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.warning("sync_outbox_tick_failed", exc_info=True)
+
+
 @asynccontextmanager
 async def _lifespan(_app: Starlette):
-    task: asyncio.Task | None = None
+    tasks: list[asyncio.Task] = []
     if _sync_worker_enabled():
-        task = asyncio.create_task(_calendar_sync_loop())
+        tasks.append(asyncio.create_task(_calendar_sync_loop()))
+        tasks.append(asyncio.create_task(_sync_outbox_loop()))
     try:
         yield
     finally:
-        if task is not None:
+        for task in tasks:
             task.cancel()
+        for task in tasks:
             try:
                 await task
             except asyncio.CancelledError:
@@ -643,9 +1033,13 @@ app = Starlette(
     routes=[
         Route("/_goalcal/health", health, methods=["GET", "HEAD"]),
         Route("/calendar/feed/{filename:str}", calendar_feed, methods=["GET", "HEAD"]),
+        Route("/calendar/webhook/google", google_webhook, methods=["POST"]),
+        Route("/calendar/webhook/outlook", outlook_webhook, methods=["GET", "POST"]),
         Mount("/api/v1", app=web_api),
         Route("/app/{path:path}", web_frontend, methods=["GET", "HEAD"]),
         Route("/app", lambda request: RedirectResponse("/app/", status_code=307)),
+        Route("/_goalcal/oauth/{provider:str}/start", oauth_start, methods=["GET"]),
+        Route("/_goalcal/oauth/{provider:str}/callback", oauth_callback, methods=["GET"]),
         Route("/_goalcal/login", login, methods=["GET", "POST"]),
         Route("/_goalcal/register", register, methods=["GET", "POST"]),
         Route("/_goalcal/logout", logout, methods=["POST"]),
