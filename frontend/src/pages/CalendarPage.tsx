@@ -39,6 +39,7 @@ import {
 import { useIdempotentAction } from '../lib/useIdempotentMutation';
 import { useI18n } from '../i18n';
 import { useAppState } from '../state/AppStateContext';
+import { useTheme } from '../theme';
 
 const STATUS_BADGE: Record<string, [string, string]> = {
   moved: ['已调整', 'Moved'],
@@ -83,6 +84,7 @@ export function CalendarPage({ timezone }: { timezone: string }) {
   const queryClient = useQueryClient();
   const { openAssistant, openProposalModal, recordMutationResult } = useAppState();
   const { lang, t } = useI18n();
+  const { calendarPalette } = useTheme();
   const calendarRef = useRef<FullCalendar | null>(null);
   const backlogRef = useRef<HTMLElement | null>(null);
 
@@ -501,7 +503,7 @@ export function CalendarPage({ timezone }: { timezone: string }) {
     return (
       <div>
         <div style={{ fontWeight: 620, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {raw.sync_source_color && raw.source !== 'sync' ? (
+          {raw.sync_source_color && (raw.source !== 'sync' || calendarPalette === 'mono') ? (
             <span
               className="sync-color-dot"
               style={{ backgroundColor: raw.sync_source_color, marginRight: 4 }}

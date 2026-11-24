@@ -5,6 +5,7 @@ export interface User {
   timezone: string;
   lang?: string;
   theme?: string;
+  calendar_palette?: string;
 }
 
 export type StepStatus = 'todo' | 'done' | 'dropped';

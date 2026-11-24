@@ -2,14 +2,46 @@ import React, { createContext, useCallback, useContext, useEffect, useState } fr
 
 export type Theme = 'light' | 'dark';
 export type ThemePreference = 'auto' | 'light' | 'dark';
+export type CalendarPalette = 'calm' | 'mono' | 'vivid';
 
 const STORAGE_KEY = 'goalcal.theme';
+const PALETTE_STORAGE_KEY = 'goalcal.calPalette';
 const COOKIE_NAME = 'goalcal_theme';
 const DARK_MEDIA_QUERY = '(prefers-color-scheme: dark)';
 
 export function normalizeThemePref(value: string | null | undefined): ThemePreference {
   if (value === 'light' || value === 'dark') return value;
   return 'auto';
+}
+
+export function normalizeCalendarPalette(value: string | null | undefined): CalendarPalette {
+  if (value === 'mono' || value === 'vivid') return value;
+  return 'calm';
+}
+
+function readPaletteStoragePref(): CalendarPalette | null {
+  try {
+    const stored = typeof localStorage !== 'undefined' ? localStorage.getItem(PALETTE_STORAGE_KEY) : null;
+    if (stored === 'calm' || stored === 'mono' || stored === 'vivid') {
+      return stored;
+    }
+  } catch {
+    // Ignore storage access failures.
+  }
+  return null;
+}
+
+function applyCalendarPaletteSideEffects(palette: CalendarPalette): void {
+  if (typeof document !== 'undefined') {
+    document.documentElement.dataset.calPalette = palette;
+  }
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(PALETTE_STORAGE_KEY, palette);
+    }
+  } catch {
+    // Ignore storage access failures.
+  }
 }
 
 export function detectSystemTheme(): Theme {
@@ -72,8 +104,11 @@ function applySideEffects(pref: ThemePreference, theme: Theme): void {
 interface ThemeContextValue {
   theme: Theme;
   pref: ThemePreference;
+  calendarPalette: CalendarPalette;
   setPreference: (next: ThemePreference) => void;
   syncFromUser: (serverTheme: string | null | undefined) => void;
+  setCalendarPalette: (next: CalendarPalette) => void;
+  syncCalendarPaletteFromUser: (serverPalette: string | null | undefined) => void;
 }
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
@@ -81,11 +116,18 @@ const ThemeContext = createContext<ThemeContextValue | null>(null);
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [pref, setPref] = useState<ThemePreference>(readInitialPref);
   const [systemTheme, setSystemTheme] = useState<Theme>(detectSystemTheme);
+  const [calendarPalette, setCalendarPaletteState] = useState<CalendarPalette>(
+    () => readPaletteStoragePref() ?? 'calm',
+  );
   const theme = resolveTheme(pref, systemTheme);
 
   useEffect(() => {
     applySideEffects(pref, theme);
   }, [pref, theme]);
+
+  useEffect(() => {
+    applyCalendarPaletteSideEffects(calendarPalette);
+  }, [calendarPalette]);
 
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
@@ -122,8 +164,30 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const setCalendarPalette = useCallback((next: CalendarPalette) => {
+    applyCalendarPaletteSideEffects(next);
+    setCalendarPaletteState(next);
+  }, []);
+
+  const syncCalendarPaletteFromUser = useCallback((serverPalette: string | null | undefined) => {
+    if (!serverPalette) return;
+    const normalized = normalizeCalendarPalette(serverPalette);
+    applyCalendarPaletteSideEffects(normalized);
+    setCalendarPaletteState(normalized);
+  }, []);
+
   return (
-    <ThemeContext.Provider value={{ theme, pref, setPreference, syncFromUser }}>
+    <ThemeContext.Provider
+      value={{
+        theme,
+        pref,
+        calendarPalette,
+        setPreference,
+        syncFromUser,
+        setCalendarPalette,
+        syncCalendarPaletteFromUser,
+      }}
+    >
       {children}
     </ThemeContext.Provider>
   );
@@ -135,7 +199,10 @@ export function useTheme(): ThemeContextValue {
   return {
     theme: detectSystemTheme(),
     pref: 'auto',
+    calendarPalette: 'calm',
     setPreference: () => undefined,
     syncFromUser: () => undefined,
+    setCalendarPalette: () => undefined,
+    syncCalendarPaletteFromUser: () => undefined,
   };
 }

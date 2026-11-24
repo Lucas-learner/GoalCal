@@ -384,6 +384,7 @@ class Service:
             "timezone": user.tz,
             "lang": self._ui_pref("lang", ("zh", "en")),
             "theme": self._ui_pref("theme", ("light", "dark")),
+            "calendar_palette": self._ui_pref("calendar_palette", ("calm", "mono", "vivid")),
         }
 
     def update_me(self, body):
@@ -391,6 +392,14 @@ class Service:
             self._save_ui_pref("lang", body["lang"], ("zh", "en"), "语言选项无效", "Invalid language option")
         if "theme" in body:
             self._save_ui_pref("theme", body["theme"], ("light", "dark"), "外观选项无效", "Invalid appearance option")
+        if "calendar_palette" in body:
+            self._save_ui_pref(
+                "calendar_palette",
+                body["calendar_palette"],
+                ("calm", "mono", "vivid"),
+                "日历配色选项无效",
+                "Invalid calendar palette option",
+            )
         self.session.flush()
         return self.me()
 

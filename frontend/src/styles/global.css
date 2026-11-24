@@ -1517,7 +1517,7 @@ h1 {
 .gc-fc .fc-event.gc-ev-block {
   background: var(--cal-block-bg);
   border: 0;
-  border-left: 3px solid var(--cal-block-border);
+  border-left: var(--cal-ev-border-w, 2.5px) solid var(--cal-block-border);
   color: var(--cal-block-ink);
   border-radius: 6px;
 }
@@ -1525,7 +1525,7 @@ h1 {
 .gc-fc .fc-event.gc-ev-habit {
   background: var(--cal-habit-bg);
   border: 0;
-  border-left: 3px solid var(--cal-habit-border);
+  border-left: var(--cal-ev-border-w, 2.5px) solid var(--cal-habit-border);
   color: var(--cal-habit-ink);
   border-radius: 6px;
 }
@@ -1738,7 +1738,7 @@ button.habit-day {
 .gc-fc .fc-event.gc-ev-external {
   background: var(--cal-manual-bg);
   border: 0;
-  border-left: 3px solid var(--cal-manual-border);
+  border-left: var(--cal-ev-border-w, 2.5px) solid var(--cal-manual-border);
   color: var(--cal-manual-ink);
   border-radius: 6px;
 }
@@ -1746,8 +1746,14 @@ button.habit-day {
 .gc-fc .fc-event.gc-ev-external.gc-ev-synced {
   background: var(--external-bg);
   background: color-mix(in srgb, var(--ev-src-color, #6b7f89) var(--cal-sync-bg-mix), var(--surface));
-  border-left: 3px solid var(--ev-src-color, #6b7f89);
+  border-left: var(--cal-ev-border-w, 2.5px) solid color-mix(in srgb, var(--ev-src-color, #6b7f89) var(--cal-sync-border-mix, 52%), var(--cal-sync-border-base, var(--muted)));
   color: color-mix(in srgb, var(--ev-src-color, #6b7f89) var(--cal-sync-ink-mix), var(--cal-sync-ink-base));
+}
+
+:root[data-cal-palette='mono'] .gc-fc .fc-event.gc-ev-external.gc-ev-synced {
+  background: var(--cal-manual-bg);
+  border-left: var(--cal-ev-border-w, 2px) solid var(--cal-manual-border);
+  color: var(--cal-manual-ink);
 }
 
 .gc-fc .fc-event.gc-ev-reference {
@@ -2142,7 +2148,26 @@ button.habit-day {
   padding: 12px;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
-  background: var(--surface-soft);
+  background: var(--surface);
+}
+
+.cal-palette-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.cal-palette-preview {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.cal-palette-swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  display: inline-block;
 }
 
 .sync-connection-list {

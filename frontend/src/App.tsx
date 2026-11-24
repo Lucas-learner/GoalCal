@@ -47,7 +47,7 @@ export function createAppQueryClient() {
 
 export function AppContent() {
   const { t, syncFromUser } = useI18n();
-  const { syncFromUser: syncThemeFromUser } = useTheme();
+  const { syncFromUser: syncThemeFromUser, syncCalendarPaletteFromUser } = useTheme();
   const location = useLocation();
   const queryClient = useQueryClient();
 
@@ -77,6 +77,12 @@ export function AppContent() {
       syncThemeFromUser(user.theme);
     }
   }, [user?.theme, syncThemeFromUser]);
+
+  useEffect(() => {
+    if (user?.calendar_palette !== undefined) {
+      syncCalendarPaletteFromUser(user.calendar_palette);
+    }
+  }, [user?.calendar_palette, syncCalendarPaletteFromUser]);
 
   return (
     <AppShell user={user}>

@@ -12,7 +12,7 @@ import { WindowGroupEditor, validateWindowGroup } from '../components/TimePrefer
 import { type LangPreference, useI18n } from '../i18n';
 import { useIdempotentAction } from '../lib/useIdempotentMutation';
 import { useAppState } from '../state/AppStateContext';
-import { type ThemePreference, useTheme } from '../theme';
+import { type CalendarPalette, type ThemePreference, useTheme } from '../theme';
 
 type SettingsSectionId = 'account' | 'schedule' | 'archived' | 'sync' | 'feedback';
 
@@ -37,7 +37,12 @@ export function SettingsPage({ user }: { user: User | undefined }) {
   const queryClient = useQueryClient();
   const { recordMutationResult } = useAppState();
   const { pref, setPreference, t } = useI18n();
-  const { pref: themePref, setPreference: setThemePreference } = useTheme();
+  const {
+    pref: themePref,
+    setPreference: setThemePreference,
+    calendarPalette,
+    setCalendarPalette,
+  } = useTheme();
   const [searchParams, setSearchParams] = useSearchParams();
   const [section, setSectionState] = useState<SettingsSectionId>(() =>
     parseSettingsSection(searchParams.get('section')),
@@ -121,6 +126,23 @@ export function SettingsPage({ user }: { user: User | undefined }) {
   const handleThemeChange = (nextPref: ThemePreference) => {
     setThemePreference(nextPref);
     void saveThemeAction.run(nextPref === 'auto' ? '' : nextPref);
+  };
+
+  const saveCalendarPaletteFn = useCallback(
+    async (paletteChoice: '' | 'calm' | 'mono' | 'vivid', key: string) =>
+      api.updateMe({ calendar_palette: paletteChoice }, key),
+    [],
+  );
+
+  const saveCalendarPaletteAction = useIdempotentAction(saveCalendarPaletteFn, {
+    onSuccess: (updatedUser) => {
+      queryClient.setQueryData(queryKeys.me, updatedUser);
+    },
+  });
+
+  const handleCalendarPaletteChange = (nextPalette: CalendarPalette) => {
+    setCalendarPalette(nextPalette);
+    void saveCalendarPaletteAction.run(nextPalette);
   };
 
   const saveFn = useCallback(
@@ -342,7 +364,7 @@ export function SettingsPage({ user }: { user: User | undefined }) {
           {section === 'account' ? (
             <section className="settings-section" aria-label={t('通用与账号', 'General & Account')}>
               <div className="settings-section-title">{t('通用与账号', 'General & Account')}</div>
-              <ErrorBanner error={saveLangAction.actionError ?? saveThemeAction.actionError} />
+              <ErrorBanner error={saveLangAction.actionError ?? saveThemeAction.actionError ?? saveCalendarPaletteAction.actionError} />
               <div className="card-flat settings-card">
                 <div className="setting-row">
                   <div className="setting-name">{t('账号', 'Account')}</div>
@@ -395,6 +417,29 @@ export function SettingsPage({ user }: { user: User | undefined }) {
                       <option value="auto">{t('跟随系统', 'Follow system')}</option>
                       <option value="light">{t('浅色', 'Light')}</option>
                       <option value="dark">{t('深色', 'Dark')}</option>
+                    </select>
+                  </div>
+                </div>
+                <div className="setting-row">
+                  <label className="setting-name" htmlFor="setting-cal-palette-select">
+                    {t('日历配色', 'Calendar colors')}
+                  </label>
+                  <div className="setting-control cal-palette-control">
+                    <span className="cal-palette-preview" aria-hidden="true">
+                      <span className="cal-palette-swatch" style={{ backgroundColor: 'var(--cal-block-border)' }} />
+                      <span className="cal-palette-swatch" style={{ backgroundColor: 'var(--cal-habit-border)' }} />
+                      <span className="cal-palette-swatch" style={{ backgroundColor: 'var(--cal-manual-border)' }} />
+                    </span>
+                    <select
+                      id="setting-cal-palette-select"
+                      className="select"
+                      value={calendarPalette}
+                      disabled={saveCalendarPaletteAction.isPending}
+                      onChange={(e) => handleCalendarPaletteChange(e.target.value as CalendarPalette)}
+                    >
+                      <option value="calm">{t('静谧低饱和（默认）', 'Calm muted (default)')}</option>
+                      <option value="mono">{t('极简素雅', 'Minimal monochrome')}</option>
+                      <option value="vivid">{t('鲜明彩块', 'Vivid colors')}</option>
                     </select>
                   </div>
                 </div>

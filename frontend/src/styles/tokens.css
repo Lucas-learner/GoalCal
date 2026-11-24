@@ -47,17 +47,20 @@
   --radius: 13px;
   --radius-sm: 10px;
   --control: 9px;
-  --cal-block-bg: #e8f1fd;
-  --cal-block-border: #3b82f6;
-  --cal-block-ink: #1e40af;
-  --cal-habit-bg: #e6f6f0;
-  --cal-habit-border: #10b981;
-  --cal-habit-ink: #065f46;
-  --cal-manual-bg: #fef3e2;
-  --cal-manual-border: #d97706;
-  --cal-manual-ink: #92400e;
-  --cal-sync-bg-mix: 14%;
-  --cal-sync-ink-mix: 72%;
+  --cal-ev-border-w: 2.5px;
+  --cal-block-bg: #edf2f5;
+  --cal-block-border: #5f7d8c;
+  --cal-block-ink: #364d59;
+  --cal-habit-bg: #edf4f0;
+  --cal-habit-border: #648878;
+  --cal-habit-ink: #385347;
+  --cal-manual-bg: #f6f1ea;
+  --cal-manual-border: #a48464;
+  --cal-manual-ink: #624d39;
+  --cal-sync-bg-mix: 7%;
+  --cal-sync-border-mix: 52%;
+  --cal-sync-border-base: var(--muted);
+  --cal-sync-ink-mix: 26%;
   --cal-sync-ink-base: var(--ink);
   --shadow: 0 1px 2px rgba(20, 22, 24, 0.02), 0 8px 24px rgba(20, 22, 24, 0.025);
   --shadow-hover: 0 2px 8px rgba(17, 17, 17, 0.06);
@@ -93,18 +96,20 @@
   --external-bg: #25272a;
   --external-border: #7c858b;
   --external-ink: #c4c9cd;
-  --cal-block-bg: rgba(59, 130, 246, 0.2);
-  --cal-block-border: #60a5fa;
-  --cal-block-ink: #bfdbfe;
-  --cal-habit-bg: rgba(16, 185, 129, 0.2);
-  --cal-habit-border: #34d399;
-  --cal-habit-ink: #a7f3d0;
-  --cal-manual-bg: rgba(245, 158, 11, 0.2);
-  --cal-manual-border: #fbbf24;
-  --cal-manual-ink: #fde68a;
-  --cal-sync-bg-mix: 22%;
-  --cal-sync-ink-mix: 35%;
-  --cal-sync-ink-base: #f0f0ee;
+  --cal-block-bg: rgba(130, 162, 178, 0.16);
+  --cal-block-border: #82a2b2;
+  --cal-block-ink: #c3d6df;
+  --cal-habit-bg: rgba(128, 166, 149, 0.16);
+  --cal-habit-border: #80a695;
+  --cal-habit-ink: #c1d9ce;
+  --cal-manual-bg: rgba(182, 152, 122, 0.16);
+  --cal-manual-border: #b6987a;
+  --cal-manual-ink: #dfccb8;
+  --cal-sync-bg-mix: 13%;
+  --cal-sync-border-mix: 58%;
+  --cal-sync-border-base: var(--muted);
+  --cal-sync-ink-mix: 22%;
+  --cal-sync-ink-base: #e8e9e8;
   --step-check-border: #5b5e63;
   --step-outcome-ink: #c4c5c9;
   --danger-ink: #f08078;
@@ -158,18 +163,20 @@
     --external-bg: #25272a;
     --external-border: #7c858b;
     --external-ink: #c4c9cd;
-    --cal-block-bg: rgba(59, 130, 246, 0.2);
-    --cal-block-border: #60a5fa;
-    --cal-block-ink: #bfdbfe;
-    --cal-habit-bg: rgba(16, 185, 129, 0.2);
-    --cal-habit-border: #34d399;
-    --cal-habit-ink: #a7f3d0;
-    --cal-manual-bg: rgba(245, 158, 11, 0.2);
-    --cal-manual-border: #fbbf24;
-    --cal-manual-ink: #fde68a;
-    --cal-sync-bg-mix: 22%;
-    --cal-sync-ink-mix: 35%;
-    --cal-sync-ink-base: #f0f0ee;
+    --cal-block-bg: rgba(130, 162, 178, 0.16);
+    --cal-block-border: #82a2b2;
+    --cal-block-ink: #c3d6df;
+    --cal-habit-bg: rgba(128, 166, 149, 0.16);
+    --cal-habit-border: #80a695;
+    --cal-habit-ink: #c1d9ce;
+    --cal-manual-bg: rgba(182, 152, 122, 0.16);
+    --cal-manual-border: #b6987a;
+    --cal-manual-ink: #dfccb8;
+    --cal-sync-bg-mix: 13%;
+    --cal-sync-border-mix: 58%;
+    --cal-sync-border-base: var(--muted);
+    --cal-sync-ink-mix: 22%;
+    --cal-sync-ink-base: #e8e9e8;
     --step-check-border: #5b5e63;
     --step-outcome-ink: #c4c5c9;
     --danger-ink: #f08078;
@@ -193,5 +200,98 @@
     --shadow-hover: 0 2px 8px rgba(0, 0, 0, 0.36);
     --shadow-panel: -8px 0 28px rgba(0, 0, 0, 0.42);
     --shadow-toast: 0 8px 28px rgba(0, 0, 0, 0.48);
+  }
+}
+
+:root[data-cal-palette='mono'] {
+  --cal-ev-border-w: 2px;
+  --cal-block-bg: #edf0f1;
+  --cal-block-border: #6b7f89;
+  --cal-block-ink: #52646d;
+  --cal-habit-bg: #eff2f0;
+  --cal-habit-border: #788a82;
+  --cal-habit-ink: #4f5e57;
+  --cal-manual-bg: #f1f2f3;
+  --cal-manual-border: #939b9f;
+  --cal-manual-ink: #596168;
+}
+
+:root[data-theme='dark'][data-cal-palette='mono'] {
+  --cal-block-bg: rgba(138, 162, 173, 0.16);
+  --cal-block-border: #8aa2ad;
+  --cal-block-ink: #b6cbd5;
+  --cal-habit-bg: rgba(138, 162, 151, 0.15);
+  --cal-habit-border: #8aa297;
+  --cal-habit-ink: #baccc4;
+  --cal-manual-bg: #25272a;
+  --cal-manual-border: #7c858b;
+  --cal-manual-ink: #c4c9cd;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light'])[data-cal-palette='mono'] {
+    --cal-block-bg: rgba(138, 162, 173, 0.16);
+    --cal-block-border: #8aa2ad;
+    --cal-block-ink: #b6cbd5;
+    --cal-habit-bg: rgba(138, 162, 151, 0.15);
+    --cal-habit-border: #8aa297;
+    --cal-habit-ink: #baccc4;
+    --cal-manual-bg: #25272a;
+    --cal-manual-border: #7c858b;
+    --cal-manual-ink: #c4c9cd;
+  }
+}
+
+:root[data-cal-palette='vivid'] {
+  --cal-ev-border-w: 3px;
+  --cal-block-bg: #e8f1fd;
+  --cal-block-border: #3b82f6;
+  --cal-block-ink: #1e40af;
+  --cal-habit-bg: #e6f6f0;
+  --cal-habit-border: #10b981;
+  --cal-habit-ink: #065f46;
+  --cal-manual-bg: #fef3e2;
+  --cal-manual-border: #d97706;
+  --cal-manual-ink: #92400e;
+  --cal-sync-bg-mix: 14%;
+  --cal-sync-border-mix: 100%;
+  --cal-sync-border-base: var(--muted);
+  --cal-sync-ink-mix: 72%;
+  --cal-sync-ink-base: var(--ink);
+}
+
+:root[data-theme='dark'][data-cal-palette='vivid'] {
+  --cal-block-bg: rgba(59, 130, 246, 0.2);
+  --cal-block-border: #60a5fa;
+  --cal-block-ink: #bfdbfe;
+  --cal-habit-bg: rgba(16, 185, 129, 0.2);
+  --cal-habit-border: #34d399;
+  --cal-habit-ink: #a7f3d0;
+  --cal-manual-bg: rgba(245, 158, 11, 0.2);
+  --cal-manual-border: #fbbf24;
+  --cal-manual-ink: #fde68a;
+  --cal-sync-bg-mix: 22%;
+  --cal-sync-border-mix: 100%;
+  --cal-sync-border-base: var(--muted);
+  --cal-sync-ink-mix: 35%;
+  --cal-sync-ink-base: #f0f0ee;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light'])[data-cal-palette='vivid'] {
+    --cal-block-bg: rgba(59, 130, 246, 0.2);
+    --cal-block-border: #60a5fa;
+    --cal-block-ink: #bfdbfe;
+    --cal-habit-bg: rgba(16, 185, 129, 0.2);
+    --cal-habit-border: #34d399;
+    --cal-habit-ink: #a7f3d0;
+    --cal-manual-bg: rgba(245, 158, 11, 0.2);
+    --cal-manual-border: #fbbf24;
+    --cal-manual-ink: #fde68a;
+    --cal-sync-bg-mix: 22%;
+    --cal-sync-border-mix: 100%;
+    --cal-sync-border-base: var(--muted);
+    --cal-sync-ink-mix: 35%;
+    --cal-sync-ink-base: #f0f0ee;
   }
 }

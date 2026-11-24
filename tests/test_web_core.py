@@ -390,3 +390,11 @@ def test_web_proposal_metrics_and_recovery_undo(session, service, goal):
     assert metrics.recovery_rate_72h(session, service.user_id, NOW) == 1
     service.undo(result["operation_id"])
     assert metrics.recovery_rate_72h(session, service.user_id, NOW) == 0
+
+
+def test_update_me_persists_calendar_palette(service):
+    assert service.me()["calendar_palette"] == ""
+    for choice in ("calm", "mono", "vivid"):
+        assert service.update_me({"calendar_palette": choice})["calendar_palette"] == choice
+    assert service.update_me({"calendar_palette": ""})["calendar_palette"] == ""
+    assert_error("validation", lambda: service.update_me({"calendar_palette": "neon"}))

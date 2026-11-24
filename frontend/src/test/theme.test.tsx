@@ -193,4 +193,65 @@ describe('Color theme selection (light / dark / follow system)', () => {
     expect(document.documentElement.dataset.theme).toBe('dark');
     expect(localStorage.getItem('goalcal.theme')).toBe('dark');
   });
+
+  it('defaults calendar palette to calm and persists palette switching via Settings', async () => {
+    createMatchMediaController(false);
+    localStorage.removeItem('goalcal.calPalette');
+    const patchPayloads: string[] = [];
+    let currentPalette = '';
+
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      const method = init?.method ?? 'GET';
+      if (url === '/api/v1/me' && method === 'GET') {
+        return jsonResponse({
+          id: 1,
+          name: 'Yan Li',
+          email: 'yan@example.com',
+          timezone: 'Asia/Shanghai',
+          lang: '',
+          theme: '',
+          calendar_palette: currentPalette,
+        });
+      }
+      if (url === '/api/v1/me' && method === 'PATCH') {
+        const body = String(init?.body ?? '');
+        patchPayloads.push(body);
+        const parsed = JSON.parse(body) as { calendar_palette?: string };
+        if (parsed.calendar_palette !== undefined) currentPalette = parsed.calendar_palette;
+        return jsonResponse({
+          id: 1,
+          name: 'Yan Li',
+          email: 'yan@example.com',
+          timezone: 'Asia/Shanghai',
+          lang: '',
+          theme: '',
+          calendar_palette: currentPalette,
+        });
+      }
+      return jsonResponse({});
+    });
+
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+    renderApp('/settings');
+
+    const paletteSelect = (await screen.findByLabelText('日历配色')) as HTMLSelectElement;
+    expect(paletteSelect.value).toBe('calm');
+    expect(document.documentElement.dataset.calPalette).toBe('calm');
+
+    await user.selectOptions(paletteSelect, 'mono');
+    expect(document.documentElement.dataset.calPalette).toBe('mono');
+    expect(localStorage.getItem('goalcal.calPalette')).toBe('mono');
+    await waitFor(() => {
+      expect(patchPayloads).toContain(JSON.stringify({ calendar_palette: 'mono' }));
+    });
+
+    await user.selectOptions(paletteSelect, 'vivid');
+    expect(document.documentElement.dataset.calPalette).toBe('vivid');
+    expect(localStorage.getItem('goalcal.calPalette')).toBe('vivid');
+    await waitFor(() => {
+      expect(patchPayloads).toContain(JSON.stringify({ calendar_palette: 'vivid' }));
+    });
+  });
 });

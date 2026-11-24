@@ -245,7 +245,7 @@ export async function apiWrite<T>(
 
 export const api = {
   getMe: () => apiGet<User>('/me'),
-  updateMe: (body: { lang?: '' | 'zh' | 'en'; theme?: '' | 'light' | 'dark' }, idempotencyKey?: string) =>
+  updateMe: (body: { lang?: '' | 'zh' | 'en'; theme?: '' | 'light' | 'dark'; calendar_palette?: '' | 'calm' | 'mono' | 'vivid' }, idempotencyKey?: string) =>
     apiWrite<User>('/me', 'PATCH', body, { idempotencyKey }),
   getToday: () => apiGet<TodayResponse>('/today'),
   getHabits: () => apiGet<{ habits: Habit[] }>('/habits'),

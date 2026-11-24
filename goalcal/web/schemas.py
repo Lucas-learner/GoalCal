@@ -203,6 +203,7 @@ class ConnectCalDav(Input):
 class UpdateMe(Input):
     lang: Literal['', 'zh', 'en'] | None = None
     theme: Literal['', 'light', 'dark'] | None = None
+    calendar_palette: Literal['', 'calm', 'mono', 'vivid'] | None = None
 
 
 class SubmitFeedback(Input):
