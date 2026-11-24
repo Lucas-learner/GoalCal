@@ -989,4 +989,150 @@ describe('GoalCal critical interactions', () => {
     expect(screen.getByText(/已安排 明天 10:00–10:30/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '开始' })).not.toHaveClass('primary');
   });
+
+  it('collapses connected calendar accounts and ICS source lists cleanly', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url === '/api/v1/me') {
+        return jsonResponse({ id: 1, name: 'Yan Li', timezone: 'Asia/Shanghai' });
+      }
+      if (url === '/api/v1/calendar/sync') {
+        return jsonResponse({
+          feed: {
+            enabled: false,
+            path: null,
+            include_blocks: true,
+            include_habits: true,
+            include_manual: true,
+            rotated_at: null,
+            last_accessed_at: null,
+            version: null,
+          },
+          providers: {
+            caldav: { configured: true, label: 'Apple iCloud / CalDAV' },
+            google: { configured: false, label: 'Google Calendar' },
+            outlook: { configured: false, label: 'Outlook / Microsoft 365' },
+          },
+          connections: [
+            {
+              id: 5,
+              provider: 'caldav',
+              account_label: 'alice@icloud.com',
+              server_url: 'https://caldav.icloud.com/',
+              username: 'alice@icloud.com',
+              status: 'active',
+              last_error: '',
+              created_at: '2026-11-24T03:00:00Z',
+              version: 'conn1',
+            },
+          ],
+          sources: [
+            {
+              id: 9,
+              connection_id: 5,
+              provider: 'caldav',
+              direction: 'bidirectional',
+              name: 'GoalCal',
+              url: 'https://caldav.icloud.com/goalcal/',
+              color: '#6b7f89',
+              blocks_scheduling: false,
+              all_day_mode: 'ignore',
+              writable: true,
+              is_goalcal_calendar: true,
+              outbox_pending: 0,
+              enabled: true,
+              sync_interval_minutes: 15,
+              last_synced_at: '2026-11-24T05:33:00Z',
+              last_status: 'ok',
+              last_error: '',
+              last_added: 0,
+              last_updated: 0,
+              last_removed: 0,
+              last_skipped: 0,
+              version: 'cs9',
+            },
+            {
+              id: 10,
+              connection_id: 5,
+              provider: 'caldav',
+              direction: 'inbound',
+              name: 'Work',
+              url: 'https://caldav.icloud.com/work/',
+              color: '#d97706',
+              blocks_scheduling: true,
+              all_day_mode: 'ignore',
+              writable: false,
+              is_goalcal_calendar: false,
+              outbox_pending: 0,
+              enabled: true,
+              sync_interval_minutes: 15,
+              last_synced_at: '2026-11-24T05:33:00Z',
+              last_status: 'ok',
+              last_error: '',
+              last_added: 1,
+              last_updated: 0,
+              last_removed: 0,
+              last_skipped: 0,
+              version: 'cs10',
+            },
+            {
+              id: 11,
+              connection_id: null,
+              provider: 'ics_url',
+              direction: 'inbound',
+              name: '校历订阅',
+              url: 'https://cal.example/school.ics',
+              color: '#0f766e',
+              blocks_scheduling: true,
+              all_day_mode: 'ignore',
+              writable: false,
+              is_goalcal_calendar: false,
+              outbox_pending: 0,
+              enabled: true,
+              sync_interval_minutes: 30,
+              last_synced_at: '2026-11-24T05:33:00Z',
+              last_status: 'ok',
+              last_error: '',
+              last_added: 2,
+              last_updated: 0,
+              last_removed: 0,
+              last_skipped: 0,
+              version: 'cs11',
+            },
+          ],
+          conflicts: [],
+        });
+      }
+      return jsonResponse({});
+    });
+
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    renderApp('/settings?section=sync');
+    expect(await screen.findByText('共 2 个日历 · 2 个已启用')).toBeInTheDocument();
+
+    const expandBtn = screen.getByRole('button', { name: '展开日历 (2)' });
+    expect(expandBtn).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText('Work')).not.toBeInTheDocument();
+
+    await user.click(expandBtn);
+    const collapseBtn = screen.getByRole('button', { name: '收起日历' });
+    expect(collapseBtn).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText('Work')).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: '立即同步' })).toHaveLength(3);
+
+    await user.click(collapseBtn);
+    expect(screen.queryByText('Work')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '展开日历 (2)' })).toHaveAttribute('aria-expanded', 'false');
+
+    // ICS URL synced list is also collapsible
+    expect(screen.getByText('校历订阅')).toBeInTheDocument();
+    const icsCollapseBtn = screen.getByRole('button', { name: '收起' });
+    expect(icsCollapseBtn).toHaveAttribute('aria-expanded', 'true');
+    await user.click(icsCollapseBtn);
+    expect(screen.queryByText('校历订阅')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '展开' }));
+    expect(screen.getByText('校历订阅')).toBeInTheDocument();
+  });
 });

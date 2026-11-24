@@ -153,6 +153,12 @@ export function CalendarSyncSection({ timezone }: { timezone: string }) {
   const [editError, setEditError] = useState<string | null>(null);
   const [confirmDeleteSource, setConfirmDeleteSource] = useState<CalendarSource | null>(null);
   const [syncingSourceId, setSyncingSourceId] = useState<number | null>(null);
+  const [expandedConnIds, setExpandedConnIds] = useState<Record<number, boolean>>({});
+  const [icsListCollapsed, setIcsListCollapsed] = useState(false);
+
+  const toggleConnExpanded = (connId: number) => {
+    setExpandedConnIds((prev) => ({ ...prev, [connId]: !prev[connId] }));
+  };
 
   // Manual ICS file import state
   const [icsFile, setIcsFile] = useState<File | null>(null);
@@ -761,18 +767,59 @@ export function CalendarSyncSection({ timezone }: { timezone: string }) {
               <div className="sync-connection-list">
                 {connections.map((conn) => {
                   const connSources = allSources.filter((s) => s.connection_id === conn.id);
+                  const isExpanded = Boolean(expandedConnIds[conn.id]);
                   const isReauth = conn.status === 'reauth_required';
+                  const enabledSources = connSources.filter((s) => s.enabled);
+                  const hasTwoWay = enabledSources.some((s) => s.is_goalcal_calendar && s.writable);
+                  const errorCount = enabledSources.filter((s) => s.last_status === 'error').length;
+                  const totalPending = connSources.reduce((acc, s) => acc + (s.outbox_pending ?? 0), 0);
+                  const latestSyncedAt = connSources.reduce<string | null>((latest, s) => {
+                    if (!s.last_synced_at) return latest;
+                    if (!latest || s.last_synced_at > latest) return s.last_synced_at;
+                    return latest;
+                  }, null);
                   return (
                     <div key={conn.id} className="sync-connection-card">
                       <div className="sync-source-head">
                         <div className="sync-source-title-row">
-                          <span className="sync-source-name">{conn.account_label || conn.username}</span>
+                          {connSources.length > 0 ? (
+                            <button
+                              type="button"
+                              className="sync-collapse-toggle"
+                              aria-expanded={isExpanded}
+                              aria-controls={`sync-conn-sources-${conn.id}`}
+                              onClick={() => toggleConnExpanded(conn.id)}
+                            >
+                              <span
+                                className={isExpanded ? 'sync-collapse-chevron expanded' : 'sync-collapse-chevron'}
+                                aria-hidden="true"
+                              >
+                                ▸
+                              </span>
+                              <span className="sync-source-name">{conn.account_label || conn.username}</span>
+                            </button>
+                          ) : (
+                            <span className="sync-source-name">{conn.account_label || conn.username}</span>
+                          )}
                           <span className="chip">{providerLabel(conn.provider, lang)}</span>
                           <span className={`chip ${isReauth ? 'sync-chip-error' : 'sync-chip-ok'}`}>
                             {isReauth ? t('需重新授权', 'Reauth needed') : t('已连接', 'Connected')}
                           </span>
                         </div>
                         <div className="sync-source-actions">
+                          {connSources.length > 0 ? (
+                            <button
+                              type="button"
+                              className="btn small"
+                              aria-expanded={isExpanded}
+                              aria-controls={`sync-conn-sources-${conn.id}`}
+                              onClick={() => toggleConnExpanded(conn.id)}
+                            >
+                              {isExpanded
+                                ? t('收起日历', 'Hide calendars')
+                                : t(`展开日历 (${connSources.length})`, `Show calendars (${connSources.length})`)}
+                            </button>
+                          ) : null}
                           {isReauth && conn.provider !== 'caldav' ? (
                             <a className="btn small primary" href={`/_goalcal/oauth/${conn.provider}/start`}>
                               {t('重新授权', 'Reconnect')}
@@ -796,13 +843,56 @@ export function CalendarSyncSection({ timezone }: { timezone: string }) {
                           </button>
                         </div>
                       </div>
+                      {connSources.length > 0 ? (
+                        <div className="sync-connection-summary">
+                          {enabledSources.length > 0 ? (
+                            <span className="sync-summary-dots" aria-hidden="true">
+                              {enabledSources.slice(0, 6).map((s) => (
+                                <span
+                                  key={s.id}
+                                  className="sync-color-dot"
+                                  style={{ backgroundColor: s.color || '#6b7f89' }}
+                                />
+                              ))}
+                            </span>
+                          ) : null}
+                          <span className="tabular-nums">
+                            {t(
+                              `共 ${connSources.length} 个日历 · ${enabledSources.length} 个已启用`,
+                              `${connSources.length} calendars · ${enabledSources.length} active`,
+                            )}
+                          </span>
+                          {hasTwoWay ? (
+                            <span className="chip blue">{t('GoalCal 双向', 'GoalCal Two-way')}</span>
+                          ) : null}
+                          {errorCount > 0 ? (
+                            <span className="chip sync-chip-error">
+                              {t(`${errorCount} 个同步失败`, `${errorCount} failed`)}
+                            </span>
+                          ) : null}
+                          {totalPending > 0 ? (
+                            <span className="chip tabular-nums">
+                              {t(`待推送 ${totalPending}`, `${totalPending} queued`)}
+                            </span>
+                          ) : null}
+                          {latestSyncedAt ? (
+                            <>
+                              <span>·</span>
+                              <span className="tabular-nums">
+                                {t('最近同步：', 'Last sync: ')}
+                                {formatTimestamp(latestSyncedAt, timezone, lang)}
+                              </span>
+                            </>
+                          ) : null}
+                        </div>
+                      ) : null}
                       {conn.last_error ? (
                         <div className="field-error" role="alert" style={{ marginTop: 8, marginBottom: 8 }}>
                           {conn.last_error}
                         </div>
                       ) : null}
-                      {connSources.length > 0 ? (
-                        <div className="sync-source-list" style={{ marginTop: 12, marginBottom: 0 }}>
+                      {connSources.length > 0 && isExpanded ? (
+                        <div id={`sync-conn-sources-${conn.id}`} className="sync-source-list" style={{ marginTop: 12, marginBottom: 0 }}>
                           {connSources.map(renderSourceRow)}
                         </div>
                       ) : null}
@@ -835,9 +925,27 @@ export function CalendarSyncSection({ timezone }: { timezone: string }) {
           ) : null}
 
           {icsSources.length > 0 ? (
-            <div className="sync-source-list">
-              {icsSources.map(renderSourceRow)}
-            </div>
+            <>
+              <div className="sync-list-collapse-bar">
+                <span className="sync-hint tabular-nums">
+                  {t(`已同步日历（${icsSources.length}）`, `Synced calendars (${icsSources.length})`)}
+                </span>
+                <button
+                  type="button"
+                  className="btn small"
+                  aria-expanded={!icsListCollapsed}
+                  aria-controls="sync-ics-source-list"
+                  onClick={() => setIcsListCollapsed((prev) => !prev)}
+                >
+                  {icsListCollapsed ? t('展开', 'Expand') : t('收起', 'Collapse')}
+                </button>
+              </div>
+              {!icsListCollapsed ? (
+                <div id="sync-ics-source-list" className="sync-source-list">
+                  {icsSources.map(renderSourceRow)}
+                </div>
+              ) : null}
+            </>
           ) : null}
 
           <form
