@@ -583,11 +583,6 @@ export function CalendarSyncSection({ timezone }: { timezone: string }) {
       <div key={src.id} className="sync-source-item">
         <div className="sync-source-head">
           <div className="sync-source-title-row">
-            <span
-              className="sync-color-dot"
-              style={{ backgroundColor: src.color || '#6b7f89' }}
-              aria-hidden="true"
-            />
             <span className="sync-source-name">{src.name}</span>
             {src.is_goalcal_calendar ? (
               <span className="chip blue">{t('GoalCal 双向', 'GoalCal Two-way')}</span>
@@ -855,17 +850,6 @@ export function CalendarSyncSection({ timezone }: { timezone: string }) {
                       </div>
                       {connSources.length > 0 ? (
                         <div className="sync-connection-summary">
-                          {enabledSources.length > 0 ? (
-                            <span className="sync-summary-dots" aria-hidden="true">
-                              {enabledSources.slice(0, 6).map((s) => (
-                                <span
-                                  key={s.id}
-                                  className="sync-color-dot"
-                                  style={{ backgroundColor: s.color || '#6b7f89' }}
-                                />
-                              ))}
-                            </span>
-                          ) : null}
                           <span className="tabular-nums">
                             {t(
                               `共 ${connSources.length} 个日历 · ${enabledSources.length} 个已启用`,

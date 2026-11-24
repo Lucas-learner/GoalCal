@@ -424,12 +424,7 @@ export function SettingsPage({ user }: { user: User | undefined }) {
                   <label className="setting-name" htmlFor="setting-cal-palette-select">
                     {t('日历配色', 'Calendar colors')}
                   </label>
-                  <div className="setting-control cal-palette-control">
-                    <span className="cal-palette-preview" aria-hidden="true">
-                      <span className="cal-palette-swatch" style={{ backgroundColor: 'var(--cal-block-border)' }} />
-                      <span className="cal-palette-swatch" style={{ backgroundColor: 'var(--cal-habit-border)' }} />
-                      <span className="cal-palette-swatch" style={{ backgroundColor: 'var(--cal-manual-border)' }} />
-                    </span>
+                  <div className="setting-control">
                     <select
                       id="setting-cal-palette-select"
                       className="select"

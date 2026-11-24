@@ -38,9 +38,8 @@ import {
 } from '../lib/datetime';
 import { useIdempotentAction } from '../lib/useIdempotentMutation';
 import { useI18n } from '../i18n';
-import { getDisplaySourceColor, getEditorialPigmentKey } from '../lib/calendarColors';
+import { getEditorialPigmentKey } from '../lib/calendarColors';
 import { useAppState } from '../state/AppStateContext';
-import { useTheme } from '../theme';
 
 const STATUS_BADGE: Record<string, [string, string]> = {
   moved: ['已调整', 'Moved'],
@@ -85,7 +84,6 @@ export function CalendarPage({ timezone }: { timezone: string }) {
   const queryClient = useQueryClient();
   const { openAssistant, openProposalModal, recordMutationResult } = useAppState();
   const { lang, t } = useI18n();
-  const { calendarPalette } = useTheme();
   const calendarRef = useRef<FullCalendar | null>(null);
   const backlogRef = useRef<HTMLElement | null>(null);
 
@@ -269,18 +267,17 @@ export function CalendarPage({ timezone }: { timezone: string }) {
   }, [enableDrag, t]);
 
   const syncedSources = useMemo(() => {
-    const map = new Map<number, { id: number; name: string; color: string }>();
+    const map = new Map<number, { id: number; name: string }>();
     for (const ev of eventsQuery.data?.events ?? []) {
       if (ev.sync_source_id != null && !map.has(ev.sync_source_id)) {
         map.set(ev.sync_source_id, {
           id: ev.sync_source_id,
           name: ev.sync_source_name || t('同步日历', 'Synced'),
-          color: getDisplaySourceColor(ev.sync_source_color, calendarPalette),
         });
       }
     }
     return Array.from(map.values());
-  }, [eventsQuery.data?.events, t, calendarPalette]);
+  }, [eventsQuery.data?.events, t]);
 
   const visibleEvents = useMemo(
     () =>
@@ -506,13 +503,6 @@ export function CalendarPage({ timezone }: { timezone: string }) {
     return (
       <div>
         <div style={{ fontWeight: 620, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {raw.sync_source_color && raw.source !== 'sync' ? (
-            <span
-              className="sync-color-dot"
-              style={{ backgroundColor: raw.sync_source_color, marginRight: 4 }}
-              aria-hidden="true"
-            />
-          ) : null}
           {statusText ? `[${statusText}] ` : ''}
           {raw.habit && <span aria-label={habitLabels.habit} title={habitLabels.habit}>↻ </span>}
           {raw.kind === 'buffer' ? `${t('缓冲', 'Buffer')} · ${raw.title}` : raw.title}
@@ -758,11 +748,6 @@ export function CalendarPage({ timezone }: { timezone: string }) {
             {eventsQuery.data!.sync_conflicts!.map((conflict) => (
               <div key={conflict.block_event_id} className="sync-conflict-row">
                 <div className="sync-conflict-copy">
-                  <span
-                    className="sync-color-dot"
-                    style={{ backgroundColor: conflict.source_color || '#6b7f89' }}
-                    aria-hidden="true"
-                  />
                   <span>
                     {conflict.goal_title ? `${conflict.goal_title} · ` : ''}
                     <strong>{conflict.block_title}</strong>
@@ -802,9 +787,6 @@ export function CalendarPage({ timezone }: { timezone: string }) {
                     aria-pressed={!isHidden}
                     onClick={() => toggleSourceVisibility(src.id)}
                   >
-                    {calendarPalette !== 'mono' ? (
-                      <span className="sync-color-dot" style={{ backgroundColor: src.color }} aria-hidden="true" />
-                    ) : null}
                     <span>{src.name}</span>
                   </button>
                 );

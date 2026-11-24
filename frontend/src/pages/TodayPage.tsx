@@ -223,11 +223,6 @@ export function TodayPage({ fallbackTimezone }: { fallbackTimezone: string }) {
                 {data.sync_conflicts!.map((conflict) => (
                   <div key={conflict.block_event_id} className="sync-conflict-row">
                     <div className="sync-conflict-copy">
-                      <span
-                        className="sync-color-dot"
-                        style={{ backgroundColor: conflict.source_color || '#6b7f89' }}
-                        aria-hidden="true"
-                      />
                       <span>
                         {conflict.goal_title ? `${conflict.goal_title} · ` : ''}
                         <strong>{conflict.block_title}</strong>

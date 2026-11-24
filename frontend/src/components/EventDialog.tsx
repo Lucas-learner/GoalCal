@@ -191,13 +191,6 @@ export function EventDialog({ event, timezone, onClose }: EventDialogProps) {
         )}
         {isSyncedExternal ? (
           <span className="chip">
-            {event.sync_source_color ? (
-              <span
-                className="sync-color-dot"
-                style={{ backgroundColor: event.sync_source_color, marginRight: 5 }}
-                aria-hidden="true"
-              />
-            ) : null}
             {event.sync_source_name || t('外部同步', 'Synced')}
           </span>
         ) : null}
