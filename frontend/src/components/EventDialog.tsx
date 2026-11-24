@@ -172,17 +172,24 @@ export function EventDialog({ event, timezone, onClose }: EventDialogProps) {
 
   const kindPair = KIND_LABEL[event.kind];
   const statusPair = STATUS_LABEL[event.status];
+  const isSyncedExternal = event.source === 'sync';
 
   return (
     <Modal title={event.title} onClose={onClose} hasUnsavedChanges={dirty}>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
-        <span className={event.kind === 'block' ? 'chip blue' : 'chip'}>
-          {kindPair ? t(kindPair[0], kindPair[1]) : event.kind}
-        </span>
-        <span className="chip">
-          {statusPair ? t(statusPair[0], statusPair[1]) : event.status}
-        </span>
-        {event.source === 'sync' ? (
+        {isSyncedExternal ? (
+          <span className="chip">{t('外部日历（只读）', 'External (read-only)')}</span>
+        ) : (
+          <>
+            <span className={event.kind === 'block' ? 'chip blue' : 'chip'}>
+              {kindPair ? t(kindPair[0], kindPair[1]) : event.kind}
+            </span>
+            <span className="chip">
+              {statusPair ? t(statusPair[0], statusPair[1]) : event.status}
+            </span>
+          </>
+        )}
+        {isSyncedExternal ? (
           <span className="chip">
             {event.sync_source_color ? (
               <span
@@ -194,23 +201,14 @@ export function EventDialog({ event, timezone, onClose }: EventDialogProps) {
             {event.sync_source_name || t('外部同步', 'Synced')}
           </span>
         ) : null}
-        {event.source === 'sync' && event.blocks_scheduling === false ? (
+        {isSyncedExternal && event.blocks_scheduling === false ? (
           <span className="chip">{t('仅展示（不阻塞排期）', 'Reference only')}</span>
         ) : null}
       </div>
 
-      <div className="muted" style={{ fontSize: 12, marginBottom: 10 }}>
+      <div className="muted" style={{ fontSize: 12, marginBottom: 12 }}>
         {formatDateTimeLabel(event.start, event.end, timezone, lang)} · {timezone}
       </div>
-
-      {event.source === 'sync' ? (
-        <div className="muted" style={{ fontSize: 11.5, marginBottom: 12, lineHeight: 1.5 }}>
-          {t(
-            '来自外部日历同步；本地修改会在下次同步时被覆盖。',
-            'Synced from an external calendar; local edits will be overwritten on the next sync.',
-          )}
-        </div>
-      ) : null}
 
       {event.goal_id != null ? (
         <div style={{ marginBottom: 14, fontSize: 12 }}>
@@ -237,7 +235,24 @@ export function EventDialog({ event, timezone, onClose }: EventDialogProps) {
         onRefresh={() => void invalidateAfterWrite(queryClient, { goalId: event.goal_id })}
       />
 
-      {event.kind === 'block' ? (
+      {isSyncedExternal ? (
+        <>
+          <div className="sync-readonly-note">
+            {t(
+              '此日程同步自外部日历，GoalCal 不会修改或删除你的原日历事件。如需改期或删除，请前往原日历应用操作；如仅需隐藏或改为不阻塞排期，可在同步设置中调整。',
+              'Synced read-only from an external calendar. GoalCal will not edit or delete your original event. Edit or delete it in your calendar app, or adjust visibility and scheduling behavior in Sync settings.',
+            )}
+          </div>
+          <div className="actions" style={{ justifyContent: 'flex-end', marginTop: 18 }}>
+            <Link to="/settings?section=sync" className="btn" onClick={onClose}>
+              {t('前往同步设置', 'Sync settings')}
+            </Link>
+            <button type="button" className="btn primary" onClick={onClose}>
+              {t('关闭', 'Close')}
+            </button>
+          </div>
+        </>
+      ) : event.kind === 'block' ? (
         ['planned', 'moved'].includes(event.status) ? (
           <div className="actions" style={{ marginTop: 18 }}>
             <button

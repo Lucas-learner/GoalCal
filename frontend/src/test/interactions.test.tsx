@@ -1111,6 +1111,8 @@ describe('GoalCal critical interactions', () => {
 
     renderApp('/settings?section=sync');
     expect(await screen.findByText('共 2 个日历 · 2 个已启用')).toBeInTheDocument();
+    expect(screen.queryByText('Outlook / Microsoft 365')).not.toBeInTheDocument();
+    expect(screen.getByText(/仅只读拉入，不会被修改或删除/)).toBeInTheDocument();
 
     const expandBtn = screen.getByRole('button', { name: '展开日历 (2)' });
     expect(expandBtn).toHaveAttribute('aria-expanded', 'false');
@@ -1134,5 +1136,60 @@ describe('GoalCal critical interactions', () => {
     expect(screen.queryByText('校历订阅')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: '展开' }));
     expect(screen.getByText('校历订阅')).toBeInTheDocument();
+  });
+
+  it('shows synced external events as strictly read-only in EventDialog with link to sync settings', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url === '/api/v1/me') {
+        return jsonResponse({ id: 1, name: 'Yan Li', timezone: 'Asia/Shanghai' });
+      }
+      if (url === '/api/v1/availability') {
+        return jsonResponse({ windows: [], protected_windows: [] });
+      }
+      if (url === '/api/v1/goals') {
+        return jsonResponse({ goals: [] });
+      }
+      if (url === '/api/v1/habits') {
+        return jsonResponse({ habits: [] });
+      }
+      if (url.startsWith('/api/v1/calendar/events')) {
+        return jsonResponse({
+          events: [
+            {
+              id: 77,
+              title: 'IBA6104 数据挖掘',
+              start: '2026-11-24T01:00:00Z',
+              end: '2026-11-24T03:50:00Z',
+              kind: 'external',
+              status: 'planned',
+              source: 'sync',
+              sync_source_id: 4,
+              sync_source_name: '研一上',
+              sync_source_color: '#d97706',
+              blocks_scheduling: true,
+              version: 'ev77',
+            },
+          ],
+          sync_conflicts: [],
+          habits: { items: [], weeks: [] },
+        });
+      }
+      return jsonResponse({});
+    });
+
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    renderApp('/calendar');
+    const eventTitle = await screen.findByText('IBA6104 数据挖掘');
+    await user.click(eventTitle);
+
+    expect(await screen.findByText('外部日历（只读）')).toBeInTheDocument();
+    expect(screen.getByText(/GoalCal 不会修改或删除你的原日历事件/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '前往同步设置' })).toHaveAttribute('href', '/settings?section=sync');
+    expect(screen.getByRole('button', { name: '关闭' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '保存' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '取消日程' })).not.toBeInTheDocument();
   });
 });

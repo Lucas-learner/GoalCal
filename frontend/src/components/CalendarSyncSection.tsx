@@ -153,6 +153,7 @@ export function CalendarSyncSection({ timezone }: { timezone: string }) {
   const [editError, setEditError] = useState<string | null>(null);
   const [confirmDeleteSource, setConfirmDeleteSource] = useState<CalendarSource | null>(null);
   const [syncingSourceId, setSyncingSourceId] = useState<number | null>(null);
+  const [refreshingConnId, setRefreshingConnId] = useState<number | null>(null);
   const [expandedConnIds, setExpandedConnIds] = useState<Record<number, boolean>>({});
   const [icsListCollapsed, setIcsListCollapsed] = useState(false);
 
@@ -194,7 +195,14 @@ export function CalendarSyncSection({ timezone }: { timezone: string }) {
   });
 
   const refreshConnFn = useCallback(
-    async (conn: CalendarConnection, key: string) => api.refreshCalendarConnection(conn.id, { version: conn.version }, key),
+    async (conn: CalendarConnection, key: string) => {
+      setRefreshingConnId(conn.id);
+      try {
+        return await api.refreshCalendarConnection(conn.id, { version: conn.version }, key);
+      } finally {
+        setRefreshingConnId(null);
+      }
+    },
     [],
   );
 
@@ -685,12 +693,18 @@ export function CalendarSyncSection({ timezone }: { timezone: string }) {
         </div>
       ) : null}
 
+      {syncStatusMsg ? (
+        <div className="status-banner info" role="status" style={{ marginBottom: 16 }}>
+          <div className="status-banner-body">{syncStatusMsg}</div>
+        </div>
+      ) : null}
+
       <section className="settings-section" aria-label={t('原生双向同步', 'Native two-way sync')}>
         <div className="settings-section-title">{t('原生双向同步', 'Native two-way sync')}</div>
         <p className="settings-section-copy">
           {t(
-            '连接账号后自动创建专属「GoalCal」双向日历：排期改动秒级推送出去，在系统日历中拖拽改期或删除也会自动同步回来。',
-            'Connect an account to sync a dedicated two-way "GoalCal" calendar cleanly with automatic push & pull.',
+            '连接后自动创建专属「GoalCal」日历双向同步；你原有的其他日历仅只读拉入，不会被修改或删除。',
+            'Creates a dedicated two-way "GoalCal" calendar; your existing calendars stay read-only and are never modified or deleted.',
           )}
         </p>
 
@@ -727,7 +741,7 @@ export function CalendarSyncSection({ timezone }: { timezone: string }) {
                   <div className="setting-name">Google Calendar</div>
                   <div className="sync-hint">
                     {providers.google?.configured
-                      ? t('OAuth 授权 + Webhook 实时增量同步。', 'OAuth 2.0 + instant push.')
+                      ? t('OAuth 授权，支持实时双向同步。', 'OAuth 2.0 with real-time two-way sync.')
                       : t('未配置服务端 Google OAuth 密钥。', 'Google OAuth keys needed.')}
                   </div>
                 </div>
@@ -742,25 +756,19 @@ export function CalendarSyncSection({ timezone }: { timezone: string }) {
                 )}
               </div>
 
-              <div className="sync-provider-card">
-                <div>
-                  <div className="setting-name">Outlook / Microsoft 365</div>
-                  <div className="sync-hint">
-                    {providers.outlook?.configured
-                      ? t('Microsoft Graph OAuth 双向同步。', 'Microsoft Graph two-way.')
-                      : t('未配置服务端 Outlook OAuth 密钥。', 'Outlook OAuth keys needed.')}
+              {providers.outlook?.configured ? (
+                <div className="sync-provider-card">
+                  <div>
+                    <div className="setting-name">Outlook / Microsoft 365</div>
+                    <div className="sync-hint">
+                      {t('Microsoft Graph OAuth 双向同步。', 'Microsoft Graph two-way.')}
+                    </div>
                   </div>
-                </div>
-                {providers.outlook?.configured ? (
                   <a className="btn small" href="/_goalcal/oauth/outlook/start">
                     {t('连接 Outlook', 'Connect Outlook')}
                   </a>
-                ) : (
-                  <button type="button" className="btn small" disabled title="MICROSOFT_CLIENT_ID / MICROSOFT_CLIENT_SECRET">
-                    {t('待配置密钥', 'Key needed')}
-                  </button>
-                )}
-              </div>
+                </div>
+              ) : null}
             </div>
 
             {connections.length > 0 ? (
@@ -831,7 +839,9 @@ export function CalendarSyncSection({ timezone }: { timezone: string }) {
                             disabled={refreshConnAction.isPending}
                             onClick={() => void refreshConnAction.run(conn)}
                           >
-                            {refreshConnAction.isPending ? t('刷新中…', 'Refreshing…') : t('刷新日历', 'Refresh')}
+                            {refreshingConnId === conn.id && refreshConnAction.isPending
+                              ? t('刷新中…', 'Refreshing…')
+                              : t('刷新日历', 'Refresh')}
                           </button>
                           <button
                             type="button"
@@ -911,18 +921,13 @@ export function CalendarSyncSection({ timezone }: { timezone: string }) {
         </div>
         <p className="settings-section-copy">
           {t(
-            '定时拉取外部日历链接，可在「编辑」中控制是否阻塞排期、全天事件处理及日历颜色。',
-            'Periodically pull external calendar URLs with per-calendar conflict, all-day, and color controls.',
+            '通过 .ics 链接只读拉入外部日历（如 Outlook、飞书、校历），可在「编辑」中设置是否阻塞排期、全天事件与颜色。',
+            'Pull external .ics URLs read-only (e.g. Outlook, Lark, timetables) with per-calendar conflict, all-day, and color controls.',
           )}
         </p>
 
         <div className="card-flat sync-card">
           <ErrorBanner error={createSourceAction.actionError ?? updateSourceAction.actionError ?? syncSourceAction.actionError ?? deleteSourceAction.actionError} />
-          {syncStatusMsg ? (
-            <div className="status-banner info" role="status" style={{ marginBottom: 14 }}>
-              <div className="status-banner-body">{syncStatusMsg}</div>
-            </div>
-          ) : null}
 
           {icsSources.length > 0 ? (
             <>
@@ -1100,13 +1105,15 @@ export function CalendarSyncSection({ timezone }: { timezone: string }) {
           {t('同步到外部日历', 'Sync to external calendars')}
         </div>
         <p className="settings-section-copy">
-          {t(
-            '在系统日历或第三方日历中只读查看 GoalCal 安排（自动排除外部日程）。',
-            'View your GoalCal schedule read-only in external calendar apps (external events are excluded).',
-          )}
           {hasNativeTwoWay
-            ? t(' 你已启用原生双向同步，此链接可作为只读备用。', ' Native two-way sync is active; this feed remains available as a read-only backup.')
-            : ''}
+            ? t(
+                '你已启用原生双向同步，通常无需开启；仅在需要向其他日历只读分享 GoalCal 安排时使用。',
+                'Native two-way sync is already active; only enable this if you need a read-only share link for another calendar.',
+              )
+            : t(
+                '在其他日历中只读查看 GoalCal 安排（自动排除外部同步日程）。',
+                'View your GoalCal schedule read-only in external calendar apps (external synced events are excluded).',
+              )}
         </p>
 
         {!syncQuery.isLoading && !syncQuery.isError ? (
@@ -1457,25 +1464,25 @@ export function CalendarSyncSection({ timezone }: { timezone: string }) {
               </select>
             </div>
 
-            <div className="field">
-              <span className="field-label">{t('日历标识色', 'Calendar color')}</span>
-              <div className="sync-color-presets" role="group" aria-label={t('选择颜色', 'Choose color')}>
-                {SOURCE_COLOR_PRESETS.map((hex) => (
-                  <button
-                    key={hex}
-                    type="button"
-                    className={`sync-color-btn${editColor === hex ? ' selected' : ''}`}
-                    style={{ backgroundColor: hex }}
-                    aria-label={hex}
-                    aria-pressed={editColor === hex}
-                    onClick={() => setEditColor(hex)}
-                  />
-                ))}
-              </div>
-            </div>
-
             {!editingSource.is_goalcal_calendar ? (
               <>
+                <div className="field">
+                  <span className="field-label">{t('日历标识色', 'Calendar color')}</span>
+                  <div className="sync-color-presets" role="group" aria-label={t('选择颜色', 'Choose color')}>
+                    {SOURCE_COLOR_PRESETS.map((hex) => (
+                      <button
+                        key={hex}
+                        type="button"
+                        className={`sync-color-btn${editColor === hex ? ' selected' : ''}`}
+                        style={{ backgroundColor: hex }}
+                        aria-label={hex}
+                        aria-pressed={editColor === hex}
+                        onClick={() => setEditColor(hex)}
+                      />
+                    ))}
+                  </div>
+                </div>
+
                 <div className="field">
                   <label className="field-label" htmlFor="edit-source-allday">
                     {t('全天事件处理', 'All-day events')}
@@ -1513,7 +1520,7 @@ export function CalendarSyncSection({ timezone }: { timezone: string }) {
                   disabled={updateSourceAction.isPending}
                   onChange={(e) => setEditWritable(e.target.checked)}
                 />
-                <span>{t('向外部写入 GoalCal 排期改动（双向推送）', 'Push GoalCal schedule changes back (two-way)')}</span>
+                <span>{t('推送 GoalCal 排期变动（双向同步）', 'Push GoalCal schedule changes (two-way)')}</span>
               </label>
             )}
 

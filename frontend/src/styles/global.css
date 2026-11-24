@@ -2091,8 +2091,18 @@ button.habit-day {
 
 .sync-provider-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 10px;
+}
+
+.sync-readonly-note {
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.6;
 }
 
 .sync-provider-card {

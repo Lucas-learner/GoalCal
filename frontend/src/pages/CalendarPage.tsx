@@ -301,7 +301,7 @@ export function CalendarPage({ timezone }: { timezone: string }) {
         start: ev.start,
         end: ev.end,
         allDay: Boolean(ev.all_day),
-        editable: enableDrag && ['planned', 'moved'].includes(ev.status),
+        editable: enableDrag && ev.source !== 'sync' && ['planned', 'moved'].includes(ev.status),
         classNames: classes,
         extendedProps: { rawEvent: ev },
       };
@@ -433,7 +433,7 @@ export function CalendarPage({ timezone }: { timezone: string }) {
 
   const handleEventChange = (info: EventChangeArg) => {
     const raw = info.event.extendedProps?.rawEvent as CalendarEvent | undefined;
-    if (!raw) {
+    if (!raw || raw.source === 'sync') {
       info.revert();
       return;
     }
