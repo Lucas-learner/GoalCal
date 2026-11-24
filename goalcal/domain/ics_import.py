@@ -93,6 +93,35 @@ def _exdates_utc(component, tz: str) -> set[datetime]:
     return excluded
 
 
+def _recurrence_id_utc(component, tz: str) -> datetime | None:
+    prop = component.get("RECURRENCE-ID")
+    if prop is None:
+        return None
+    dt = getattr(prop, "dt", None)
+    if isinstance(dt, datetime):
+        return _to_utc_naive(dt, tz)
+    if isinstance(dt, date):
+        zone = ZoneInfo(tz)
+        return datetime.combine(dt, time(), zone).astimezone(timezone.utc).replace(tzinfo=None)
+    return None
+
+
+def collect_recurrence_overrides(components, tz: str) -> dict[str, set[datetime]]:
+    overrides: dict[str, set[datetime]] = {}
+    for comp in components:
+        base_uid = str(comp.get("UID") or "").strip()
+        if not base_uid:
+            continue
+        rec_utc = _recurrence_id_utc(comp, tz)
+        if rec_utc is not None:
+            overrides.setdefault(base_uid, set()).add(rec_utc)
+    return overrides
+
+
+def recurrence_instance_uid(base_uid: str, rec_utc: datetime) -> str:
+    return f"{base_uid[:170]}@rid={rec_utc.strftime('%Y%m%dT%H%M%SZ')}"
+
+
 def _expand(
     component,
     tz: str,
@@ -100,6 +129,8 @@ def _expand(
     budget: list[int] | None = None,
     *,
     all_day_mode: str = "ignore",
+    extra_excluded: set[datetime] | None = None,
+    past_days: int = 0,
 ) -> list[tuple[str, datetime, datetime, bool]] | None:
     """展开成 (uid, start_utc, end_utc, all_day) 列表；无法处理（含跳过全天或已取消）返回 None。"""
     status = str(component.get("STATUS") or "").strip().upper()
@@ -116,6 +147,9 @@ def _expand(
 
     rule_prop = component.get("RRULE")
     if rule_prop is None:
+        rec_utc = _recurrence_id_utc(component, tz)
+        if rec_utc is not None:
+            return [(recurrence_instance_uid(base_uid, rec_utc), start_utc, end_utc, is_all_day)]
         return [(base_uid, start_utc, end_utc, is_all_day)]
     freq = str(rule_prop.get("FREQ", [""])[0]).upper()
     if freq not in _SUPPORTED_FREQS:
@@ -131,8 +165,9 @@ def _expand(
     zone = ZoneInfo(tz)
     rule_dtstart = datetime.combine(dtstart, time()) if isinstance(dtstart, date) and not isinstance(dtstart, datetime) else dtstart
     rule = rrulestr(f"RRULE:{rule_prop.to_ical().decode()}", dtstart=rule_dtstart)
-    excluded = _exdates_utc(component, tz)
+    excluded = _exdates_utc(component, tz) | (extra_excluded or set())
     horizon = now + timedelta(days=EXPAND_DAYS)
+    cutoff = now - timedelta(days=past_days)
     out = []
     for index, occurrence in enumerate(rule, start=1):
         budget[0] += 1
@@ -147,8 +182,8 @@ def _expand(
             break
         if occ_utc in excluded:
             continue
-        if occ_utc + duration < now:
-            continue  # 已过去的实例不导入
+        if occ_utc + duration < cutoff:
+            continue  # 窗口之外的过去实例不导入
         out.append((f"{base_uid}#{index}", occ_utc, occ_utc + duration, is_all_day))
     return out
 
@@ -194,14 +229,23 @@ def _import_ics(
     if len(content) > MAX_BYTES:
         raise ValueError("Calendar exceeds 5 MB")
     calendar = Calendar.from_ical(content)
-    components = calendar.walk("VEVENT")
+    components = list(calendar.walk("VEVENT"))
     if len(components) > MAX_EVENTS:
         raise ValueError("Too many events")
+    overrides = collect_recurrence_overrides(components, tz)
     budget = [0]
     prepared = []
     count = 0
     for component in components:
-        expanded = _expand(component, tz, now, budget, all_day_mode=all_day_mode)
+        base_uid = str(component.get("UID") or "").strip()
+        expanded = _expand(
+            component,
+            tz,
+            now,
+            budget,
+            all_day_mode=all_day_mode,
+            extra_excluded=overrides.get(base_uid),
+        )
         count += len(expanded or [])
         if count > MAX_EVENTS:
             raise ValueError("Too many expanded events")

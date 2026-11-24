@@ -527,3 +527,129 @@ def test_v22_google_and_outlook_oauth_webhooks_and_sync(accounts, monkeypatch):
         assert s.get(CalendarConnection, ms_conn_id).status == "reauth_required"
     finally:
         s.close()
+
+
+def test_caldav_recurring_events_and_recurrence_id_do_not_collapse(accounts, monkeypatch):
+    _names, ids, _tokens = accounts
+    uid = ids[0]
+    s = db.new_session()
+    try:
+        conn = CalendarConnection(
+            user_id=uid,
+            provider="caldav",
+            account_label="alice@icloud.com",
+            server_url="https://caldav.icloud.com/",
+            username="alice@icloud.com",
+            encrypted_secrets=crypto.encrypt_secrets({"password": "app-pw"}),
+            status="active",
+        )
+        s.add(conn)
+        s.flush()
+        src = CalendarSource(
+            user_id=uid,
+            connection_id=conn.id,
+            provider="caldav",
+            direction="inbound",
+            name="研一上",
+            url="https://p220-caldav.icloud.com/cal/classes/",
+            remote_calendar_id="https://p220-caldav.icloud.com/cal/classes/",
+            enabled=True,
+            blocks_scheduling=True,
+            all_day_mode="show",
+        )
+        s.add(src)
+        s.commit()
+        src_id = src.id
+    finally:
+        s.close()
+
+    now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+    # Build a weekly class starting 14 days ago with 6 occurrences, plus a RECURRENCE-ID override
+    # on occurrence #3 (today's week) inside a single CalDAV .ics file (same remote_href).
+    first_local = (now_naive - timedelta(days=14)).replace(hour=1, minute=0, second=0, microsecond=0)  # 09:00 Asia/Shanghai
+    occ3_local = first_local + timedelta(days=14)
+    start_str = (first_local + timedelta(hours=8)).strftime("%Y%m%dT%H%M%S")
+    end_str = (first_local + timedelta(hours=10, minutes=50)).strftime("%Y%m%dT%H%M%S")
+    rid_str = (occ3_local + timedelta(hours=8)).strftime("%Y%m%dT%H%M%S")
+    rid_end_str = (occ3_local + timedelta(hours=10, minutes=50)).strftime("%Y%m%dT%H%M%S")
+
+    ics_body = (
+        "BEGIN:VCALENDAR\r\n"
+        "VERSION:2.0\r\n"
+        "PRODID:-//Test//CN\r\n"
+        "BEGIN:VEVENT\r\n"
+        "UID:course-iba6104\r\n"
+        "SUMMARY:IBA6104 数据挖掘\r\n"
+        f"DTSTART;TZID=Asia/Shanghai:{start_str}\r\n"
+        f"DTEND;TZID=Asia/Shanghai:{end_str}\r\n"
+        "RRULE:FREQ=WEEKLY;COUNT=6\r\n"
+        "END:VEVENT\r\n"
+        "BEGIN:VEVENT\r\n"
+        "UID:course-iba6104\r\n"
+        f"RECURRENCE-ID;TZID=Asia/Shanghai:{rid_str}\r\n"
+        "SUMMARY:IBA6104 期中调课\r\n"
+        f"DTSTART;TZID=Asia/Shanghai:{rid_str}\r\n"
+        f"DTEND;TZID=Asia/Shanghai:{rid_end_str}\r\n"
+        "END:VEVENT\r\n"
+        "END:VCALENDAR\r\n"
+    )
+    href = "/cal/classes/course-iba6104.ics"
+    mode = {"deleted": False}
+
+    def fake_caldav_http(method, url, headers=None, body=None, **_kwargs):
+        xml_body = (
+            '<?xml version="1.0" encoding="utf-8"?>'
+            '<D:multistatus xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">'
+            "<D:response>"
+            f"<D:href>{href}</D:href>"
+            "<D:propstat><D:prop><D:getetag>\"e1\"</D:getetag>"
+            + ("" if mode["deleted"] else f"<C:calendar-data>{ics_body}</C:calendar-data>")
+            + "</D:prop>"
+            + (
+                "<D:status>HTTP/1.1 404 Not Found</D:status>"
+                if mode["deleted"]
+                else "<D:status>HTTP/1.1 200 OK</D:status>"
+            )
+            + "</D:propstat>"
+            "</D:response>"
+            "</D:multistatus>"
+        )
+        return 207, {}, xml_body.encode("utf-8")
+
+    monkeypatch.setattr("goalcal.domain.sync_providers.safe_http_request", fake_caldav_http)
+
+    bidirectional_sync.sync_native_source_once(src_id)
+    s = db.new_session()
+    try:
+        rows = list(
+            s.scalars(select(Event).where(Event.sync_source_id == src_id).order_by(Event.start_utc))
+        )
+        links = list(s.scalars(select(EventSyncLink).where(EventSyncLink.source_id == src_id)))
+        # Past occurrence #1 (-14d) is outside past_days=7, #2 (-7d ends after now-7d? end_utc >= now-7d) + #3..#6 -> 5 rows total!
+        assert len(rows) >= 4
+        assert len(links) == len(rows)
+        titles = [r.title for r in rows]
+        assert titles.count("IBA6104 期中调课") == 1
+        assert titles.count("IBA6104 数据挖掘") == len(rows) - 1
+    finally:
+        s.close()
+
+    # Re-syncing must stay idempotent without inflating or collapsing events
+    first_count = len(rows)
+    bidirectional_sync.sync_native_source_once(src_id)
+    s = db.new_session()
+    try:
+        rows_again = list(s.scalars(select(Event).where(Event.sync_source_id == src_id)))
+        assert len(rows_again) == first_count
+    finally:
+        s.close()
+
+    # Deleting the whole CalDAV .ics file (404 response with empty remote_uid) removes all occurrences
+    mode["deleted"] = True
+    bidirectional_sync.sync_native_source_once(src_id)
+    s = db.new_session()
+    try:
+        assert list(s.scalars(select(Event).where(Event.sync_source_id == src_id))) == []
+        assert list(s.scalars(select(EventSyncLink).where(EventSyncLink.source_id == src_id))) == []
+    finally:
+        s.close()

@@ -282,15 +282,15 @@ def backfill_goalcal_source(session: Session, user_id: int, source: CalendarSour
 
 
 def _find_link(session: Session, source_id: int, remote_uid: str, remote_href: str = "") -> EventSyncLink | None:
+    # A single CalDAV .ics resource (remote_href) can expand into multiple RRULE / RECURRENCE-ID
+    # rows sharing the same remote_href, so when remote_uid is known we MUST match strictly by remote_uid.
     if remote_uid:
-        row = session.scalar(
+        return session.scalar(
             select(EventSyncLink).where(
                 EventSyncLink.source_id == source_id,
                 EventSyncLink.remote_uid == remote_uid,
             )
         )
-        if row is not None:
-            return row
     if remote_href:
         return session.scalar(
             select(EventSyncLink).where(
@@ -299,6 +299,19 @@ def _find_link(session: Session, source_id: int, remote_uid: str, remote_href: s
             )
         )
     return None
+
+
+def _find_links_by_href(session: Session, source_id: int, remote_href: str) -> list[EventSyncLink]:
+    if not remote_href:
+        return []
+    return list(
+        session.scalars(
+            select(EventSyncLink).where(
+                EventSyncLink.source_id == source_id,
+                EventSyncLink.remote_href == remote_href,
+            )
+        )
+    )
 
 
 def _is_event_running(session: Session, event_id: int) -> bool:
@@ -435,26 +448,36 @@ def apply_native_pull(
 
     # External inbound calendar (read into local kind="external", source="sync")
     seen_uids: set[str] = set()
+    seen_uids_by_href: dict[str, set[str]] = {}
     for rev in pull_result.events:
-        link = _find_link(session, source.id, rev.remote_uid, rev.remote_href)
         if rev.cancelled:
-            if link is not None:
-                ev = session.get(Event, link.event_id)
-                if ev is not None and ev.sync_source_id == source.id:
-                    _delete_synced_event(session, ev)
-                    result.removed += 1
-            elif rev.remote_uid:
-                ev = session.scalar(
-                    select(Event).where(
-                        Event.user_id == user_id,
-                        Event.sync_source_id == source.id,
-                        Event.uid == rev.remote_uid,
+            if rev.remote_uid:
+                link = _find_link(session, source.id, rev.remote_uid)
+                if link is not None:
+                    ev = session.get(Event, link.event_id)
+                    if ev is not None and ev.sync_source_id == source.id:
+                        _delete_synced_event(session, ev)
+                        result.removed += 1
+                else:
+                    ev = session.scalar(
+                        select(Event).where(
+                            Event.user_id == user_id,
+                            Event.sync_source_id == source.id,
+                            Event.uid == rev.remote_uid,
+                        )
                     )
-                )
-                if ev is not None:
-                    _delete_synced_event(session, ev)
-                    result.removed += 1
+                    if ev is not None:
+                        _delete_synced_event(session, ev)
+                        result.removed += 1
+            elif rev.remote_href:
+                for lnk in _find_links_by_href(session, source.id, rev.remote_href):
+                    ev = session.get(Event, lnk.event_id)
+                    if ev is not None and ev.sync_source_id == source.id:
+                        _delete_synced_event(session, ev)
+                        result.removed += 1
             continue
+
+        link = _find_link(session, source.id, rev.remote_uid, rev.remote_href)
 
         if rev.all_day and source.all_day_mode == "ignore":
             continue
@@ -464,7 +487,10 @@ def apply_native_pull(
             result.skipped += 1
             continue
 
-        seen_uids.add(rev.remote_uid)
+        if rev.remote_uid:
+            seen_uids.add(rev.remote_uid)
+            if rev.remote_href:
+                seen_uids_by_href.setdefault(rev.remote_href, set()).add(rev.remote_uid)
         ev = session.get(Event, link.event_id) if link else None
         if ev is None and rev.remote_uid:
             ev = session.scalar(
@@ -519,13 +545,14 @@ def apply_native_pull(
             link.last_synced_hash = new_hash
             link.sync_state = "synced"
 
+    prune_cutoff = now_naive - timedelta(days=7)
     if pull_result.full_sync:
         existing_rows = list(
             session.scalars(
                 select(Event).where(
                     Event.user_id == user_id,
                     Event.sync_source_id == source.id,
-                    Event.end_utc >= now_naive,
+                    Event.end_utc >= prune_cutoff,
                 )
             )
         )
@@ -533,6 +560,14 @@ def apply_native_pull(
             if ev.uid and ev.uid not in seen_uids:
                 _delete_synced_event(session, ev)
                 result.removed += 1
+    elif seen_uids_by_href:
+        for href, href_uids in seen_uids_by_href.items():
+            for lnk in _find_links_by_href(session, source.id, href):
+                if lnk.remote_uid not in href_uids:
+                    ev = session.get(Event, lnk.event_id)
+                    if ev is not None and ev.sync_source_id == source.id and ev.end_utc >= prune_cutoff:
+                        _delete_synced_event(session, ev)
+                        result.removed += 1
 
     source.last_synced_at = now_naive
     source.updated_at = now_naive

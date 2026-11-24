@@ -20,7 +20,7 @@ from zoneinfo import ZoneInfo
 from icalendar import Calendar, Event as ICalEvent
 
 from ..safe_fetch import FetchError, normalize_caldav_url, safe_http_request
-from .ics_import import _expand
+from .ics_import import _expand, _recurrence_id_utc, collect_recurrence_overrides, recurrence_instance_uid
 
 UTC = timezone.utc
 
@@ -177,8 +177,10 @@ def _ics_bytes_to_remote_events(
         cal = Calendar.from_ical(raw)
     except Exception:
         return []
+    vevents = list(cal.walk("VEVENT"))
+    overrides = collect_recurrence_overrides(vevents, tz)
     out: list[RemoteEvent] = []
-    for comp in cal.walk("VEVENT"):
+    for comp in vevents:
         base_uid = str(comp.get("UID") or "").strip()
         if not base_uid:
             continue
@@ -194,22 +196,32 @@ def _ics_bytes_to_remote_events(
                 goalcal_event_id = int(tail)
 
         if status_raw == "CANCELLED":
+            rec_utc = _recurrence_id_utc(comp, tz)
+            cancelled_uid = recurrence_instance_uid(base_uid, rec_utc) if rec_utc is not None else base_uid
             out.append(
                 RemoteEvent(
-                    remote_uid=base_uid,
+                    remote_uid=cancelled_uid,
                     title=title,
                     start_utc=now_naive,
                     end_utc=now_naive,
                     status="cancelled",
                     remote_href=href,
                     remote_etag=etag,
-                    goalcal_event_id=goalcal_event_id,
+                    goalcal_event_id=goalcal_event_id if rec_utc is None else None,
                     cancelled=True,
                 )
             )
             continue
 
-        expanded = _expand(comp, tz, now_naive, [0], all_day_mode=all_day_mode)
+        expanded = _expand(
+            comp,
+            tz,
+            now_naive,
+            [0],
+            all_day_mode=all_day_mode,
+            extra_excluded=overrides.get(base_uid),
+            past_days=7,
+        )
         if not expanded:
             continue
         for inst_uid, start_utc, end_utc, is_all_day in expanded:
