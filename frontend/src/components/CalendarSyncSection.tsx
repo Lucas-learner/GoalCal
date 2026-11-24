@@ -12,7 +12,7 @@ import { ErrorBanner, SkeletonCard } from './StateFeedback';
 
 const MAX_ICS_BYTES = 5 * 1024 * 1024;
 
-const SOURCE_COLOR_PRESETS = ['#6b7f89', '#0f766e', '#2563eb', '#d97706', '#9333ea', '#dc2626'];
+const SOURCE_COLOR_PRESETS = ['#57789c', '#4e828c', '#5a8770', '#b88252', '#7e6e9e', '#b86b68'];
 
 const SYNC_INTERVAL_OPTIONS: Array<{ value: number; zh: string; en: string }> = [
   { value: 15, zh: '每 15 分钟', en: 'Every 15 min' },

@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 import { AppContent, createAppQueryClient } from '../App';
+import { getDisplaySourceColor, getEditorialPigmentKey } from '../lib/calendarColors';
 import { AppStateProvider } from '../state/AppStateContext';
 
 function jsonResponse(data: unknown, status = 200): Response {
@@ -253,5 +254,18 @@ describe('Color theme selection (light / dark / follow system)', () => {
     await waitFor(() => {
       expect(patchPayloads).toContain(JSON.stringify({ calendar_palette: 'vivid' }));
     });
+  });
+
+  it('maps 6-digit, 8-digit CalDAV, and neutral colors to native editorial mineral pigments', () => {
+    expect(getEditorialPigmentKey('#ff2968ff')).toBe('rose');
+    expect(getEditorialPigmentKey('#d97706')).toBe('ochre');
+    expect(getEditorialPigmentKey('#f6c33b')).toBe('sand');
+    expect(getEditorialPigmentKey('#10b981')).toBe('sage');
+    expect(getEditorialPigmentKey('#0ea5e9')).toBe('blue');
+    expect(getEditorialPigmentKey('#9333ea')).toBe('iris');
+    expect(getEditorialPigmentKey('#808080')).toBe('slate');
+    expect(getEditorialPigmentKey(null)).toBe('slate');
+    expect(getDisplaySourceColor('#ff0000', 'calm')).toBe('#b86b68');
+    expect(getDisplaySourceColor('#ff0000', 'vivid')).toBe('#ff0000');
   });
 });

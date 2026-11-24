@@ -1744,9 +1744,15 @@ button.habit-day {
 }
 
 .gc-fc .fc-event.gc-ev-external.gc-ev-synced {
+  background: var(--ev-pigment-bg, var(--external-bg));
+  border-left: var(--cal-ev-border-w, 2.5px) solid var(--ev-pigment-border, var(--external-border));
+  color: var(--ev-pigment-ink, var(--external-ink));
+}
+
+:root[data-cal-palette='vivid'] .gc-fc .fc-event.gc-ev-external.gc-ev-synced {
   background: var(--external-bg);
   background: color-mix(in srgb, var(--ev-src-color, #6b7f89) var(--cal-sync-bg-mix), var(--surface));
-  border-left: var(--cal-ev-border-w, 2.5px) solid color-mix(in srgb, var(--ev-src-color, #6b7f89) var(--cal-sync-border-mix, 52%), var(--cal-sync-border-base, var(--muted)));
+  border-left: var(--cal-ev-border-w, 3px) solid var(--ev-src-color, #6b7f89);
   color: color-mix(in srgb, var(--ev-src-color, #6b7f89) var(--cal-sync-ink-mix), var(--cal-sync-ink-base));
 }
 
@@ -1754,6 +1760,38 @@ button.habit-day {
   background: var(--cal-manual-bg);
   border-left: var(--cal-ev-border-w, 2px) solid var(--cal-manual-border);
   color: var(--cal-manual-ink);
+}
+
+.gc-fc .fc-event.gc-pigment-rose { --ev-pigment-bg: #f8efef; --ev-pigment-border: #b86b68; --ev-pigment-ink: #6b3634; }
+.gc-fc .fc-event.gc-pigment-ochre { --ev-pigment-bg: #f8f1e8; --ev-pigment-border: #b88252; --ev-pigment-ink: #664527; }
+.gc-fc .fc-event.gc-pigment-sand { --ev-pigment-bg: #f7f4e8; --ev-pigment-border: #a68f4b; --ev-pigment-ink: #5b4d22; }
+.gc-fc .fc-event.gc-pigment-sage { --ev-pigment-bg: #edf4ef; --ev-pigment-border: #5a8770; --ev-pigment-ink: #2d4f3e; }
+.gc-fc .fc-event.gc-pigment-teal { --ev-pigment-bg: #ebf3f4; --ev-pigment-border: #4e828c; --ev-pigment-ink: #284c54; }
+.gc-fc .fc-event.gc-pigment-blue { --ev-pigment-bg: #edf2f8; --ev-pigment-border: #57789c; --ev-pigment-ink: #2b4563; }
+.gc-fc .fc-event.gc-pigment-iris { --ev-pigment-bg: #f2eff7; --ev-pigment-border: #7e6e9e; --ev-pigment-ink: #463a61; }
+.gc-fc .fc-event.gc-pigment-plum { --ev-pigment-bg: #f7eff3; --ev-pigment-border: #a36b84; --ev-pigment-ink: #5e3648; }
+.gc-fc .fc-event.gc-pigment-slate { --ev-pigment-bg: #f0f1f2; --ev-pigment-border: #7c858c; --ev-pigment-ink: #434a50; }
+
+:root[data-theme='dark'] .gc-fc .fc-event.gc-pigment-rose { --ev-pigment-bg: rgba(196, 120, 116, 0.17); --ev-pigment-border: #cc8582; --ev-pigment-ink: #eed0ce; }
+:root[data-theme='dark'] .gc-fc .fc-event.gc-pigment-ochre { --ev-pigment-bg: rgba(194, 142, 95, 0.17); --ev-pigment-border: #cca074; --ev-pigment-ink: #eedbc6; }
+:root[data-theme='dark'] .gc-fc .fc-event.gc-pigment-sand { --ev-pigment-bg: rgba(178, 156, 88, 0.17); --ev-pigment-border: #c2ad6b; --ev-pigment-ink: #eae0be; }
+:root[data-theme='dark'] .gc-fc .fc-event.gc-pigment-sage { --ev-pigment-bg: rgba(104, 156, 129, 0.17); --ev-pigment-border: #7eb096; --ev-pigment-ink: #cbe3d6; }
+:root[data-theme='dark'] .gc-fc .fc-event.gc-pigment-teal { --ev-pigment-bg: rgba(92, 150, 161, 0.17); --ev-pigment-border: #76abb5; --ev-pigment-ink: #c9e1e6; }
+:root[data-theme='dark'] .gc-fc .fc-event.gc-pigment-blue { --ev-pigment-bg: rgba(104, 140, 181, 0.17); --ev-pigment-border: #81a3c7; --ev-pigment-ink: #cfe0f2; }
+:root[data-theme='dark'] .gc-fc .fc-event.gc-pigment-iris { --ev-pigment-bg: rgba(142, 126, 176, 0.17); --ev-pigment-border: #a494c4; --ev-pigment-ink: #ddd5ed; }
+:root[data-theme='dark'] .gc-fc .fc-event.gc-pigment-plum { --ev-pigment-bg: rgba(176, 120, 145, 0.17); --ev-pigment-border: #c48ca5; --ev-pigment-ink: #ecd2dd; }
+:root[data-theme='dark'] .gc-fc .fc-event.gc-pigment-slate { --ev-pigment-bg: rgba(140, 148, 156, 0.17); --ev-pigment-border: #959fa6; --ev-pigment-ink: #d4d9dd; }
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .gc-fc .fc-event.gc-pigment-rose { --ev-pigment-bg: rgba(196, 120, 116, 0.17); --ev-pigment-border: #cc8582; --ev-pigment-ink: #eed0ce; }
+  :root:not([data-theme='light']) .gc-fc .fc-event.gc-pigment-ochre { --ev-pigment-bg: rgba(194, 142, 95, 0.17); --ev-pigment-border: #cca074; --ev-pigment-ink: #eedbc6; }
+  :root:not([data-theme='light']) .gc-fc .fc-event.gc-pigment-sand { --ev-pigment-bg: rgba(178, 156, 88, 0.17); --ev-pigment-border: #c2ad6b; --ev-pigment-ink: #eae0be; }
+  :root:not([data-theme='light']) .gc-fc .fc-event.gc-pigment-sage { --ev-pigment-bg: rgba(104, 156, 129, 0.17); --ev-pigment-border: #7eb096; --ev-pigment-ink: #cbe3d6; }
+  :root:not([data-theme='light']) .gc-fc .fc-event.gc-pigment-teal { --ev-pigment-bg: rgba(92, 150, 161, 0.17); --ev-pigment-border: #76abb5; --ev-pigment-ink: #c9e1e6; }
+  :root:not([data-theme='light']) .gc-fc .fc-event.gc-pigment-blue { --ev-pigment-bg: rgba(104, 140, 181, 0.17); --ev-pigment-border: #81a3c7; --ev-pigment-ink: #cfe0f2; }
+  :root:not([data-theme='light']) .gc-fc .fc-event.gc-pigment-iris { --ev-pigment-bg: rgba(142, 126, 176, 0.17); --ev-pigment-border: #a494c4; --ev-pigment-ink: #ddd5ed; }
+  :root:not([data-theme='light']) .gc-fc .fc-event.gc-pigment-plum { --ev-pigment-bg: rgba(176, 120, 145, 0.17); --ev-pigment-border: #c48ca5; --ev-pigment-ink: #ecd2dd; }
+  :root:not([data-theme='light']) .gc-fc .fc-event.gc-pigment-slate { --ev-pigment-bg: rgba(140, 148, 156, 0.17); --ev-pigment-border: #959fa6; --ev-pigment-ink: #d4d9dd; }
 }
 
 .gc-fc .fc-event.gc-ev-reference {

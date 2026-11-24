@@ -38,6 +38,7 @@ import {
 } from '../lib/datetime';
 import { useIdempotentAction } from '../lib/useIdempotentMutation';
 import { useI18n } from '../i18n';
+import { getDisplaySourceColor, getEditorialPigmentKey } from '../lib/calendarColors';
 import { useAppState } from '../state/AppStateContext';
 import { useTheme } from '../theme';
 
@@ -274,12 +275,12 @@ export function CalendarPage({ timezone }: { timezone: string }) {
         map.set(ev.sync_source_id, {
           id: ev.sync_source_id,
           name: ev.sync_source_name || t('同步日历', 'Synced'),
-          color: ev.sync_source_color || '#6b7f89',
+          color: getDisplaySourceColor(ev.sync_source_color, calendarPalette),
         });
       }
     }
     return Array.from(map.values());
-  }, [eventsQuery.data?.events, t]);
+  }, [eventsQuery.data?.events, t, calendarPalette]);
 
   const visibleEvents = useMemo(
     () =>
@@ -296,7 +297,9 @@ export function CalendarPage({ timezone }: { timezone: string }) {
   const fcEvents: EventInput[] = useMemo(() => {
     const normalEvents: EventInput[] = visibleEvents.map((ev) => {
       const classes = [`gc-ev-${ev.kind}`];
-      if (ev.source === 'sync') classes.push('gc-ev-synced');
+      if (ev.source === 'sync') {
+        classes.push('gc-ev-synced', `gc-pigment-${getEditorialPigmentKey(ev.sync_source_color)}`);
+      }
       if (ev.source === 'sync' && ev.blocks_scheduling === false) classes.push('gc-ev-reference');
       if (ev.status === 'done' || ev.status === 'skipped') classes.push('gc-ev-done');
       return {
