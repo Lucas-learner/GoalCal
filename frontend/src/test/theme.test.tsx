@@ -239,6 +239,11 @@ describe('Color theme selection (light / dark / follow system)', () => {
 
     const paletteSelect = (await screen.findByLabelText('日历配色')) as HTMLSelectElement;
     expect(paletteSelect.value).toBe('calm');
+    expect(Array.from(paletteSelect.options).map((o) => o.text)).toEqual([
+      '矿物柔彩（默认）',
+      '纸墨单色',
+      '明亮彩块',
+    ]);
     expect(document.documentElement.dataset.calPalette).toBe('calm');
 
     await user.selectOptions(paletteSelect, 'mono');

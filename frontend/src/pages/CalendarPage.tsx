@@ -506,7 +506,7 @@ export function CalendarPage({ timezone }: { timezone: string }) {
     return (
       <div>
         <div style={{ fontWeight: 620, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {raw.sync_source_color && (raw.source !== 'sync' || calendarPalette === 'mono') ? (
+          {raw.sync_source_color && raw.source !== 'sync' ? (
             <span
               className="sync-color-dot"
               style={{ backgroundColor: raw.sync_source_color, marginRight: 4 }}
@@ -802,7 +802,9 @@ export function CalendarPage({ timezone }: { timezone: string }) {
                     aria-pressed={!isHidden}
                     onClick={() => toggleSourceVisibility(src.id)}
                   >
-                    <span className="sync-color-dot" style={{ backgroundColor: src.color }} aria-hidden="true" />
+                    {calendarPalette !== 'mono' ? (
+                      <span className="sync-color-dot" style={{ backgroundColor: src.color }} aria-hidden="true" />
+                    ) : null}
                     <span>{src.name}</span>
                   </button>
                 );

@@ -437,9 +437,9 @@ export function SettingsPage({ user }: { user: User | undefined }) {
                       disabled={saveCalendarPaletteAction.isPending}
                       onChange={(e) => handleCalendarPaletteChange(e.target.value as CalendarPalette)}
                     >
-                      <option value="calm">{t('原生低饱和（默认）', 'Editorial muted (default)')}</option>
-                      <option value="mono">{t('极简素雅', 'Minimal monochrome')}</option>
-                      <option value="vivid">{t('鲜明彩块', 'Vivid colors')}</option>
+                      <option value="calm">{t('矿物柔彩（默认）', 'Mineral (default)')}</option>
+                      <option value="mono">{t('纸墨单色', 'Monochrome')}</option>
+                      <option value="vivid">{t('明亮彩块', 'Vivid')}</option>
                     </select>
                   </div>
                 </div>
