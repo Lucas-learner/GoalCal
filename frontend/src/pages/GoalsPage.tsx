@@ -6,7 +6,7 @@ import { invalidateAfterWrite, queryKeys } from '../api/queryKeys';
 import type { CalendarEvent, Goal, Step } from '../api/types';
 import { SparkleIcon } from '../components/Icons';
 import { EmptyState, ErrorBanner, SkeletonCard } from '../components/StateFeedback';
-import { daysUntilDeadline, formatShortDate } from '../lib/datetime';
+import { daysUntilDeadline, formatDateTimeLabel, formatShortDate, formatTimeHHmm } from '../lib/datetime';
 import { useIdempotentAction } from '../lib/useIdempotentMutation';
 import { type Lang, pickText, useI18n } from '../i18n';
 import { useAppState } from '../state/AppStateContext';
@@ -232,6 +232,40 @@ export function GoalsPage({ timezone }: { timezone: string }) {
     },
   });
 
+  const cancelEventFn = useCallback(
+    async (args: { eventId: number; version: string; goalId: number }, key: string) =>
+      api.cancelCalendarEvent(args.eventId, { version: args.version }, key),
+    [],
+  );
+
+  const cancelEventAction = useIdempotentAction(cancelEventFn, {
+    onSuccess: async (res, args) => {
+      recordMutationResult(res);
+      await invalidateAfterWrite(queryClient, { goalId: args.goalId });
+    },
+    onError: async (err, args) => {
+      if (err.status === 409) await invalidateAfterWrite(queryClient, { goalId: args.goalId });
+    },
+  });
+
+  const checkinExecutionFn = useCallback(
+    async (
+      args: { executionId: string | number; version: string; outcome: 'done' | 'extend' | 'adjust'; goalId: number },
+      key: string,
+    ) => api.checkinExecution(args.executionId, { version: args.version, outcome: args.outcome }, key),
+    [],
+  );
+
+  const checkinExecutionAction = useIdempotentAction(checkinExecutionFn, {
+    onSuccess: async (res, args) => {
+      recordMutationResult(res);
+      await invalidateAfterWrite(queryClient, { goalId: args.goalId });
+    },
+    onError: async (err, args) => {
+      if (err.status === 409) await invalidateAfterWrite(queryClient, { goalId: args.goalId });
+    },
+  });
+
   const beginEditStep = (step: Step) => {
     setEditingStepId(step.id);
     setStepTitleDraft(step.title);
@@ -242,13 +276,19 @@ export function GoalsPage({ timezone }: { timezone: string }) {
     updateGoalAction.actionError ??
     updateStepAction.actionError ??
     proposeAction.actionError ??
-    startStepAction.actionError ?? refillAction.actionError;
+    startStepAction.actionError ??
+    refillAction.actionError ??
+    cancelEventAction.actionError ??
+    checkinExecutionAction.actionError;
 
   const isBusy =
     updateGoalAction.isPending ||
     updateStepAction.isPending ||
     proposeAction.isPending ||
-    startStepAction.isPending || refillAction.isPending;
+    startStepAction.isPending ||
+    refillAction.isPending ||
+    cancelEventAction.isPending ||
+    checkinExecutionAction.isPending;
 
   const phases = detailGoal ? computePhases(detailGoal) : [];
   const nextTodoStep = detailGoal?.steps.find((s) => s.status === 'todo') ?? null;
@@ -647,56 +687,169 @@ export function GoalsPage({ timezone }: { timezone: string }) {
                   );
                 })()}
 
-                {nextTodoStep && detailGoal.status === 'active' ? (
-                  <div className="next-box">
-                    <div className="section-label">{t('下一步', 'Next step')}</div>
-                    <div className="next-title">{nextTodoStep.title}</div>
-                    <div className="next-meta">
-                      {nextTodoStep.est_min} {t('分钟', 'min')}
-                      {nextTodoStep.outcome ? `${t(' · 完成标准：', ' · Done when: ')}${nextTodoStep.outcome}` : ''}
+                {nextTodoStep && detailGoal.status === 'active' ? (() => {
+                  const nextExec = nextTodoStep.active_execution ?? null;
+                  const nextScheduled = nextTodoStep.scheduled_event ?? null;
+                  const scheduledLabel = nextScheduled
+                    ? formatDateTimeLabel(nextScheduled.start, nextScheduled.end, timezone, lang)
+                    : '';
+                  return (
+                    <div className="next-box">
+                      <div className="section-label">
+                        {nextExec ? t('下一步 · 进行中', 'Next step · In progress') : t('下一步', 'Next step')}
+                      </div>
+                      <div className="next-title">{nextTodoStep.title}</div>
+                      <div className="next-meta">
+                        {nextTodoStep.est_min} {t('分钟', 'min')}
+                        {nextTodoStep.outcome ? `${t(' · 完成标准：', ' · Done when: ')}${nextTodoStep.outcome}` : ''}
+                        {nextExec ? (
+                          <span className="tabular-nums">
+                            {t(
+                              ` · 开始于 ${formatTimeHHmm(nextExec.started_at, timezone)} · 预计结束 ${formatTimeHHmm(nextExec.expected_end_at, timezone)}`,
+                              ` · Started at ${formatTimeHHmm(nextExec.started_at, timezone)} · Expected end ${formatTimeHHmm(nextExec.expected_end_at, timezone)}`,
+                            )}
+                          </span>
+                        ) : nextScheduled ? (
+                          <span className="tabular-nums">
+                            {t(` · 已安排 ${scheduledLabel}`, ` · Scheduled ${scheduledLabel}`)}
+                          </span>
+                        ) : null}
+                      </div>
+                      <div className="next-actions">
+                        {nextExec ? (
+                          <>
+                            <button
+                              type="button"
+                              className="btn primary"
+                              disabled={isBusy}
+                              onClick={() =>
+                                void checkinExecutionAction.run({
+                                  executionId: nextExec.id,
+                                  version: nextExec.version,
+                                  outcome: 'done',
+                                  goalId: detailGoal.id,
+                                })
+                              }
+                            >
+                              {t('完成', 'Done')}
+                            </button>
+                            <button
+                              type="button"
+                              className="btn"
+                              disabled={isBusy}
+                              onClick={() =>
+                                void checkinExecutionAction.run({
+                                  executionId: nextExec.id,
+                                  version: nextExec.version,
+                                  outcome: 'extend',
+                                  goalId: detailGoal.id,
+                                })
+                              }
+                            >
+                              {t('延长 15 分钟', 'Extend 15m')}
+                            </button>
+                            <button
+                              type="button"
+                              className="btn"
+                              disabled={isBusy}
+                              onClick={() =>
+                                void checkinExecutionAction.run({
+                                  executionId: nextExec.id,
+                                  version: nextExec.version,
+                                  outcome: 'adjust',
+                                  goalId: detailGoal.id,
+                                })
+                              }
+                            >
+                              {t('调整 / 暂停', 'Pause / adjust')}
+                            </button>
+                          </>
+                        ) : nextScheduled ? (
+                          <>
+                            <button
+                              type="button"
+                              className="btn primary"
+                              disabled={isBusy}
+                              onClick={() =>
+                                void updateStepAction.run({
+                                  goalId: detailGoal.id,
+                                  stepId: nextTodoStep.id,
+                                  version: nextTodoStep.version,
+                                  status: 'done',
+                                })
+                              }
+                            >
+                              {t('完成', 'Done')}
+                            </button>
+                            <button
+                              type="button"
+                              className="btn"
+                              disabled={isBusy}
+                              onClick={() => void proposeAction.run(nextTodoStep.id)}
+                            >
+                              {t('调整时间', 'Reschedule')}
+                            </button>
+                            <button
+                              type="button"
+                              className="btn"
+                              disabled={isBusy}
+                              onClick={() =>
+                                void cancelEventAction.run({
+                                  eventId: nextScheduled.id,
+                                  version: nextScheduled.version,
+                                  goalId: detailGoal.id,
+                                })
+                              }
+                            >
+                              {t('取消排期', 'Cancel schedule')}
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              className="btn primary"
+                              disabled={isBusy}
+                              onClick={() =>
+                                void startStepAction.run({
+                                  event: null,
+                                  stepId: nextTodoStep.id,
+                                  version: nextTodoStep.version,
+                                  goalId: detailGoal.id,
+                                })
+                              }
+                            >
+                              {t('开始', 'Start')}
+                            </button>
+                            <button
+                              type="button"
+                              className="btn"
+                              disabled={isBusy}
+                              onClick={() =>
+                                void updateStepAction.run({
+                                  goalId: detailGoal.id,
+                                  stepId: nextTodoStep.id,
+                                  version: nextTodoStep.version,
+                                  status: 'done',
+                                })
+                              }
+                            >
+                              {t('完成', 'Done')}
+                            </button>
+                            <button
+                              type="button"
+                              className="btn"
+                              disabled={isBusy}
+                              onClick={() => void proposeAction.run(nextTodoStep.id)}
+                            >
+                              {t('找时间', 'Find time')}
+                            </button>
+                          </>
+                        )}
+                      </div>
                     </div>
-                    <div className="next-actions">
-                      <button
-                        type="button"
-                        className="btn primary"
-                        disabled={isBusy}
-                        onClick={() =>
-                          void startStepAction.run({
-                            event: nextTodoStep.scheduled_event,
-                            stepId: nextTodoStep.id,
-                            version: nextTodoStep.version,
-                            goalId: detailGoal.id,
-                          })
-                        }
-                      >
-                        {t('开始', 'Start')}
-                      </button>
-                      <button
-                        type="button"
-                        className="btn"
-                        disabled={isBusy}
-                        onClick={() =>
-                          void updateStepAction.run({
-                            goalId: detailGoal.id,
-                            stepId: nextTodoStep.id,
-                            version: nextTodoStep.version,
-                            status: 'done',
-                          })
-                        }
-                      >
-                        {t('完成', 'Done')}
-                      </button>
-                      <button
-                        type="button"
-                        className="btn"
-                        disabled={isBusy}
-                        onClick={() => void proposeAction.run(nextTodoStep.id)}
-                      >
-                        {t('找时间', 'Find time')}
-                      </button>
-                    </div>
-                  </div>
-                ) : null}
+                  );
+                })() : null}
 
                 {phases.length > 0 ? (
                   <div className="phase-section">
@@ -899,7 +1052,17 @@ export function GoalsPage({ timezone }: { timezone: string }) {
                                       {step.est_min} {t('分钟', 'min')}
                                       {step.status !== 'todo'
                                         ? ` · ${stepStatusPair ? t(stepStatusPair[0], stepStatusPair[1]) : step.status}`
-                                        : ''}
+                                        : step.active_execution
+                                          ? ` · ${t(
+                                              `进行中（预计 ${formatTimeHHmm(step.active_execution.expected_end_at, timezone)} 结束）`,
+                                              `In progress (ends ${formatTimeHHmm(step.active_execution.expected_end_at, timezone)})`,
+                                            )}`
+                                          : step.scheduled_event
+                                            ? ` · ${t(
+                                                `已安排 ${formatDateTimeLabel(step.scheduled_event.start, step.scheduled_event.end, timezone, lang)}`,
+                                                `Scheduled ${formatDateTimeLabel(step.scheduled_event.start, step.scheduled_event.end, timezone, lang)}`,
+                                              )}`
+                                            : ''}
                                       {step.outcome ? ` · ${step.outcome}` : ''}
                                     </div>
                                   </>
@@ -908,41 +1071,141 @@ export function GoalsPage({ timezone }: { timezone: string }) {
 
                               {!isEditing ? (
                                 <div className="step-actions">
-                                  {step.status === 'todo' ? (
-                                    <button
-                                      type="button"
-                                      className="inline-link-btn primary-link"
-                                      disabled={isBusy}
-                                      onClick={() => void proposeAction.run(step.id)}
-                                    >
-                                      {t('找时间', 'Find time')}
-                                    </button>
-                                  ) : null}
-                                  <button
-                                    type="button"
-                                    className="inline-link-btn"
-                                    disabled={isBusy}
-                                    onClick={() => beginEditStep(step)}
-                                  >
-                                    {t('编辑', 'Edit')}
-                                  </button>
-                                  {step.status === 'todo' ? (
-                                    <button
-                                      type="button"
-                                      className="inline-link-btn"
-                                      disabled={isBusy}
-                                      onClick={() =>
-                                        void updateStepAction.run({
-                                          goalId: detailGoal.id,
-                                          stepId: step.id,
-                                          version: step.version,
-                                          status: 'dropped',
-                                        })
-                                      }
-                                    >
-                                      {t('放弃', 'Drop')}
-                                    </button>
-                                  ) : null}
+                                  {step.status === 'todo' && step.active_execution ? (
+                                    <>
+                                      <button
+                                        type="button"
+                                        className="inline-link-btn primary-link"
+                                        disabled={isBusy}
+                                        onClick={() =>
+                                          void checkinExecutionAction.run({
+                                            executionId: step.active_execution!.id,
+                                            version: step.active_execution!.version,
+                                            outcome: 'done',
+                                            goalId: detailGoal.id,
+                                          })
+                                        }
+                                      >
+                                        {t('完成', 'Done')}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="inline-link-btn"
+                                        disabled={isBusy}
+                                        onClick={() =>
+                                          void checkinExecutionAction.run({
+                                            executionId: step.active_execution!.id,
+                                            version: step.active_execution!.version,
+                                            outcome: 'extend',
+                                            goalId: detailGoal.id,
+                                          })
+                                        }
+                                      >
+                                        {t('延长 15 分钟', 'Extend 15m')}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="inline-link-btn"
+                                        disabled={isBusy}
+                                        onClick={() =>
+                                          void checkinExecutionAction.run({
+                                            executionId: step.active_execution!.id,
+                                            version: step.active_execution!.version,
+                                            outcome: 'adjust',
+                                            goalId: detailGoal.id,
+                                          })
+                                        }
+                                      >
+                                        {t('调整 / 暂停', 'Pause / adjust')}
+                                      </button>
+                                    </>
+                                  ) : step.status === 'todo' && step.scheduled_event ? (
+                                    <>
+                                      <button
+                                        type="button"
+                                        className="inline-link-btn primary-link"
+                                        disabled={isBusy}
+                                        onClick={() =>
+                                          void updateStepAction.run({
+                                            goalId: detailGoal.id,
+                                            stepId: step.id,
+                                            version: step.version,
+                                            status: 'done',
+                                          })
+                                        }
+                                      >
+                                        {t('完成', 'Done')}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="inline-link-btn"
+                                        disabled={isBusy}
+                                        onClick={() => void proposeAction.run(step.id)}
+                                      >
+                                        {t('调整时间', 'Reschedule')}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="inline-link-btn"
+                                        disabled={isBusy}
+                                        onClick={() =>
+                                          void cancelEventAction.run({
+                                            eventId: step.scheduled_event!.id,
+                                            version: step.scheduled_event!.version,
+                                            goalId: detailGoal.id,
+                                          })
+                                        }
+                                      >
+                                        {t('取消排期', 'Cancel schedule')}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="inline-link-btn"
+                                        disabled={isBusy}
+                                        onClick={() => beginEditStep(step)}
+                                      >
+                                        {t('编辑', 'Edit')}
+                                      </button>
+                                    </>
+                                  ) : (
+                                    <>
+                                      {step.status === 'todo' ? (
+                                        <button
+                                          type="button"
+                                          className="inline-link-btn primary-link"
+                                          disabled={isBusy}
+                                          onClick={() => void proposeAction.run(step.id)}
+                                        >
+                                          {t('找时间', 'Find time')}
+                                        </button>
+                                      ) : null}
+                                      <button
+                                        type="button"
+                                        className="inline-link-btn"
+                                        disabled={isBusy}
+                                        onClick={() => beginEditStep(step)}
+                                      >
+                                        {t('编辑', 'Edit')}
+                                      </button>
+                                      {step.status === 'todo' ? (
+                                        <button
+                                          type="button"
+                                          className="inline-link-btn"
+                                          disabled={isBusy}
+                                          onClick={() =>
+                                            void updateStepAction.run({
+                                              goalId: detailGoal.id,
+                                              stepId: step.id,
+                                              version: step.version,
+                                              status: 'dropped',
+                                            })
+                                          }
+                                        >
+                                          {t('放弃', 'Drop')}
+                                        </button>
+                                      ) : null}
+                                    </>
+                                  )}
                                 </div>
                               ) : null}
                             </div>

@@ -43,7 +43,7 @@ textarea:disabled {
 }
 
 :focus-visible {
-  outline: 2px solid var(--blue);
+  outline: 1.5px solid color-mix(in srgb, var(--blue) 55%, transparent);
   outline-offset: 2px;
 }
 
@@ -1320,12 +1320,20 @@ h1 {
   width: 9px;
   height: 9px;
   border-radius: 2px;
-  background: var(--external-border);
+  background: var(--cal-manual-border);
   display: inline-block;
 }
 
 .legend-swatch.goal {
-  background: var(--blue);
+  background: var(--cal-block-border);
+}
+
+.legend-swatch.habit {
+  background: var(--cal-habit-border);
+}
+
+.legend-swatch.manual {
+  background: var(--cal-manual-border);
 }
 
 .legend-swatch.protected {
@@ -1506,12 +1514,19 @@ h1 {
   height: 24px;
 }
 
-.gc-fc .fc-event.gc-ev-block,
-.gc-fc .fc-event.gc-ev-habit {
-  background: var(--blue-soft);
+.gc-fc .fc-event.gc-ev-block {
+  background: var(--cal-block-bg);
   border: 0;
-  border-left: 2px solid var(--blue);
-  color: var(--blue-ink);
+  border-left: 3px solid var(--cal-block-border);
+  color: var(--cal-block-ink);
+  border-radius: 6px;
+}
+
+.gc-fc .fc-event.gc-ev-habit {
+  background: var(--cal-habit-bg);
+  border: 0;
+  border-left: 3px solid var(--cal-habit-border);
+  color: var(--cal-habit-ink);
   border-radius: 6px;
 }
 
@@ -1721,11 +1736,25 @@ button.habit-day {
 }
 
 .gc-fc .fc-event.gc-ev-external {
-  background: var(--external-bg);
+  background: var(--cal-manual-bg);
   border: 0;
-  border-left: 2px solid var(--external-border);
-  color: var(--external-ink);
+  border-left: 3px solid var(--cal-manual-border);
+  color: var(--cal-manual-ink);
   border-radius: 6px;
+}
+
+.gc-fc .fc-event.gc-ev-external.gc-ev-synced {
+  background: var(--external-bg);
+  background: color-mix(in srgb, var(--ev-src-color, #6b7f89) var(--cal-sync-bg-mix), var(--surface));
+  border-left: 3px solid var(--ev-src-color, #6b7f89);
+  color: color-mix(in srgb, var(--ev-src-color, #6b7f89) var(--cal-sync-ink-mix), var(--cal-sync-ink-base));
+}
+
+.gc-fc .fc-event.gc-ev-reference {
+  border-top: 1px dashed var(--line-strong);
+  border-right: 1px dashed var(--line-strong);
+  border-bottom: 1px dashed var(--line-strong);
+  opacity: 0.85;
 }
 
 .gc-fc .fc-event.gc-ev-buffer {
@@ -1736,7 +1765,7 @@ button.habit-day {
 }
 
 .gc-fc .fc-event.gc-ev-done {
-  opacity: 0.8;
+  opacity: 0.65;
 }
 
 .gc-fc .fc-bg-event.gc-protected-bg {
@@ -2124,9 +2153,9 @@ button.habit-day {
 
 .sync-connection-card {
   padding: 14px;
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--line);
   border-radius: var(--radius-sm);
-  background: var(--bg);
+  background: var(--surface);
 }
 
 .sync-collapse-toggle {

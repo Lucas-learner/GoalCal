@@ -734,6 +734,8 @@ describe('GoalCal critical interactions', () => {
     expect(screen.queryByRole('button', { name: '计划偏好' })).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: '时间偏好' }));
     expect(await screen.findByLabelText('每日目标上限（分钟）')).toHaveValue(120);
+    // Single available window cannot be deleted
+    expect(screen.getByRole('button', { name: '删除可用时间第 1 条' })).toBeDisabled();
     await user.click(screen.getByRole('button', { name: '添加保护时段' }));
     await user.selectOptions(screen.getByLabelText('保护时段第 1 条开始时间'), '22:00');
     await user.selectOptions(screen.getByLabelText('保护时段第 1 条结束时间'), '24:00');
@@ -744,13 +746,16 @@ describe('GoalCal critical interactions', () => {
     expect(screen.getByText('设置已保存', { selector: '.undo-toast span' })).toBeVisible();
     expect(screen.queryByText('已保存', { selector: '.status-banner-body' })).not.toBeInTheDocument();
 
-    // Archived goals & habits live cleanly inside Settings tab and support restore
+    // Archived goals & habits live cleanly inside Settings tab and empty state uses compact setting-row
     await user.click(screen.getByRole('button', { name: '已归档' }));
     expect(await screen.findByText('旧版阅读计划')).toBeInTheDocument();
+    const emptyArchivedHabits = screen.getByText('暂无已归档习惯');
+    expect(emptyArchivedHabits.closest('.settings-card')).not.toBeNull();
+    expect(emptyArchivedHabits.closest('.empty-state')).toBeNull();
     await user.click(screen.getByRole('button', { name: '恢复' }));
     expect(screen.getByText('「旧版阅读计划」已恢复至目标', { selector: '.undo-toast span' })).toBeVisible();
 
-    // Calendar sync (native providers + outbound feed + inbound subscription + manual ICS) & Metrics/Feedback are separated
+    // Calendar sync (native providers + outbound feed + inbound subscription + manual ICS) & Feedback are separated
     await user.click(screen.getByRole('button', { name: '日历同步' }));
     expect(await screen.findByText('原生双向同步')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: '连接 Apple / CalDAV' }));
@@ -778,9 +783,10 @@ describe('GoalCal critical interactions', () => {
     await user.click(screen.getByText('一次性导入本地 .ics 文件'));
     expect(screen.getByLabelText('选择 .ics 文件（上限 5 MB）')).toBeVisible();
     expect(screen.queryByText('近 7 天指标')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '指标与反馈' })).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: '指标与反馈' }));
-    expect(screen.getByText('近 7 天指标')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '意见反馈' }));
+    expect(screen.queryByText('近 7 天指标')).not.toBeInTheDocument();
     await user.type(screen.getByLabelText('内容'), '希望日历支持更快的拖拽定位');
     await user.click(screen.getByRole('button', { name: '提交反馈' }));
     expect(
@@ -1191,5 +1197,223 @@ describe('GoalCal critical interactions', () => {
     expect(screen.getByRole('button', { name: '关闭' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '保存' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '取消日程' })).not.toBeInTheDocument();
+  });
+
+  it('updates GoalsPage actions for scheduled and running steps and labels calendar block action as 调整时间', async () => {
+    const calls: Array<{ url: string; method: string; body?: string }> = [];
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      const method = init?.method ?? 'GET';
+      calls.push({ url, method, body: typeof init?.body === 'string' ? init.body : undefined });
+
+      if (url === '/api/v1/me') {
+        return jsonResponse({ id: 1, name: 'Yan Li', timezone: 'Asia/Shanghai' });
+      }
+      if (url === '/api/v1/goals') {
+        return jsonResponse({
+          goals: [
+            {
+              id: 10,
+              title: '上线新版官网',
+              outcome: '',
+              deadline: null,
+              status: 'active',
+              pinned: false,
+              version: 'g10',
+              progress: 0,
+              steps: [
+                {
+                  id: 101,
+                  goal_id: 10,
+                  title: '核对文案',
+                  outcome: '',
+                  est_min: 30,
+                  status: 'todo',
+                  milestone: '发布前',
+                  version: 's101',
+                  scheduled_event: {
+                    id: 901,
+                    title: '核对文案',
+                    start: '2026-11-24T08:00:00Z',
+                    end: '2026-11-24T08:30:00Z',
+                    kind: 'block',
+                    status: 'planned',
+                    step_id: 101,
+                    goal_id: 10,
+                    goal_title: '上线新版官网',
+                    version: 'ev901',
+                  },
+                  active_execution: null,
+                },
+                {
+                  id: 102,
+                  goal_id: 10,
+                  title: '部署静态资源',
+                  outcome: '',
+                  est_min: 20,
+                  status: 'todo',
+                  milestone: '发布前',
+                  version: 's102',
+                  scheduled_event: {
+                    id: 902,
+                    title: '部署静态资源',
+                    start: '2026-11-24T09:00:00Z',
+                    end: '2026-11-24T09:20:00Z',
+                    kind: 'block',
+                    status: 'planned',
+                    step_id: 102,
+                    goal_id: 10,
+                    goal_title: '上线新版官网',
+                    version: 'ev902',
+                  },
+                  active_execution: {
+                    id: 'exec-102',
+                    event_id: 902,
+                    step_id: 102,
+                    goal_title: '上线新版官网',
+                    step_title: '部署静态资源',
+                    started_at: '2026-11-24T09:00:00Z',
+                    expected_end_at: '2026-11-24T09:20:00Z',
+                    status: 'running',
+                    version: 'ex1',
+                  },
+                },
+              ],
+            },
+          ],
+        });
+      }
+      if (url === '/api/v1/goals/10') {
+        return jsonResponse({
+          id: 10,
+          title: '上线新版官网',
+          outcome: '',
+          deadline: null,
+          status: 'active',
+          pinned: false,
+          version: 'g10',
+          progress: 0,
+          steps: [
+            {
+              id: 101,
+              goal_id: 10,
+              title: '核对文案',
+              outcome: '',
+              est_min: 30,
+              status: 'todo',
+              milestone: '发布前',
+              version: 's101',
+              scheduled_event: {
+                id: 901,
+                title: '核对文案',
+                start: '2026-11-24T08:00:00Z',
+                end: '2026-11-24T08:30:00Z',
+                kind: 'block',
+                status: 'planned',
+                step_id: 101,
+                goal_id: 10,
+                goal_title: '上线新版官网',
+                version: 'ev901',
+              },
+              active_execution: null,
+            },
+            {
+              id: 102,
+              goal_id: 10,
+              title: '部署静态资源',
+              outcome: '',
+              est_min: 20,
+              status: 'todo',
+              milestone: '发布前',
+              version: 's102',
+              scheduled_event: {
+                id: 902,
+                title: '部署静态资源',
+                start: '2026-11-24T09:00:00Z',
+                end: '2026-11-24T09:20:00Z',
+                kind: 'block',
+                status: 'planned',
+                step_id: 102,
+                goal_id: 10,
+                goal_title: '上线新版官网',
+                version: 'ev902',
+              },
+              active_execution: {
+                id: 'exec-102',
+                event_id: 902,
+                step_id: 102,
+                goal_title: '上线新版官网',
+                step_title: '部署静态资源',
+                started_at: '2026-11-24T09:00:00Z',
+                expected_end_at: '2026-11-24T09:20:00Z',
+                status: 'running',
+                version: 'ex1',
+              },
+            },
+          ],
+        });
+      }
+      if (url === '/api/v1/events/901/cancel' && method === 'POST') {
+        return jsonResponse({ message: '已取消排期' });
+      }
+      if (url === '/api/v1/habits') {
+        return jsonResponse({ habits: [] });
+      }
+      if (url === '/api/v1/availability') {
+        return jsonResponse({
+          available_windows: [{ days: [0, 1, 2, 3, 4], start: '09:00', end: '18:00' }],
+          protected_windows: [],
+          preferred_windows: [],
+          buffer_minutes: 10,
+          max_goal_minutes_per_day: 120,
+          version: 'a1',
+        });
+      }
+      if (url.startsWith('/api/v1/calendar/events')) {
+        return jsonResponse({
+          events: [
+            {
+              id: 901,
+              title: '核对文案',
+              start: '2026-11-24T08:00:00Z',
+              end: '2026-11-24T08:30:00Z',
+              kind: 'block',
+              status: 'planned',
+              step_id: 101,
+              step_version: 's101',
+              goal_id: 10,
+              goal_title: '上线新版官网',
+              version: 'ev901',
+            },
+          ],
+          sync_conflicts: [],
+          habits: { items: [], weeks: [] },
+        });
+      }
+      return jsonResponse({});
+    });
+
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    const goalsRender = renderApp('/goals');
+    const nextBox = (await screen.findByText('下一步')).closest('.next-box') as HTMLElement;
+    expect(within(nextBox).queryByRole('button', { name: '开始' })).not.toBeInTheDocument();
+    expect(within(nextBox).getByRole('button', { name: '完成' })).toBeInTheDocument();
+    expect(within(nextBox).getByRole('button', { name: '调整时间' })).toBeInTheDocument();
+    await user.click(within(nextBox).getByRole('button', { name: '取消排期' }));
+    expect(calls.some((c) => c.url === '/api/v1/events/901/cancel' && c.method === 'POST')).toBe(true);
+
+    // Running step row shows execution controls instead of Find time / Start
+    expect(screen.getByText(/进行中（预计/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '延长 15 分钟' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '调整 / 暂停' })).toBeInTheDocument();
+    goalsRender.unmount();
+
+    // Calendar EventDialog shows 调整时间 instead of 换时间
+    renderApp('/calendar');
+    await user.click(await screen.findByText('核对文案'));
+    expect(await screen.findByRole('button', { name: '调整时间' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '换时间' })).not.toBeInTheDocument();
   });
 });

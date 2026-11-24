@@ -294,6 +294,8 @@ export function CalendarPage({ timezone }: { timezone: string }) {
   const fcEvents: EventInput[] = useMemo(() => {
     const normalEvents: EventInput[] = visibleEvents.map((ev) => {
       const classes = [`gc-ev-${ev.kind}`];
+      if (ev.source === 'sync') classes.push('gc-ev-synced');
+      if (ev.source === 'sync' && ev.blocks_scheduling === false) classes.push('gc-ev-reference');
       if (ev.status === 'done' || ev.status === 'skipped') classes.push('gc-ev-done');
       return {
         id: String(ev.id),
@@ -499,7 +501,7 @@ export function CalendarPage({ timezone }: { timezone: string }) {
     return (
       <div>
         <div style={{ fontWeight: 620, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {raw.sync_source_color ? (
+          {raw.sync_source_color && raw.source !== 'sync' ? (
             <span
               className="sync-color-dot"
               style={{ backgroundColor: raw.sync_source_color, marginRight: 4 }}
@@ -844,6 +846,12 @@ export function CalendarPage({ timezone }: { timezone: string }) {
               eventResize={handleEventChange}
               eventReceive={handleEventReceive}
               eventContent={renderEventContent}
+              eventDidMount={(info) => {
+                const raw = info.event.extendedProps?.rawEvent as CalendarEvent | undefined;
+                if (raw?.source === 'sync' && raw.sync_source_color) {
+                  info.el.style.setProperty('--ev-src-color', raw.sync_source_color);
+                }
+              }}
             />
           </div>
 
@@ -852,9 +860,13 @@ export function CalendarPage({ timezone }: { timezone: string }) {
               <i className="legend-swatch goal" aria-hidden="true" />
               {t('目标时间块', 'Goal block')}
             </span>
-            <span className="legend-item"><span aria-hidden="true">↻</span>{habitLabels.habit}</span>
             <span className="legend-item">
-              <i className="legend-swatch" aria-hidden="true" />
+              <i className="legend-swatch habit" aria-hidden="true" />
+              <span aria-hidden="true">↻</span>
+              {habitLabels.habit}
+            </span>
+            <span className="legend-item">
+              <i className="legend-swatch manual" aria-hidden="true" />
               {t('固定日程', 'Fixed event')}
             </span>
             <span className="legend-item">

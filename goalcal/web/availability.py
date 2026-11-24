@@ -39,6 +39,8 @@ def validate_availability(value: dict, *, lang: str = "zh") -> dict:
             if minute(w.get("start"), lang=lang) >= minute(w.get("end"), end=True, lang=lang):
                 raise ValueError(pick(lang, "时段结束必须晚于开始", "Window end must be later than start"))
             clean.append({"days": sorted(days), "start": w["start"], "end": w["end"]})
+        if name == "available_windows" and not clean:
+            raise ValueError(pick(lang, "至少保留 1 个可用时段", "Keep at least 1 available window"))
         out[name] = clean
     for name, low, high in (("buffer_minutes", 0, 120), ("max_goal_minutes_per_day", 1, 1440)):
         n = value.get(name)

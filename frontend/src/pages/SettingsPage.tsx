@@ -7,18 +7,19 @@ import type { Availability, FeedbackCategory, Goal, Habit, User } from '../api/t
 import { CalendarSyncSection } from '../components/CalendarSyncSection';
 import { LogOutIcon } from '../components/Icons';
 import { Modal } from '../components/Modal';
-import { EmptyState, ErrorBanner, SkeletonCard } from '../components/StateFeedback';
+import { ErrorBanner, SkeletonCard } from '../components/StateFeedback';
 import { WindowGroupEditor, validateWindowGroup } from '../components/TimePreferencesEditor';
 import { type LangPreference, useI18n } from '../i18n';
 import { useIdempotentAction } from '../lib/useIdempotentMutation';
 import { useAppState } from '../state/AppStateContext';
 import { type ThemePreference, useTheme } from '../theme';
 
-type SettingsSectionId = 'account' | 'schedule' | 'archived' | 'sync' | 'metrics';
+type SettingsSectionId = 'account' | 'schedule' | 'archived' | 'sync' | 'feedback';
 
-const SETTINGS_SECTIONS: readonly SettingsSectionId[] = ['account', 'schedule', 'archived', 'sync', 'metrics'];
+const SETTINGS_SECTIONS: readonly SettingsSectionId[] = ['account', 'schedule', 'archived', 'sync', 'feedback'];
 
 function parseSettingsSection(raw: string | null): SettingsSectionId {
+  if (raw === 'metrics') return 'feedback';
   if (raw && (SETTINGS_SECTIONS as readonly string[]).includes(raw)) {
     return raw as SettingsSectionId;
   }
@@ -31,11 +32,6 @@ const FEEDBACK_CATEGORIES: Array<{ value: FeedbackCategory; zh: string; en: stri
   { value: '速度或连接问题', zh: '速度或连接问题', en: 'Speed or connection' },
   { value: '建议或其他', zh: '建议或其他', en: 'Suggestion or other' },
 ];
-
-function formatPct(value: number | null | undefined): string {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
-  return `${Math.round(value * 100)}%`;
-}
 
 export function SettingsPage({ user }: { user: User | undefined }) {
   const queryClient = useQueryClient();
@@ -66,12 +62,6 @@ export function SettingsPage({ user }: { user: User | undefined }) {
     queryKey: queryKeys.availability,
     queryFn: api.getAvailability,
     enabled: section === 'schedule',
-  });
-
-  const metricsQuery = useQuery({
-    queryKey: queryKeys.metrics,
-    queryFn: api.getMetrics,
-    enabled: section === 'metrics',
   });
 
   const archivedGoalsQuery = useQuery({
@@ -259,7 +249,7 @@ export function SettingsPage({ user }: { user: User | undefined }) {
     setValidationError(null);
 
     const err =
-      validateWindowGroup(t('可用时间', 'Available windows'), draftAvail.available_windows, t) ??
+      validateWindowGroup(t('可用时间', 'Available windows'), draftAvail.available_windows, t, 1) ??
       validateWindowGroup(t('保护时段', 'Protected windows'), draftAvail.protected_windows, t) ??
       validateWindowGroup(t('偏好时段', 'Preferred windows'), draftAvail.preferred_windows, t);
 
@@ -309,10 +299,6 @@ export function SettingsPage({ user }: { user: User | undefined }) {
     void feedbackAction.run({ category: feedbackCategory, message: trimmed });
   };
 
-  const metrics = metricsQuery.data;
-  const acceptanceRate = metrics?.acceptance_rate ?? metrics?.acceptance ?? null;
-  const recoveryRate = metrics?.recovery_rate_72h ?? metrics?.recovery_72h ?? null;
-  const progressRate = metrics?.progress_rate ?? metrics?.progress ?? null;
   const archivedGoals = (archivedGoalsQuery.data?.goals ?? []).filter((g) => g.status === 'archived');
   const archivedHabits = (archivedHabitsQuery.data?.habits ?? []).filter((h) => h.status === 'archived');
   const isArchivedBusy =
@@ -338,7 +324,7 @@ export function SettingsPage({ user }: { user: User | undefined }) {
             { id: 'schedule' as const, label: t('时间偏好', 'Time Preferences') },
             { id: 'archived' as const, label: t('已归档', 'Archived') },
             { id: 'sync' as const, label: t('日历同步', 'Calendar Sync') },
-            { id: 'metrics' as const, label: t('指标与反馈', 'Metrics & Feedback') },
+            { id: 'feedback' as const, label: t('意见反馈', 'Feedback') },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -503,9 +489,10 @@ export function SettingsPage({ user }: { user: User | undefined }) {
                     <WindowGroupEditor
                       groupKey="avail"
                       title={t('可用时间', 'Available windows')}
-                      emptyNotice={t('未配置（不参与排期）', 'None configured (no slots suggested)')}
+                      emptyNotice={t('至少保留 1 个可用时段', 'Keep at least 1 available window')}
                       defaultWindow={{ days: [0, 1, 2, 3, 4], start: '09:00', end: '18:00' }}
                       windows={draftAvail.available_windows}
+                      minWindows={1}
                       disabled={saveAction.isPending}
                       onChange={(next) => {
                         setDirty(true);
@@ -588,7 +575,13 @@ export function SettingsPage({ user }: { user: User | undefined }) {
                   onRetry={() => void archivedGoalsQuery.refetch()}
                 />
               ) : archivedGoals.length === 0 ? (
-                <EmptyState title={t('暂无已归档目标', 'No archived goals')} />
+                <div className="card-flat settings-card">
+                  <div className="setting-row">
+                    <div className="setting-name muted" style={{ fontWeight: 400 }}>
+                      {t('暂无已归档目标', 'No archived goals')}
+                    </div>
+                  </div>
+                </div>
               ) : (
                 <div className="card-flat settings-card">
                   {archivedGoals.map((goal) => {
@@ -641,7 +634,13 @@ export function SettingsPage({ user }: { user: User | undefined }) {
                   onRetry={() => void archivedHabitsQuery.refetch()}
                 />
               ) : archivedHabits.length === 0 ? (
-                <EmptyState title={t('暂无已归档习惯', 'No archived habits')} />
+                <div className="card-flat settings-card">
+                  <div className="setting-row">
+                    <div className="setting-name muted" style={{ fontWeight: 400 }}>
+                      {t('暂无已归档习惯', 'No archived habits')}
+                    </div>
+                  </div>
+                </div>
               ) : (
                 <div className="card-flat settings-card">
                   {archivedHabits.map((habit) => (
@@ -692,38 +691,10 @@ export function SettingsPage({ user }: { user: User | undefined }) {
             <CalendarSyncSection timezone={user?.timezone || 'UTC'} />
           ) : null}
 
-          {section === 'metrics' ? (
-            <>
-              <section className="settings-section" aria-label={t('近 7 天指标', 'Last 7 days')}>
-                <div className="settings-section-title">{t('近 7 天指标', 'Last 7 days')}</div>
-                {metricsQuery.isLoading ? (
-                  <SkeletonCard label={t('加载中', 'Loading')} />
-                ) : metricsQuery.isError ? (
-                  <ErrorBanner
-                    error={metricsQuery.error}
-                    onRetry={() => void metricsQuery.refetch()}
-                  />
-                ) : (
-                  <div className="metrics-grid">
-                    <div className="card-flat metric-card">
-                      <div className="metric-label">{t('建议接受率', 'Proposal acceptance')}</div>
-                      <div className="metric-value">{formatPct(acceptanceRate)}</div>
-                    </div>
-                    <div className="card-flat metric-card">
-                      <div className="metric-label">{t('72h 恢复率', '72h recovery')}</div>
-                      <div className="metric-value">{formatPct(recoveryRate)}</div>
-                    </div>
-                    <div className="card-flat metric-card">
-                      <div className="metric-label">{t('推进率', 'Progress rate')}</div>
-                      <div className="metric-value">{formatPct(progressRate)}</div>
-                    </div>
-                  </div>
-                )}
-              </section>
-
-              <section className="settings-section" aria-label={t('意见反馈', 'Feedback')}>
-                <div className="settings-section-title">{t('意见反馈', 'Feedback')}</div>
-                <form className="card-flat" style={{ padding: 18 }} onSubmit={handleSubmitFeedback} noValidate>
+          {section === 'feedback' ? (
+            <section className="settings-section" aria-label={t('意见反馈', 'Feedback')}>
+              <div className="settings-section-title">{t('意见反馈', 'Feedback')}</div>
+              <form className="card-flat" style={{ padding: 18 }} onSubmit={handleSubmitFeedback} noValidate>
                   <ErrorBanner error={feedbackAction.actionError} />
                   {feedbackLocalError ? (
                     <div className="field-error" role="alert" style={{ marginBottom: 12 }}>
@@ -775,7 +746,6 @@ export function SettingsPage({ user }: { user: User | undefined }) {
                   </button>
                 </form>
               </section>
-            </>
           ) : null}
         </div>
       </div>

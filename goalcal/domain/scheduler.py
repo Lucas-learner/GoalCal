@@ -51,7 +51,7 @@ class Preferences:
     max_goal_minutes_per_day: int = 120
     buffer_minutes: int = 10
     lunch: tuple[int, int] = (12, 13)
-    preferred_windows: tuple[tuple[int, int], ...] = ((9, 12), (14, 18), (20, 22))
+    preferred_windows: tuple[tuple[int, int], ...] = ((9, 12), (14, 18))
     granularity: int = 15
     web_availability: dict | None = None
 

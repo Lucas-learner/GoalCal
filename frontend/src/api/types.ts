@@ -19,6 +19,7 @@ export interface Step {
   milestone: string;
   version: string;
   scheduled_event?: CalendarEvent | null;
+  active_execution?: Execution | null;
   energy?: number;
   kind?: string;
   seq?: number;

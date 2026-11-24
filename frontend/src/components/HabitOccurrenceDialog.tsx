@@ -290,7 +290,7 @@ export function HabitOccurrenceDialog({ occurrence, week, onClose, startInEditor
           {canSchedule && (
             <>
               <button className="btn" type="button" disabled={operation.isPending} onClick={() => { setShowCustomTime(false); setEditing(true); }}>
-                {start ? t('换时间', 'Reschedule') : t('安排时间', 'Schedule')}
+                {start ? t('调整时间', 'Reschedule') : t('安排时间', 'Schedule')}
               </button>
               {start && <button className="btn" type="button" disabled={operation.isPending} onClick={() => act('schedule')}>
                 {t('取消排期', 'Cancel schedule')}

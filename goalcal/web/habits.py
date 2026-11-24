@@ -134,10 +134,10 @@ class HabitService:
         self.session.flush()
         return row
 
-    def _reservation(self, habit, row, config, start, end):
+    def _reservation(self, habit, row, config, start, end, *, strict=True):
         event = self._event(row)
         self._same_day(habit, row.day, end)
-        self.web._slot(start, end, ignore=(event.id,) if event else (), goal_block=False, habit_block=True)
+        self.web._slot(start, end, ignore=(event.id,) if event else (), goal_block=False, habit_block=True, strict=strict)
         if event is None:
             event = Event(user_id=self.uid, kind="habit", source="habit",
                           title=config["title"], start_utc=_naive(start), end_utc=_naive(end))
@@ -710,7 +710,9 @@ class HabitService:
             minutes = _integer(body.get("minutes", config["est_min"]), 5, 480, self.t("分钟", "Minutes"), lang=self.web.lang)
             end = self.now + timedelta(minutes=minutes)
             row.day, row.status, row.custom, row.reason = day, "pending", True, None
-            self._reservation(habit, row, config, self.now, end)
+            ignore_ids = (row.event_id,) if row.event_id else ()
+            self._reservation(habit, row, config, self.now, end, strict=False)
+            note = self.web._slot_override_note(self.now, end, ignore=ignore_ids)
             row.revision += 1
             event = self._event(row)
             execution = WebExecution(
@@ -722,7 +724,7 @@ class HabitService:
             self.session.flush()
             return {
                 "message": self.t(f"开始习惯「{config['title']}」，{self.web._when(self.now, end)}",
-                                  f'Started habit "{config["title"]}", {self.web._when(self.now, end)}'),
+                                  f'Started habit "{config["title"]}", {self.web._when(self.now, end)}') + note,
                 "event": self.web.serialize_event(event),
                 "execution": self.web.serialize_execution(execution),
                 "occurrence": self._occurrence(habit, rules, row.day, row),
@@ -730,6 +732,7 @@ class HabitService:
         if row is None:
             row = self._new_record(habit, day, config["mode"])
         event = self._event(row)
+        note = ""
         if action == "schedule":
             start = parse_datetime(body["start"], lang=self.web.lang) if body.get("start") else None
             target = self._date(body["target_date"]) if body.get("target_date") else day
@@ -750,7 +753,10 @@ class HabitService:
             if start:
                 minutes = _integer(body.get("minutes", config["est_min"]), 5, 480, self.t("分钟", "Minutes"),
                                    lang=self.web.lang)
-                self._reservation(habit, row, config, start, start + timedelta(minutes=minutes))
+                end = start + timedelta(minutes=minutes)
+                ignore_ids = (row.event_id,) if row.event_id else ()
+                self._reservation(habit, row, config, start, end, strict=False)
+                note = self.web._slot_override_note(start, end, ignore=ignore_ids)
             else:
                 self._withdraw(row, unlink=True)
         elif action == "cancel":
@@ -784,7 +790,7 @@ class HabitService:
             "schedule": ("习惯安排已更新", "Habit schedule updated"), "cancel": ("已取消这次安排", "Session cancelled"),
             "restore": ("已撤销完成", "Completion undone"),
         }
-        return {"message": self.t(*messages[action]), "operation_id": operation_id,
+        return {"message": self.t(*messages[action]) + note, "operation_id": operation_id,
                 "occurrence": self._occurrence(habit, rules, row.day, row)}
 
     def undo(self, operation, payload):

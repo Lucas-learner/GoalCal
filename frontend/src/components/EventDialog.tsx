@@ -285,7 +285,7 @@ export function EventDialog({ event, timezone, onClose }: EventDialogProps) {
                 disabled={isBusy}
                 onClick={() => void proposeAction.run(event.step_id!)}
               >
-                {proposeAction.isPending ? t('查找中…', 'Finding…') : t('换时间', 'Reschedule')}
+                {proposeAction.isPending ? t('查找中…', 'Finding…') : t('调整时间', 'Reschedule')}
               </button>
             ) : null}
             <button

@@ -167,10 +167,13 @@ class Service:
 
     def serialize_step(self, step: Step) -> dict:
         scheduled = next(iter(self._open_step_events(step.id)), None)
+        running = self._running()
+        active_exec = running if running and running.step_id == step.id else None
         return {"id": step.id, "goal_id": step.goal_id, "title": step.title,
                 "outcome": step.outcome, "est_min": step.est_min, "status": step.status,
                 "milestone": step.milestone, "version": version_token(step),
-                "scheduled_event": self.serialize_event(scheduled) if scheduled else None}
+                "scheduled_event": self.serialize_event(scheduled) if scheduled else None,
+                "active_execution": self.serialize_execution(active_exec) if active_exec else None}
 
     def serialize_goal(self, goal: Goal) -> dict:
         return {"id": goal.id, "title": goal.title, "outcome": goal.outcome,
@@ -301,7 +304,7 @@ class Service:
         if end <= start or end - start > timedelta(days=7):
             raise ApiError("validation", self._t("结束须晚于开始，单个日程不能超过七天", "End time must be after start time and span at most 7 days"), 422)
 
-    def _slot(self, start, end, *, ignore=(), step=None, goal=None, goal_block=True, habit_block=False):
+    def _slot(self, start, end, *, ignore=(), step=None, goal=None, goal_block=True, habit_block=False, strict=True):
         self._validate_interval(start, end)
         start, end = _utc(start), _utc(end)
         config = self._availability()
@@ -309,12 +312,14 @@ class Service:
         if goal_block or habit_block:
             if start < self.now:
                 raise ApiError("invalid_time", self._t("执行时间不能在过去", "Execution time cannot be in the past"))
-            if not allows(local_start, local_end, config):
+            if strict and not allows(local_start, local_end, config):
                 raise ApiError("outside_availability", self._t("该时间不在可用时段，或与保护时段重叠", "That time is outside your available windows or overlaps a protected window"))
             if goal is None and step is not None:
                 goal = self._active_step(step)
-            if goal and goal.deadline and local_end > datetime.combine(goal.deadline + timedelta(days=1), time(), self.zone):
+            if strict and goal and goal.deadline and local_end > datetime.combine(goal.deadline + timedelta(days=1), time(), self.zone):
                 raise ApiError("deadline", self._t("该时间超过目标截止日期", "That time passes the goal deadline"))
+        if not strict:
+            return
         buffer = timedelta(minutes=config["buffer_minutes"])
         occupied = [
             e for e in self._events()
@@ -332,6 +337,24 @@ class Service:
                           for e in occupied if e.kind == "block" and _utc(e.end_utc) > day_start and _utc(e.start_utc) < day_end)
             if minutes + (end - start).total_seconds() / 60 > config["max_goal_minutes_per_day"]:
                 raise ApiError("daily_limit", self._t("该日目标时间已达上限", "Daily goal-time limit reached for that day"))
+
+    def _slot_override_note(self, start, end, *, ignore=(), check_availability=True) -> str:
+        start, end = _utc(start), _utc(end)
+        config = self._availability()
+        local_start, local_end = start.astimezone(self.zone), end.astimezone(self.zone)
+        outside = check_availability and not allows(local_start, local_end, config)
+        overlaps = any(
+            start < _utc(e.end_utc) and end > _utc(e.start_utc)
+            for e in self._events()
+            if e.id not in ignore and e.status not in ("skipped", "missed") and self._blocks_scheduling(e)
+        )
+        if outside and overlaps:
+            return self._t("（不在可用时段且与已有日程重合）", " (outside available hours & overlaps existing event)")
+        if outside:
+            return self._t("（不在可用时段）", " (outside available hours)")
+        if overlaps:
+            return self._t("（与已有日程重合）", " (overlaps existing event)")
+        return ""
 
     def _ui_pref(self, key: str, allowed: tuple[str, ...]) -> str:
         prefs = memory.list_preferences(self.session, self.user_id, scope="ui", now=self.now_naive)
@@ -887,11 +910,12 @@ class Service:
         start, end = parse_datetime(body.get("start"), lang=self.lang), parse_datetime(body.get("end"), lang=self.lang)
         step = self._get(Step, event.step_id) if event.step_id else None
         goal = self._active_step(step) if step else None
-        self._slot(start, end, ignore=(event.id,), step=step, goal=goal, goal_block=event.kind == "block")
+        self._slot(start, end, ignore=(event.id,), step=step, goal=goal, goal_block=event.kind == "block", strict=False)
+        note = self._slot_override_note(start, end, ignore=(event.id,), check_availability=event.kind == "block")
         before = self._event_snapshot(event)
         event.start_utc, event.end_utc, event.status = _naive(start), _naive(end), "moved"
         operation = self._operation([(event, before)])
-        return {"message": self._t(f"已调整「{event.title}」：{self._when(start, end)}", f'Rescheduled "{event.title}": {self._when(start, end)}'), "event": self.serialize_event(event), "operation_id": operation}
+        return {"message": self._t(f"已调整「{event.title}」：{self._when(start, end)}", f'Rescheduled "{event.title}": {self._when(start, end)}') + note, "event": self.serialize_event(event), "operation_id": operation}
 
     def cancel_event(self, id, body):
         event = self._editable_event(id, body)
@@ -951,7 +975,9 @@ class Service:
             raise ApiError("invalid_time", self._t("请选择将来的开始时间", "Please choose a future start time"), 422)
         end = start + timedelta(minutes=step.est_min)
         old = self._open_step_events(step.id)
-        self._slot(start, end, ignore={e.id for e in old}, step=step, goal=goal)
+        ignore_ids = {e.id for e in old}
+        self._slot(start, end, ignore=ignore_ids, step=step, goal=goal, strict=False)
+        note = self._slot_override_note(start, end, ignore=ignore_ids)
         changes = [(e, self._event_snapshot(e)) for e in old]
         self._soft_cancel(old)
         event = Event(user_id=self.user_id, title=step.title[:200],
@@ -962,7 +988,7 @@ class Service:
         changes.append((event, None))
         self.supersede_proposals()
         operation = self._operation(changes)
-        return {"message": self._t(f"已安排「{goal.title}」：{step.title}，{self._when(start, end)}", f'Scheduled "{goal.title}" · {step.title}, {self._when(start, end)}'),
+        return {"message": self._t(f"已安排「{goal.title}」：{step.title}，{self._when(start, end)}", f'Scheduled "{goal.title}" · {step.title}, {self._when(start, end)}') + note,
                 "event": self.serialize_event(event), "goal": self.serialize_goal(goal),
                 "operation_id": operation}
 
@@ -1078,7 +1104,9 @@ class Service:
             raise ApiError("already_scheduled", self._t("该步骤已有日程，请从日程开始", "This step is already scheduled; start from its event"))
         duration = (_utc(event.end_utc) - _utc(event.start_utc)) if event else timedelta(minutes=step.est_min)
         end = self.now + duration
-        self._slot(self.now, end, ignore=(event.id,) if event else (), step=step, goal=goal)
+        ignore_ids = (event.id,) if event else ()
+        self._slot(self.now, end, ignore=ignore_ids, step=step, goal=goal, strict=False)
+        note = self._slot_override_note(self.now, end, ignore=ignore_ids)
         if event is None:
             event = Event(user_id=self.user_id, title=step.title[:200], kind="block", source="web", status="planned", step_id=step.id)
             self.session.add(event)
@@ -1088,7 +1116,7 @@ class Service:
                                  status="running", started_at=self.now_naive, expected_end_at=_naive(end), version=1)
         self.session.add(execution)
         self.session.flush()
-        return {"message": self._t(f"开始「{goal.title}」：{step.title}，{self._when(self.now, end)}", f'Started "{goal.title}" · {step.title}, {self._when(self.now, end)}'), "event": self.serialize_event(event),
+        return {"message": self._t(f"开始「{goal.title}」：{step.title}，{self._when(self.now, end)}", f'Started "{goal.title}" · {step.title}, {self._when(self.now, end)}') + note, "event": self.serialize_event(event),
                 "execution": self.serialize_execution(execution)}
 
     def start_event(self, id, body):
@@ -1123,13 +1151,10 @@ class Service:
                 end = _utc(execution.expected_end_at) + timedelta(minutes=15)
                 if end <= self.now:
                     raise ApiError("invalid_time", self._t("执行已超时，请调整或完成后重新开始", "Session is past due; wrap up or adjust and restart"))
-                config = self._availability()
-                if not allows(_utc(event.start_utc).astimezone(self.zone), end.astimezone(self.zone), config):
-                    raise ApiError("outside_availability", self._t("延长时间超出可用时段", "Extending exceeds your available window"))
                 actual_now = self.now
                 try:
                     self.now = _utc(event.start_utc)
-                    self._slot(self.now, end, ignore=(event.id,), goal_block=False, habit_block=True)
+                    self._slot(self.now, end, ignore=(event.id,), goal_block=False, habit_block=True, strict=False)
                 finally:
                     self.now = actual_now
                 execution.expected_end_at, event.end_utc = _naive(end), _naive(end)
@@ -1160,14 +1185,11 @@ class Service:
             # Keep the original interval, but allow its already elapsed portion.
             if end <= self.now:
                 raise ApiError("invalid_time", self._t("执行已超时，请调整或完成后重新开始", "Session is past due; wrap up or adjust and restart"))
-            config = self._availability()
-            if not allows(_utc(event.start_utc).astimezone(self.zone), end.astimezone(self.zone), config):
-                raise ApiError("outside_availability", self._t("延长时间超出可用时段", "Extending exceeds your available window"))
             # Revalidate whole interval with original start by temporarily evaluating at that instant.
             actual_now = self.now
             try:
                 self.now = _utc(event.start_utc)
-                self._slot(self.now, end, ignore=(event.id,), step=step, goal=goal)
+                self._slot(self.now, end, ignore=(event.id,), step=step, goal=goal, strict=False)
             finally:
                 self.now = actual_now
             execution.expected_end_at, event.end_utc = _naive(end), _naive(end)

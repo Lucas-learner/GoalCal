@@ -70,8 +70,8 @@ def test_timed_defaults_respect_existing_slots_and_goal_budget(service):
     assert service.habits.detail(habit["id"], {"date": "2026-11-26"})["occurrence"]["start"].endswith("11:00:00Z")
     goal = create_goal(service.session, service.user_id, "Run", step_defs=[{"title": "Train", "est_min": 30}])
     step = service.serialize_step(goal.steps[0])
-    with pytest.raises(ApiError, match="冲突"):
-        service.schedule_step(step["id"], {"version": step["version"], "start": "2026-11-17T11:00:00Z"})
+    overlapped = service.schedule_step(step["id"], {"version": step["version"], "start": "2026-11-17T11:00:00Z"})
+    assert "重合" in overlapped["message"]
     assert service.schedule_step(step["id"], {"version": step["version"], "start": "2026-11-17T12:00:00Z"})
 
 

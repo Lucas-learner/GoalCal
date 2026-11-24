@@ -205,17 +205,21 @@ def test_availability_defaults_preserve_old_preferences(session, service):
     config = service.preferences()
     assert config["available_windows"][0]["start"] == "10:00"
     assert config["protected_windows"][0]["start"] == "13:00"
-    availability(service, available_windows=[])
+    availability(service, available_windows=[{"days": [1], "start": "09:00", "end": "12:00"}])
     assert get_scheduler_preferences(session, service.user_id).day_start_hour == 10
     assert session.scalar(select(UserPreference).where(UserPreference.key == "unrelated")).value == '{"keep": true}'
 
 
-def test_empty_available_means_no_slots_new_and_legacy(session, service, goal):
-    availability(service, available_windows=[])
-    assert service.propose(goal.steps[0].id, {})["candidates"] == []
+def test_empty_available_rejected_in_prefs_and_start_allows_manual_override(session, service, goal):
+    changed = service.preferences()
+    assert_error("validation", lambda: service.save_preferences({**changed, "available_windows": []}))
+    availability(service, available_windows=[{"days": [1], "start": "18:00", "end": "19:00"}])
+    assert service.propose(goal.steps[0].id, {"window_start": "2026-11-17T01:00:00Z", "window_end": "2026-11-17T08:00:00Z"})["candidates"] == []
     prefs = get_scheduler_preferences(session, service.user_id)
-    assert scheduler.propose(scheduler.Requirement(), NOW, [], prefs=prefs) == []
-    assert_error("outside_availability", lambda: service.start_step(goal.steps[0].id, {"version": version_token(goal.steps[0])}))
+    assert scheduler.propose(scheduler.Requirement(), NOW, [], prefs=prefs, days=0) == []
+    started = service.start_step(goal.steps[0].id, {"version": version_token(goal.steps[0])})
+    assert "不在可用时段" in started["message"]
+    assert service.serialize_step(goal.steps[0])["active_execution"]["id"] == started["execution"]["id"]
 
 
 def test_weekday_minute_protection_and_adjacent_windows(session, service, goal):
@@ -249,7 +253,8 @@ def test_daily_limit_counts_earlier_work(session, service, goal):
     session.flush()
     result = service.propose(goal.steps[0].id, {"window_start": "2026-11-17T01:00:00Z", "window_end": "2026-11-17T14:00:00Z"})
     assert result["candidates"] == []
-    assert_error("daily_limit", lambda: service.start_step(goal.steps[0].id, {"version": version_token(goal.steps[0])}))
+    started = service.start_step(goal.steps[0].id, {"version": version_token(goal.steps[0])})
+    assert started["execution"]["status"] == "running"
 
 
 def test_availability_version_and_validation(service):
@@ -287,27 +292,34 @@ def test_start_scheduled_event_uses_actual_now(session, service, goal):
     assert_error("already_started", lambda: service.start_event(event["id"], {"version": result["event"]["version"]}))
 
 
-def test_extend_revalidates_conflict_and_adjust(session, service, goal):
+def test_extend_allows_overlap_and_adjust(session, service, goal):
     started = service.start_step(goal.steps[0].id, {"version": version_token(goal.steps[0])})
     execution = started["execution"]
     service.create_event({"title": "下一场会议", "start": "2026-11-17T02:00:00Z", "end": "2026-11-17T03:00:00Z"})
     later = Service(session, service.user_id, service.tz, NOW + timedelta(minutes=40))
-    assert_error("schedule_conflict", lambda: later.checkin_execution(execution["id"], {"version": execution["version"], "outcome": "extend"}))
-    assert session.get(WebExecution, execution["id"]).version == 1
-    adjusted = later.checkin_execution(execution["id"], {"version": execution["version"], "outcome": "adjust"})
+    extended = later.checkin_execution(execution["id"], {"version": execution["version"], "outcome": "extend"})
+    assert extended["execution"]["expected_end_at"] == "2026-11-17T02:00:00Z"
+    assert session.get(WebExecution, execution["id"]).version == 2
+    adjusted = later.checkin_execution(execution["id"], {"version": extended["execution"]["version"], "outcome": "adjust"})
     assert adjusted["execution"]["status"] == "adjusted"
     assert adjusted["event"]["status"] == "partial"
     assert goal.steps[0].status == "todo"
+    assert service.serialize_step(goal.steps[0])["active_execution"] is None
 
 
-def test_extend_success_and_window_rejection(session, service, goal):
+def test_extend_and_manual_schedule_work_outside_availability(session, service, goal):
     started = service.start_step(goal.steps[0].id, {"version": version_token(goal.steps[0])})
     execution = started["execution"]
     later = Service(session, service.user_id, service.tz, NOW + timedelta(minutes=40))
     extended = later.checkin_execution(execution["id"], {"version": execution["version"], "outcome": "extend"})
     assert extended["execution"]["expected_end_at"] == "2026-11-17T02:00:00Z"
     availability(service, available_windows=[{"days": [1], "start": "09:00", "end": "10:00"}])
-    assert_error("outside_availability", lambda: later.checkin_execution(execution["id"], {"version": extended["execution"]["version"], "outcome": "extend"}))
+    extended_again = later.checkin_execution(execution["id"], {"version": extended["execution"]["version"], "outcome": "extend"})
+    assert extended_again["execution"]["expected_end_at"] == "2026-11-17T02:15:00Z"
+    scheduled = later.schedule_step(goal.steps[1].id, {"version": version_token(goal.steps[1]), "start": "2026-11-17T06:00:00Z"})
+    assert "不在可用时段" in scheduled["message"]
+    moved = later.move_event(scheduled["event"]["id"], {"version": scheduled["event"]["version"], "start": "2026-11-17T07:00:00Z", "end": "2026-11-17T07:30:00Z"})
+    assert "不在可用时段" in moved["message"]
 
 
 def test_overdue_checkin_and_execution_dedupe(session, service, goal):

@@ -13,7 +13,11 @@ export function validateWindowGroup(
   label: string,
   windows: TimeWindow[],
   t: (zh: string, en: string) => string,
+  minWindows = 0,
 ): string | null {
+  if (windows.length < minWindows) {
+    return t(`${label}至少保留 ${minWindows} 个时段。`, `${label}: keep at least ${minWindows} window.`);
+  }
   for (let i = 0; i < windows.length; i++) {
     const w = windows[i];
     if (!w.days || w.days.length === 0) {
@@ -63,6 +67,7 @@ export function WindowGroupEditor({
   emptyNotice,
   defaultWindow,
   windows,
+  minWindows = 0,
   disabled,
   onChange,
 }: {
@@ -71,6 +76,7 @@ export function WindowGroupEditor({
   emptyNotice: string;
   defaultWindow: TimeWindow;
   windows: TimeWindow[];
+  minWindows?: number;
   disabled: boolean;
   onChange: (next: TimeWindow[]) => void;
 }) {
@@ -83,6 +89,7 @@ export function WindowGroupEditor({
   };
 
   const removeWindow = (idx: number) => {
+    if (windows.length <= minWindows) return;
     onChange(windows.filter((_, i) => i !== idx));
   };
 
@@ -192,8 +199,12 @@ export function WindowGroupEditor({
                     type="button"
                     className="window-remove-btn"
                     aria-label={t(`删除${title}第 ${idx + 1} 条`, `Remove ${title} #${idx + 1}`)}
-                    title={t('删除', 'Remove')}
-                    disabled={disabled}
+                    title={
+                      windows.length <= minWindows
+                        ? t('至少保留 1 个时段', 'Keep at least 1 window')
+                        : t('删除', 'Remove')
+                    }
+                    disabled={disabled || windows.length <= minWindows}
                     onClick={() => removeWindow(idx)}
                   >
                     <svg viewBox="0 0 16 16" aria-hidden="true">
