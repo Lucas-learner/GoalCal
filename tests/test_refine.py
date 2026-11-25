@@ -68,8 +68,11 @@ def _outline_payload():
         "steps": [
             {"milestone": "范围与诊断", "title": "收集考纲和往年题", "outcome": "资料清单", "est_min": 25, "energy": 0, "kind": "admin"},
             {"milestone": "范围与诊断", "title": "按主题标记会/不熟/不会", "outcome": "诊断表", "est_min": 30, "energy": 1, "kind": "deep"},
-            {"milestone": "范围与诊断", "title": "多余的第一步", "outcome": "", "est_min": 30, "energy": 1, "kind": "deep"},
-            {"milestone": "范围与诊断", "title": "多余的第二步", "outcome": "", "est_min": 30, "energy": 1, "kind": "deep"},
+            {"milestone": "范围与诊断", "title": "整理高频考点清单", "outcome": "考点清单", "est_min": 30, "energy": 1, "kind": "deep"},
+            {"milestone": "第一轮复习", "title": "精读第一章核心概念", "outcome": "概念笔记", "est_min": 35, "energy": 2, "kind": "deep"},
+            {"milestone": "第一轮复习", "title": "完成第一章课后基础题", "outcome": "习题记录", "est_min": 30, "energy": 1, "kind": "deep"},
+            {"milestone": "第一轮复习", "title": "整理第一章错题与疑难", "outcome": "错题清单", "est_min": 25, "energy": 1, "kind": "deep"},
+            {"milestone": "练习与错题", "title": "超出上限的第七步", "outcome": "", "est_min": 30, "energy": 1, "kind": "deep"},
         ],
     }
 
@@ -85,9 +88,10 @@ def test_generate_outline_plan_returns_outline_and_first_batch(monkeypatch):
     assert plan is not None
     outline, steps = plan
     assert outline == ["范围与诊断", "第一轮复习", "练习与错题", "模拟与查漏"]
-    assert len(steps) == 3  # 首批最多 3 步
-    assert all(s["milestone"] == "范围与诊断" for s in steps)
-    assert [s["seq"] for s in steps] == [1, 2, 3]
+    assert len(steps) == 6  # 首批最多 6 步（短期全展开 / 长期前 1-2 阶段）
+    assert [s["milestone"] for s in steps[:3]] == ["范围与诊断"] * 3
+    assert [s["milestone"] for s in steps[3:]] == ["第一轮复习"] * 3
+    assert [s["seq"] for s in steps] == [1, 2, 3, 4, 5, 6]
 
 
 def test_generate_outline_plan_rejects_short_outline(monkeypatch):
@@ -112,8 +116,8 @@ def test_create_goal_with_llm_outline_stores_first_batch_only(session, user, mon
 
     assert source == "llm"
     assert goal_svc.outline_phases(goal) == ["范围与诊断", "第一轮复习", "练习与错题", "模拟与查漏"]
-    assert len(goal.steps) == 3
-    assert {s.milestone for s in goal.steps} == {"范围与诊断"}
+    assert len(goal.steps) == 6
+    assert {s.milestone for s in goal.steps} == {"范围与诊断", "第一轮复习"}
 
 
 def test_create_goal_template_fallback_also_rolls(session, user):

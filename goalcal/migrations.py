@@ -4,7 +4,7 @@ from .models import Base
 from .web import models as _web_models
 from .web import transport_models as _transport_models
 
-VERSION = 13
+VERSION = 16
 
 
 def migrate(engine):
@@ -39,6 +39,8 @@ def migrate(engine):
             for ddl in [
                 'CREATE TABLE IF NOT EXISTS invites (digest TEXT PRIMARY KEY, expires REAL, used_by INTEGER REFERENCES users(id))',
                 'CREATE TABLE IF NOT EXISTS auth_sessions (digest TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id), expires REAL NOT NULL)',
+                'CREATE TABLE IF NOT EXISTS password_reset_tokens (digest TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id), expires REAL NOT NULL, used_at REAL)',
+                'CREATE INDEX IF NOT EXISTS ix_password_reset_tokens_user_id ON password_reset_tokens(user_id)',
                 'CREATE TABLE IF NOT EXISTS login_limits (key TEXT PRIMARY KEY, attempts INTEGER NOT NULL, reset_at REAL NOT NULL)',
                 'CREATE TABLE IF NOT EXISTS ai_usage (user_id INTEGER NOT NULL REFERENCES users(id), day TEXT NOT NULL, count INTEGER NOT NULL, PRIMARY KEY(user_id,day))',
             ]:

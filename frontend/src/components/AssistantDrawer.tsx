@@ -8,6 +8,7 @@ import { formatDateTimeLabel, isIsoExpired } from '../lib/datetime';
 import { useIdempotentAction } from '../lib/useIdempotentMutation';
 import { useI18n } from '../i18n';
 import { useAppState } from '../state/AppStateContext';
+import { AiProgressHint, type AiProgressStage } from './AiProgressHint';
 import { SparkleIcon } from './Icons';
 import { ErrorBanner, SkeletonCard } from './StateFeedback';
 
@@ -53,6 +54,7 @@ export function AssistantDrawer({
   const [composerText, setComposerText] = useState('');
   const [queuedCount, setQueuedCount] = useState(0);
   const [isSendingTurn, setIsSendingTurn] = useState(false);
+  const [activeTurnText, setActiveTurnText] = useState<string | null>(null);
   const [failedTurn, setFailedTurn] = useState<FailedTurn | null>(null);
   const [acceptingIndex, setAcceptingIndex] = useState<number | null>(null);
 
@@ -85,7 +87,7 @@ export function AssistantDrawer({
     if (assistantOpen) {
       messagesEndRef.current?.scrollIntoView?.({ block: 'end' });
     }
-  }, [assistantOpen, assistantQuery.data?.messages.length, assistantQuery.data?.proposal?.id]);
+  }, [assistantOpen, assistantQuery.data?.messages.length, assistantQuery.data?.proposal?.id, isSendingTurn]);
 
   // Modal focus management when in overlay/mobile sheet mode.
   useEffect(() => {
@@ -138,6 +140,7 @@ export function AssistantDrawer({
       while (turnQueueRef.current.length > 0) {
         const nextItem = turnQueueRef.current.shift()!;
         setQueuedCount(turnQueueRef.current.length);
+        setActiveTurnText(nextItem.text);
 
         let body = nextItem.body;
         try {
@@ -216,6 +219,7 @@ export function AssistantDrawer({
     } finally {
       loopActiveRef.current = false;
       setIsSendingTurn(false);
+      setActiveTurnText(null);
       setQueuedCount(0);
     }
   }, [queryClient, recordMutationResult]);
@@ -624,12 +628,36 @@ export function AssistantDrawer({
           </div>
         ) : null}
 
-        {isSendingTurn ? (
-          <div className="muted" style={{ fontSize: 11 }} role="status">
-            {t('正在处理回复', 'Thinking')}
-            {queuedCount > 0 ? t(`（另有 ${queuedCount} 条待发送）`, ` (${queuedCount} more queued)`) : '…'}
-          </div>
-        ) : null}
+        {isSendingTurn ? (() => {
+          const isPlanningTurn = Boolean(
+            activeTurnText &&
+              /重新规划|重排|拆解|拆细|计划|调整方案|replan|break down|draft|plan/i.test(activeTurnText),
+          );
+          const turnStages: readonly AiProgressStage[] = isPlanningTurn
+            ? [
+                { afterMs: 0, label: t('正在读取目标与当前进度…', 'Reading your goal and progress…') },
+                { afterMs: 2500, label: t('正在重新规划剩余步骤与节奏…', 'Replanning remaining steps and pace…') },
+                { afterMs: 7000, label: t('正在核对已完成步骤与截止日期…', 'Checking completed steps and deadline…') },
+                { afterMs: 14000, label: t('方案较复杂，仍在整理中，请稍候…', 'Still putting the updated plan together…') },
+              ]
+            : [
+                { afterMs: 0, label: t('正在理解你的请求…', 'Understanding your request…') },
+                { afterMs: 3000, label: t('正在结合日程与目标整理回复…', 'Reviewing your schedule and goals…') },
+                { afterMs: 8000, label: t('仍在思考中，请稍候…', 'Still working on a reply…') },
+              ];
+          return (
+            <AiProgressHint
+              active
+              compact
+              stages={turnStages}
+              sublabel={
+                queuedCount > 0
+                  ? t(`另有 ${queuedCount} 条待发送`, `${queuedCount} more queued`)
+                  : undefined
+              }
+            />
+          );
+        })() : null}
 
         {failedTurn ? (
           <div className="status-banner" role="alert">

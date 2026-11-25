@@ -394,6 +394,17 @@ def prepare(token, action, resource, body, *, lang: str | None = None):
         finally:
             release_source(source_id)
 
+    if action == 'update_me':
+        if 'timezone' in body:
+            with scoped(token) as (session, principal):
+                resolved_lang = _effective_lang(lang, session, principal.user_id)
+                uid = principal.user_id
+            try:
+                auth.update_timezone(uid, body['timezone'])
+            except auth.AuthError as exc:
+                raise ApiError('validation', pick(resolved_lang, str(exc), 'Invalid time zone.'), 422) from None
+        return body
+
     if action not in {'intake', 'draft', 'assistant_turn', 'refill', 'update_step', 'checkin_execution', 'checkin_event'}:
         return body
     with scoped(token) as (session, principal):
@@ -468,7 +479,8 @@ def prepare(token, action, resource, body, *, lang: str | None = None):
             if goal and goal.status == 'active':
                 remaining_todo = [s for s in goal.steps if s.status == 'todo' and s is not completing]
                 remaining_phases = set(goal_service.outline_phases(goal)) - {s.milestone for s in goal.steps}
-                if not remaining_todo and remaining_phases:
+                threshold = 0 if action == 'refill' else 1
+                if len(remaining_todo) <= threshold and remaining_phases:
                     defs = plan_refill(session, principal.user_id, goal, local, use_llm=True, completing=completing, lang=resolved_lang)
                     return {**body, '_refill_defs': defs}
             return body
@@ -516,6 +528,8 @@ def _dispatch_read(svc, action, resource, query):
         return svc.habits.slots(int(resource), query)
     if action == 'calendar_sync':
         return svc.calendar_sync.state()
+    if action == 'reminders':
+        return svc.reminders.state()
     return None
 
 
@@ -558,11 +572,11 @@ def execute(token, action, resource, body, query, key=None, digest=None, lang: s
             result = handler(int(resource), body)
         elif action == 'intake':
             result = body['_intake']
-        elif action in {'draft', 'create_goal', 'create_event', 'save_preferences', 'update_me'}:
+        elif action in {'draft', 'create_goal', 'create_event', 'save_preferences', 'update_me', 'create_weekly_plan'}:
             result = getattr(svc, action)(body)
         elif action == 'undo':
             result = svc.undo(resource)
-        elif action in {'accept', 'checkin_execution'}:
+        elif action in {'accept', 'checkin_execution', 'accept_weekly_plan'}:
             result = getattr(svc, action)(resource, body)
         elif action in {'refill','replan_goal','update_goal','delete_goal','update_step','move_event','cancel_event','propose','schedule_step','start_event','start_step','checkin_event'}:
             result = getattr(svc, action)(int(resource), body)
@@ -593,6 +607,10 @@ def execute(token, action, resource, body, query, key=None, digest=None, lang: s
             }
         elif action == 'update_calendar_feed':
             result = svc.calendar_sync.update_feed(body)
+        elif action == 'update_calendar_alarms':
+            result = svc.calendar_sync.update_alarms(body)
+        elif action == 'update_email_reminders':
+            result = svc.reminders.update_email(body)
         elif action == 'rotate_calendar_feed':
             result = svc.calendar_sync.rotate_feed(body)
         elif action == 'connect_caldav':
@@ -732,6 +750,8 @@ SPECS = [
     ('/steps/{id:int}/proposals','POST','propose',schemas.Propose),
     ('/steps/{id:int}/schedule','POST','schedule_step',schemas.ScheduleStep),
     ('/proposals/{id:str}/accept','POST','accept',schemas.Accept),
+    ('/weekly-plans','POST','create_weekly_plan',schemas.CreateWeeklyPlan),
+    ('/weekly-plans/{id:str}/accept','POST','accept_weekly_plan',schemas.AcceptWeeklyPlan),
     ('/operations/{id:str}/undo','POST','undo',schemas.Input),
     ('/events/{id:int}/start','POST','start_event',schemas.Version),
     ('/steps/{id:int}/start','POST','start_step',schemas.Version),
@@ -744,6 +764,7 @@ SPECS = [
     ('/calendar/import','POST','import_calendar',schemas.ImportCalendar),
     ('/calendar/sync','GET','calendar_sync',None),
     ('/calendar/sync/feed','PUT','update_calendar_feed',schemas.UpdateCalendarFeed),
+    ('/calendar/sync/alarms','PUT','update_calendar_alarms',schemas.UpdateCalendarAlarms),
     ('/calendar/sync/feed/rotate','POST','rotate_calendar_feed',schemas.RotateCalendarFeed),
     ('/calendar/sync/connections/caldav','POST','connect_caldav',schemas.ConnectCalDav),
     ('/calendar/sync/connections/{id:int}/refresh','POST','refresh_calendar_connection',schemas.SyncCalendarSource),
@@ -752,6 +773,8 @@ SPECS = [
     ('/calendar/sync/sources/{id:int}','PATCH','update_calendar_source',schemas.UpdateCalendarSource),
     ('/calendar/sync/sources/{id:int}/sync','POST','sync_calendar_source',schemas.SyncCalendarSource),
     ('/calendar/sync/sources/{id:int}','DELETE','delete_calendar_source',schemas.Version),
+    ('/reminders','GET','reminders',None),
+    ('/reminders/email','PUT','update_email_reminders',schemas.UpdateEmailReminders),
     ('/metrics','GET','metrics',None),
     ('/feedback','POST','feedback',schemas.SubmitFeedback),
 ]

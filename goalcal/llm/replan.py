@@ -33,13 +33,13 @@ Output ONLY ONE valid JSON object (no markdown):
 }}
 
 How to choose "action":
-1. "ask": The user wants to replan or named a broad dimension without concrete details yet.
+1. "ask": The user wants to replan, OR only named a broad category without concrete details of WHAT is wrong and HOW to change it.
    Examples:
-   - Clicking Replan ("帮我重新规划「xxx」") with no specific request yet.
+   - Clicking Replan ("帮我重新规划「xxx」") with no specific change requested yet. (IMPORTANT: Dates or durations inside goal.title such as "一个月内拿到实习 offer" are ONLY part of the goal name — NEVER treat them as a request to change the deadline!)
    - Saying "修改截止时间" / "change the deadline" without giving a new date or saying to remove it.
-   - Saying "调整一下步骤" / "重新拆解" without explaining what feels wrong or how to change it.
-   In "reply", respond warmly and concisely (1–2 sentences) using the goal's REAL current deadline and todo steps, and ask ONLY the missing detail(s) needed to draft a concrete proposal.
-2. "propose": The user gave concrete direction — a specific or relative new deadline, removing the deadline, shorter steps, slower/faster pace, narrower scope, different focus, or a specific step tweak.
+   - Saying "大阶段不对", "当前阶段的步骤不对", "步骤不对", or "重新拆解" without explaining *what* should change (e.g. which phase to add/drop, or how steps should be adjusted).
+   In "reply", briefly mention the goal's REAL current deadline, todo step count, and phases (if any), and ask clearly whether the issue is (1) overall phases/scope, (2) current phase steps, or (3) deadline/pace — or ask the missing specific detail before drafting a proposal.
+2. "propose": ONLY when the user has clarified concrete direction — a specific or relative new deadline (outside goal.title), removing the deadline, shorter steps, slower/faster pace, adding/dropping a phase, narrowing scope, or specific step edits.
    - "deadline":
      * "YYYY-MM-DD" (must be >= today {now}) if the user specified or shifted the deadline (compute relative dates accurately from today or current_deadline).
      * "CLEAR" if the user explicitly wants to remove/clear the deadline.
@@ -273,12 +273,60 @@ def _validate_deadline(raw: str | None, today: date) -> str | None:
     return parsed.isoformat() if parsed >= today else None
 
 
+def _strip_goal_title(text: str, goal_title: str) -> str:
+    """Remove the goal title (and leftover empty quotes) so durations inside a title aren't parsed as new deadlines."""
+    cleaned = text or ""
+    if goal_title:
+        cleaned = re.sub(re.escape(goal_title), " ", cleaned, flags=re.I)
+    cleaned = re.sub(r"[「」『』“”\"'《》【】]", " ", cleaned)
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def _build_replan_ask_reply(
+    *,
+    goal_title: str,
+    base_deadline: date | None,
+    todo_steps: list[dict[str, Any]],
+    outline: list[str],
+    lang: str,
+) -> str:
+    total_min = sum(int(s.get("est_min", 30)) for s in todo_steps)
+    dl_note = (
+        pick(lang, f"，截止 {base_deadline.isoformat()}", f", due {base_deadline.isoformat()}")
+        if base_deadline else ""
+    )
+    outline_note = ""
+    if outline:
+        joined = " → ".join(outline[:5])
+        outline_note = pick(lang, f"，阶段：{joined}", f", phases: {joined}")
+    return pick(
+        lang,
+        f"「{goal_title}」当前有 {len(todo_steps)} 个待办步骤（共 {total_min} 分钟{dl_note}{outline_note}）。\n"
+        "你想怎么调整？请先告诉我哪里不太合适，明确后再出新方案：\n"
+        "1. 大阶段方向或范围不对\n"
+        "2. 当前阶段的步骤不对（太粗、太细或内容要换）\n"
+        "3. 截止日期或节奏要改",
+        f'"{goal_title}" currently has {len(todo_steps)} todo steps ({total_min} min total{dl_note}{outline_note}).\n'
+        "What feels off? Tell me before I draft a new plan:\n"
+        "1. Overall phases or scope\n"
+        "2. Current phase steps (too broad, too detailed, or wrong tasks)\n"
+        "3. Deadline or pace",
+    )
+
+
+_UNDERSPECIFIED_AREA_RE = re.compile(
+    r"^(?:我觉得|感觉|主要是)?(?:大阶段(?:方向)?|整体(?:方向|阶段|规划)|当前阶段的?步骤|现在(?:的)?步骤|步骤|计划|阶段)(?:不太?对|不合适|有问题|需要改|要改|要调|调整一下|改一下|重拆|重新拆)?[。.!！?？\s]*$",
+    re.I,
+)
+
+
 def _rules_replan_decision(
     *,
     text: str,
     goal_title: str,
     current_deadline: date | None,
     todo_steps: list[dict[str, Any]],
+    outline: list[str] | None = None,
     prev_replan: dict[str, Any] | None,
     replan_detail: str,
     local_now: datetime,
@@ -300,9 +348,10 @@ def _rules_replan_decision(
             base_deadline = date.fromisoformat(prev_replan["deadline"])
         except ValueError:
             pass
-    parsed_dl = extract_replan_deadline(text, local_now, base_deadline)
-    mentions_deadline = bool(_DEADLINE_MENTION_RE.search(text))
-    mentions_steps = bool(_STEP_ADJUST_RE.search(text))
+    clean_text = _strip_goal_title(text, goal_title)
+    parsed_dl = extract_replan_deadline(clean_text, local_now, base_deadline)
+    mentions_deadline = bool(_DEADLINE_MENTION_RE.search(clean_text))
+    mentions_steps = bool(_STEP_ADJUST_RE.search(clean_text))
 
     # User asked to modify deadline but didn't give a date yet
     if mentions_deadline and parsed_dl is None and not mentions_steps:
@@ -327,27 +376,42 @@ def _rules_replan_decision(
             action="propose",
             deadline=parsed_dl,
             steps_mode=steps_mode,
-            revision_summary=text.strip(),
+            revision_summary=clean_text or text.strip(),
         )
 
     # No concrete detail yet (e.g. kickoff "帮我重新规划「xxx」" or vague "想调整一下")
-    if not replan_detail or re.fullmatch(r"(?:想|想要|帮我)?(?:调整|修改|改|重排|重新规划|优化)(?:一下|一点)?(?:步骤|计划|目标)?", replan_detail):
-        total_min = sum(int(s.get("est_min", 30)) for s in todo_steps)
-        dl_note = (
-            pick(lang, f"，截止 {base_deadline.isoformat()}", f", due {base_deadline.isoformat()}")
-            if base_deadline else ""
+    clean_detail = _strip_goal_title(replan_detail, goal_title)
+    if not clean_detail or re.fullmatch(r"(?:想|想要|帮我)?(?:调整|修改|改|重排|重新规划|优化)(?:一下|一点)?(?:步骤|计划|目标)?", clean_detail):
+        return ReplanDecision(
+            action="ask",
+            reply=_build_replan_ask_reply(
+                goal_title=goal_title,
+                base_deadline=base_deadline,
+                todo_steps=todo_steps,
+                outline=outline or [],
+                lang=lang,
+            ),
         )
-        reply = pick(
-            lang,
-            f"「{goal_title}」目前还有 {len(todo_steps)} 个待办步骤（共 {total_min} 分钟{dl_note}）。\n你想怎么调整？比如：修改截止日期、缩短单步时长、放慢节奏，或调整重点方向？",
-            f'"{goal_title}" currently has {len(todo_steps)} remaining todo steps ({total_min} min total{dl_note}).\nHow would you like to adjust it — change the deadline, shorten steps, slow the pace, or shift focus?',
-        )
+
+    if _UNDERSPECIFIED_AREA_RE.match(clean_detail):
+        if "阶段" in clean_detail and "步骤" not in clean_detail:
+            reply = pick(
+                lang,
+                "了解，大阶段需要调整。具体想怎么改（比如去掉哪个阶段、新增什么阶段，或重新聚焦哪块范围）？明确后我再出新方案。",
+                "Got it — the overall phases need adjustment. How specifically should they change (which phase to drop, add, or refocus)? Once clear, I'll draft the new plan.",
+            )
+        else:
+            reply = pick(
+                lang,
+                "了解，当前步骤不太合适。具体希望怎么改（比如换掉哪些任务、拆得更细、每步控制在多少分钟，或换成实操为主）？明确后我再生成新方案。",
+                "Got it — the current steps feel off. How specifically should they change (which tasks to replace, smaller steps, shorter duration, or more hands-on practice)? Once clear, I'll draft the new plan.",
+            )
         return ReplanDecision(action="ask", reply=reply)
 
     return ReplanDecision(
         action="propose",
         steps_mode="revise",
-        revision_summary=replan_detail,
+        revision_summary=clean_detail,
     )
 
 
@@ -371,11 +435,13 @@ def evaluate_replan_turn(
     resolved_lang = normalize_lang(lang) or ("zh" if re.search(r"[\u4e00-\u9fff]", text) else "en")
     today = local_now.date()
 
-    # Fast deterministic paths for unambiguous cancel / confirm / empty kickoff
+    # Fast deterministic paths for unambiguous cancel / confirm / empty kickoff / category-only complaint
+    clean_text = _strip_goal_title(text, goal_title)
+    clean_detail = _strip_goal_title(replan_detail, goal_title)
     if _CANCEL_RE.match(text):
         return _rules_replan_decision(
             text=text, goal_title=goal_title, current_deadline=current_deadline,
-            todo_steps=todo_steps, prev_replan=prev_replan, replan_detail=replan_detail,
+            todo_steps=todo_steps, outline=outline, prev_replan=prev_replan, replan_detail=replan_detail,
             local_now=local_now, lang=resolved_lang,
         )
     if prev_replan is not None and _CONFIRM_RE.match(text):
@@ -387,13 +453,17 @@ def evaluate_replan_turn(
             base_deadline = date.fromisoformat(prev_replan["deadline"])
         except ValueError:
             pass
-    rule_dl = extract_replan_deadline(text, local_now, base_deadline)
+    rule_dl = extract_replan_deadline(clean_text, local_now, base_deadline)
 
-    # Empty kickoff (e.g. clicking the "Replan" button): respond instantly without burning an LLM turn
-    if prev_replan is None and not replan_detail and not recent_messages:
+    # Empty kickoff (e.g. clicking Replan or typing "帮我重新规划「xxx」") or bare area complaint: ask first!
+    if prev_replan is None and (not clean_detail or _UNDERSPECIFIED_AREA_RE.match(clean_detail)):
         return _rules_replan_decision(
             text=text, goal_title=goal_title, current_deadline=current_deadline,
-            todo_steps=todo_steps, prev_replan=prev_replan, replan_detail="",
+            todo_steps=todo_steps, outline=outline, prev_replan=prev_replan, replan_detail="",
+            local_now=local_now, lang=resolved_lang,
+        ) if not clean_detail else _rules_replan_decision(
+            text=text, goal_title=goal_title, current_deadline=current_deadline,
+            todo_steps=todo_steps, outline=outline, prev_replan=prev_replan, replan_detail=clean_detail,
             local_now=local_now, lang=resolved_lang,
         )
 
@@ -401,7 +471,7 @@ def evaluate_replan_turn(
     if client is None or not settings.llm_enabled:
         return _rules_replan_decision(
             text=text, goal_title=goal_title, current_deadline=current_deadline,
-            todo_steps=todo_steps, prev_replan=prev_replan, replan_detail=replan_detail,
+            todo_steps=todo_steps, outline=outline, prev_replan=prev_replan, replan_detail=replan_detail,
             local_now=local_now, lang=resolved_lang,
         )
 
@@ -448,7 +518,7 @@ def evaluate_replan_turn(
         log.warning("LLM replan turn failed (%s); falling back to rules", type(exc).__name__)
         return _rules_replan_decision(
             text=text, goal_title=goal_title, current_deadline=current_deadline,
-            todo_steps=todo_steps, prev_replan=prev_replan, replan_detail=replan_detail,
+            todo_steps=todo_steps, outline=outline, prev_replan=prev_replan, replan_detail=replan_detail,
             local_now=local_now, lang=resolved_lang,
         )
 
@@ -456,20 +526,20 @@ def evaluate_replan_turn(
     if decision.action == "apply" and prev_replan is None:
         decision.action = "ask"
     validated_dl = _validate_deadline(decision.deadline, today)
-    # Deterministic date parser backs up model if model missed an explicit date
+    # Deterministic date parser (excluding goal title) backs up model if model missed an explicit date
     decision.deadline = validated_dl or rule_dl
     # If model proposed without any concrete deadline or revision on a bare deadline request, ask instead
     if (
         decision.action == "propose"
         and decision.deadline is None
-        and _DEADLINE_MENTION_RE.search(text)
-        and not _STEP_ADJUST_RE.search(text)
+        and _DEADLINE_MENTION_RE.search(clean_text)
+        and not _STEP_ADJUST_RE.search(clean_text)
     ):
         return _rules_replan_decision(
             text=text, goal_title=goal_title, current_deadline=current_deadline,
-            todo_steps=todo_steps, prev_replan=prev_replan, replan_detail=replan_detail,
+            todo_steps=todo_steps, outline=outline, prev_replan=prev_replan, replan_detail=replan_detail,
             local_now=local_now, lang=resolved_lang,
         )
     if decision.action == "propose" and not decision.revision_summary:
-        decision.revision_summary = replan_detail or text.strip()
+        decision.revision_summary = clean_detail or clean_text or text.strip()
     return decision

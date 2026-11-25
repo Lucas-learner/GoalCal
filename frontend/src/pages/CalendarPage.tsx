@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import FullCalendar from '@fullcalendar/react';
 import type {
@@ -22,13 +22,23 @@ import timeGridPlugin from '@fullcalendar/timegrid';
 import { DateTime } from 'luxon';
 import { api } from '../api/client';
 import { invalidateAfterWrite, queryKeys } from '../api/queryKeys';
-import type { CalendarEvent, HabitActionBody, HabitOccurrence, HabitProgress } from '../api/types';
+import type {
+  CalendarEvent,
+  HabitActionBody,
+  HabitOccurrence,
+  HabitProgress,
+  WeeklyPlan,
+  WeeklyPlanItem,
+  WeeklyPlanScope,
+  WeeklyPlanStrategy,
+} from '../api/types';
 import { EventDialog } from '../components/EventDialog';
 import { HabitForm } from '../components/HabitForm';
 import { HabitOccurrenceDialog, useHabitAction, useHabitLabels } from '../components/HabitOccurrenceDialog';
 import { SparkleIcon, SyncIcon } from '../components/Icons';
 import { NewEventDialog } from '../components/NewEventDialog';
 import { EmptyState, ErrorBanner } from '../components/StateFeedback';
+import { WeeklyPlanPanel } from '../components/WeeklyPlanPanel';
 import {
   calendarStrToUtcIso,
   durationMinutes,
@@ -81,11 +91,17 @@ function useMediaQuery(query: string, fallbackWidthCheck?: () => boolean): boole
 
 export function CalendarPage({ timezone }: { timezone: string }) {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const { openAssistant, openProposalModal, recordMutationResult } = useAppState();
   const { lang, t } = useI18n();
   const calendarRef = useRef<FullCalendar | null>(null);
   const backlogRef = useRef<HTMLElement | null>(null);
+
+  const deepDateParam = searchParams.get('date');
+  const deepEventParam = searchParams.get('event');
+  const validDeepDate = deepDateParam && /^\d{4}-\d{2}-\d{2}$/.test(deepDateParam) ? deepDateParam : null;
+  const targetEventId = deepEventParam && /^[1-9]\d*$/.test(deepEventParam) ? Number(deepEventParam) : null;
 
   const isMobile = useMediaQuery('(max-width: 720px)', () => window.innerWidth <= 720);
   const isSingleColumn = useMediaQuery('(max-width: 960px)', () => window.innerWidth <= 960);
@@ -95,8 +111,19 @@ export function CalendarPage({ timezone }: { timezone: string }) {
   const [viewMode, setViewMode] = useState<'week' | 'day'>(() =>
     readMediaMatch('(max-width: 720px)', () => window.innerWidth <= 720) ? 'day' : 'week',
   );
-  const [anchorDate, setAnchorDate] = useState(() => todayIsoDateInZone(timezone));
+  const [anchorDate, setAnchorDate] = useState(() => validDeepDate ?? todayIsoDateInZone(timezone));
   const [backlogOpen, setBacklogOpen] = useState(false);
+
+  const appliedDeepDateRef = useRef<string | null>(validDeepDate);
+  useEffect(() => {
+    if (validDeepDate && appliedDeepDateRef.current !== validDeepDate) {
+      appliedDeepDateRef.current = validDeepDate;
+      setAnchorDate(validDeepDate);
+      calendarRef.current?.getApi().gotoDate(validDeepDate);
+    } else if (!validDeepDate) {
+      appliedDeepDateRef.current = null;
+    }
+  }, [validDeepDate]);
 
   const initialBounds = useMemo(
     () => getRangeBoundsUtc(anchorDate, viewMode, timezone),
@@ -118,6 +145,9 @@ export function CalendarPage({ timezone }: { timezone: string }) {
     endLocal: string;
   } | null>(null);
   const [hiddenSourceIds, setHiddenSourceIds] = useState<number[]>([]);
+  const [weeklyPlan, setWeeklyPlan] = useState<WeeklyPlan | null>(null);
+  const [selectedWeeklyStepIds, setSelectedWeeklyStepIds] = useState<number[]>([]);
+  const [weeklyGoalFilter, setWeeklyGoalFilter] = useState<number[] | null>(null);
 
   const toggleSourceVisibility = (sourceId: number) => {
     setHiddenSourceIds((prev) =>
@@ -129,6 +159,43 @@ export function CalendarPage({ timezone }: { timezone: string }) {
     queryKey: queryKeys.calendarRange(range.startUtc, range.endUtc),
     queryFn: () => api.getCalendarEvents(range.startUtc, range.endUtc),
   });
+
+  useEffect(() => {
+    if (targetEventId === null || !eventsQuery.data) return;
+    const match = eventsQuery.data.events.find((ev) => ev.id === targetEventId);
+    if (match) {
+      if (match.habit) {
+        setSelectedHabit({ item: match.habit });
+      } else {
+        setSelectedEvent(match);
+      }
+      const next = new URLSearchParams(searchParams);
+      next.delete('event');
+      next.delete('date');
+      setSearchParams(next, { replace: true });
+      return;
+    }
+    if (!eventsQuery.isFetching) {
+      const targetBounds = validDeepDate ? getRangeBoundsUtc(validDeepDate, 'day', timezone) : null;
+      const rangeCoversDate =
+        !targetBounds || (range.startUtc <= targetBounds.startUtc && range.endUtc >= targetBounds.endUtc);
+      if (rangeCoversDate) {
+        const next = new URLSearchParams(searchParams);
+        next.delete('event');
+        setSearchParams(next, { replace: true });
+      }
+    }
+  }, [
+    targetEventId,
+    eventsQuery.data,
+    eventsQuery.isFetching,
+    validDeepDate,
+    timezone,
+    range.startUtc,
+    range.endUtc,
+    searchParams,
+    setSearchParams,
+  ]);
 
   const availabilityQuery = useQuery({
     queryKey: queryKeys.availability,
@@ -241,6 +308,60 @@ export function CalendarPage({ timezone }: { timezone: string }) {
     },
   });
 
+  const createWeeklyPlanFn = useCallback(
+    async (
+      args: {
+        scope?: WeeklyPlanScope;
+        strategy?: WeeklyPlanStrategy;
+        goal_ids?: number[];
+        keep_existing_blocks?: boolean;
+      },
+      key: string,
+    ) => api.createWeeklyPlan(args, key),
+    [],
+  );
+
+  const createWeeklyPlanAction = useIdempotentAction(createWeeklyPlanFn, {
+    onSuccess: (plan, args) => {
+      setWeeklyPlan(plan);
+      setSelectedWeeklyStepIds(plan.items.map((item) => item.step_id));
+      if (args.goal_ids !== undefined) {
+        setWeeklyGoalFilter(args.goal_ids);
+      }
+      setAnchorDate(plan.week_start);
+      const apiFc = calendarRef.current?.getApi();
+      if (apiFc) {
+        if (!isMobile && viewMode !== 'week') {
+          setViewMode('week');
+          apiFc.changeView('timeGridWeek', plan.week_start);
+        } else {
+          apiFc.gotoDate(plan.week_start);
+        }
+      }
+    },
+  });
+
+  const acceptWeeklyPlanFn = useCallback(
+    async (args: { planId: string; version: string; stepIds: number[] }, key: string) =>
+      api.acceptWeeklyPlan(args.planId, { version: args.version, step_ids: args.stepIds }, key),
+    [],
+  );
+
+  const acceptWeeklyPlanAction = useIdempotentAction(acceptWeeklyPlanFn, {
+    onSuccess: async (res) => {
+      recordMutationResult(res);
+      setWeeklyPlan(null);
+      setSelectedWeeklyStepIds([]);
+      await invalidateAfterWrite(queryClient);
+    },
+  });
+
+  const toggleWeeklyStep = useCallback((stepId: number) => {
+    setSelectedWeeklyStepIds((prev) =>
+      prev.includes(stepId) ? prev.filter((id) => id !== stepId) : [...prev, stepId],
+    );
+  }, []);
+
   useEffect(() => {
     const containerEl = backlogRef.current;
     if (!enableDrag || !containerEl) return;
@@ -292,6 +413,16 @@ export function CalendarPage({ timezone }: { timezone: string }) {
   const hasAllDay = useMemo(() => visibleEvents.some((ev) => Boolean(ev.all_day)), [visibleEvents]);
 
   const fcEvents: EventInput[] = useMemo(() => {
+    const replacedIds = new Set<number>();
+    if (weeklyPlan && !weeklyPlan.keep_existing_blocks) {
+      const activeGhostSet = new Set(selectedWeeklyStepIds);
+      for (const item of weeklyPlan.items) {
+        if (item.replaces_event_id != null && activeGhostSet.has(item.step_id)) {
+          replacedIds.add(item.replaces_event_id);
+        }
+      }
+    }
+
     const normalEvents: EventInput[] = visibleEvents.map((ev) => {
       const classes = [`gc-ev-${ev.kind}`];
       if (ev.source === 'sync') {
@@ -299,6 +430,7 @@ export function CalendarPage({ timezone }: { timezone: string }) {
       }
       if (ev.source === 'sync' && ev.blocks_scheduling === false) classes.push('gc-ev-reference');
       if (ev.status === 'done' || ev.status === 'skipped') classes.push('gc-ev-done');
+      if (replacedIds.has(ev.id)) classes.push('gc-ev-replaced');
       return {
         id: String(ev.id),
         title: ev.title,
@@ -310,6 +442,20 @@ export function CalendarPage({ timezone }: { timezone: string }) {
         extendedProps: { rawEvent: ev },
       };
     });
+
+    const ghostEvents: EventInput[] = weeklyPlan
+      ? weeklyPlan.items
+          .filter((item) => selectedWeeklyStepIds.includes(item.step_id))
+          .map((item) => ({
+            id: `weekly-ghost-${item.step_id}`,
+            title: `${item.goal_title} · ${item.step_title}`,
+            start: item.start,
+            end: item.end,
+            editable: false,
+            classNames: ['gc-ev-block', 'gc-ev-ghost'],
+            extendedProps: { ghostItem: item },
+          }))
+      : [];
 
     const protectedBg: EventInput[] = (availabilityQuery.data?.protected_windows ?? []).map(
       (win, idx) => ({
@@ -323,8 +469,8 @@ export function CalendarPage({ timezone }: { timezone: string }) {
       }),
     );
 
-    return [...protectedBg, ...normalEvents];
-  }, [visibleEvents, availabilityQuery.data?.protected_windows, enableDrag, t]);
+    return [...protectedBg, ...normalEvents, ...ghostEvents];
+  }, [visibleEvents, availabilityQuery.data?.protected_windows, enableDrag, t, weeklyPlan, selectedWeeklyStepIds]);
 
   const scheduledStepIds = useMemo(() => {
     const ids = new Set<number>();
@@ -427,6 +573,11 @@ export function CalendarPage({ timezone }: { timezone: string }) {
   };
 
   const handleEventClick = (info: EventClickArg) => {
+    const ghost = info.event.extendedProps?.ghostItem as WeeklyPlanItem | undefined;
+    if (ghost) {
+      toggleWeeklyStep(ghost.step_id);
+      return;
+    }
     const raw = info.event.extendedProps?.rawEvent as CalendarEvent | undefined;
     if (raw?.habit) {
       setSelectedHabit({ item: raw.habit });
@@ -493,6 +644,20 @@ export function CalendarPage({ timezone }: { timezone: string }) {
   };
 
   const renderEventContent = (arg: EventContentArg) => {
+    const ghost = arg.event.extendedProps?.ghostItem as WeeklyPlanItem | undefined;
+    if (ghost) {
+      const timeText = formatTimeRange(ghost.start, ghost.end, timezone);
+      return (
+        <div>
+          <div style={{ fontWeight: 620, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            [{t('预览', 'Preview')}] {ghost.goal_title} · {ghost.step_title}
+          </div>
+          <div className="tabular-nums" style={{ opacity: 0.85, fontSize: 9 }}>
+            {timeText}
+          </div>
+        </div>
+      );
+    }
     const raw = arg.event.extendedProps?.rawEvent as CalendarEvent | undefined;
     if (!raw) {
       return <div>{arg.event.title}</div>;
@@ -634,11 +799,52 @@ export function CalendarPage({ timezone }: { timezone: string }) {
     </aside>
   );
 
+  const weeklyPlanBusy = createWeeklyPlanAction.isPending || acceptWeeklyPlanAction.isPending;
+
+  const sidePanel = weeklyPlan ? (
+    <WeeklyPlanPanel
+      plan={weeklyPlan}
+      timezone={timezone}
+      selectedStepIds={selectedWeeklyStepIds}
+      includedGoalIds={weeklyGoalFilter}
+      busy={weeklyPlanBusy}
+      onToggleStep={toggleWeeklyStep}
+      onChangeParams={(next) => void createWeeklyPlanAction.run(next)}
+      onAccept={() =>
+        void acceptWeeklyPlanAction.run({
+          planId: weeklyPlan.id,
+          version: weeklyPlan.version,
+          stepIds: selectedWeeklyStepIds,
+        })
+      }
+      onClose={() => {
+        setWeeklyPlan(null);
+        setSelectedWeeklyStepIds([]);
+      }}
+    />
+  ) : (
+    backlogAside
+  );
+
   return (
     <div className="calendar-page">
       <div className="topbar">
         <h1>{t('日历', 'Calendar')}</h1>
         <div className="topbar-actions">
+          <button
+            type="button"
+            className="btn weekly-plan-trigger"
+            disabled={weeklyPlanBusy}
+            onClick={() =>
+              void createWeeklyPlanAction.run({
+                scope: 'auto',
+                strategy: 'balanced',
+                keep_existing_blocks: true,
+              })
+            }
+          >
+            <span>{weeklyPlanBusy ? t('排期中…', 'Planning…') : t('排本周', 'Plan week')}</span>
+          </button>
           <button
             type="button"
             className="btn calendar-sync-btn"
@@ -726,13 +932,15 @@ export function CalendarPage({ timezone }: { timezone: string }) {
           moveAction.actionError ??
           scheduleStepAction.actionError ??
           proposeAction.actionError ??
-          habitAction.actionError
+          habitAction.actionError ??
+          createWeeklyPlanAction.actionError ??
+          acceptWeeklyPlanAction.actionError
         }
         onRetry={eventsQuery.isError ? () => void eventsQuery.refetch() : undefined}
         onRefresh={() => void invalidateAfterWrite(queryClient)}
       />
 
-      {isMobile ? backlogAside : null}
+      {isMobile ? sidePanel : null}
 
       {(eventsQuery.data?.sync_conflicts?.length ?? 0) > 0 ? (
         <div className="sync-conflict-banner" role="alert">
@@ -865,7 +1073,7 @@ export function CalendarPage({ timezone }: { timezone: string }) {
           </div>
         </div>
 
-        {!isMobile ? backlogAside : null}
+        {!isMobile ? sidePanel : null}
       </div>
 
       {(() => {

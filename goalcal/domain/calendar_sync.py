@@ -27,6 +27,13 @@ from ..safe_fetch import FetchError, FetchResponse, fetch_ics_conditional, norma
 from ..timeutil import now_utc
 from ..web.models import HabitOccurrence
 from .ics_import import ImportResult, delete_source_events, import_ics
+from .reminders import (
+    build_valarm,
+    event_deep_link,
+    format_alarm_description,
+    get_calendar_alarms,
+    resolve_event_alarm_minutes,
+)
 
 UTC = timezone.utc
 MAX_SOURCES_PER_USER = 10
@@ -187,7 +194,7 @@ def build_ics_feed(
         )
         occ_by_event_id = {occ.event_id: occ for occ in occs if occ.event_id is not None}
 
-    app_url = f"{base_url.rstrip('/')}/app/calendar" if base_url else None
+    alarms = get_calendar_alarms(session, user.id, now=now_naive)
 
     for ev in eligible:
         vevent = ICalEvent()
@@ -203,6 +210,7 @@ def build_ics_feed(
         category = "Event"
         summary = ev.title
         desc_lines: list[str] = []
+        outcome_text = ""
 
         if ev.kind == "block":
             category = "Block"
@@ -212,6 +220,9 @@ def build_ics_feed(
                 desc_lines.append(f"Goal: {goal.title}")
             if step is not None and step.milestone:
                 desc_lines.append(f"Phase: {step.milestone}")
+            if step is not None and (step.outcome or "").strip():
+                outcome_text = step.outcome.strip()
+                desc_lines.append(f"Outcome: {outcome_text[:300]}")
             desc_lines.append(f"Status: {_status_label(effective_status)}")
         elif ev.kind == "habit":
             category = "Habit"
@@ -226,13 +237,27 @@ def build_ics_feed(
         if effective_status == "done" and not summary.startswith("✓ "):
             summary = f"✓ {summary}"
 
-        if app_url:
-            desc_lines.append(f"GoalCal: {app_url}")
+        deep_link = event_deep_link(base_url, ev.id, ev.start_utc, user.tz)
+        if deep_link:
+            desc_lines.append(f"GoalCal: {deep_link}")
 
         vevent.add("summary", summary)
         if desc_lines:
             vevent.add("description", "\n".join(desc_lines))
         vevent.add("categories", ["GoalCal", category])
+        reminder_minutes = resolve_event_alarm_minutes(
+            alarms,
+            kind=ev.kind,
+            effective_status=effective_status,
+            all_day=bool(ev.all_day),
+        )
+        if reminder_minutes is not None:
+            vevent.add_component(
+                build_valarm(
+                    reminder_minutes,
+                    format_alarm_description(summary, outcome_text),
+                )
+            )
         cal.add_component(vevent)
 
     raw = cal.to_ical()

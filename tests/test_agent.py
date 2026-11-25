@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 
-from goalcal import agent
+from goalcal import agent, memory
 from goalcal.domain import calendar_service as cal
 from goalcal.domain import goals as goal_svc
 from goalcal.domain import planner
@@ -749,6 +749,7 @@ def test_schedule_all_packs_steps_with_buffers(session, user):
 
 
 def test_schedule_all_stops_at_the_daily_cap(session, user):
+    memory.set_preference(session, user.id, "max_goal_minutes_per_day", 120, scope="scheduler")
     _goal_with_sized_steps(session, user, [("A", 45), ("B", 45), ("C", 45), ("D", 45)])
     reply = agent.handle(session, user.id, "今天下午有空，把任务都排了", NOW, TZ)
 

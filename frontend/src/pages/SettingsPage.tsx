@@ -7,6 +7,7 @@ import type { Availability, FeedbackCategory, Goal, Habit, User } from '../api/t
 import { CalendarSyncSection } from '../components/CalendarSyncSection';
 import { LogOutIcon } from '../components/Icons';
 import { Modal } from '../components/Modal';
+import { RemindersSection } from '../components/RemindersSection';
 import { ErrorBanner, SkeletonCard } from '../components/StateFeedback';
 import { WindowGroupEditor, validateWindowGroup } from '../components/TimePreferencesEditor';
 import { type LangPreference, useI18n } from '../i18n';
@@ -14,9 +15,32 @@ import { useIdempotentAction } from '../lib/useIdempotentMutation';
 import { useAppState } from '../state/AppStateContext';
 import { type CalendarPalette, type ThemePreference, useTheme } from '../theme';
 
-type SettingsSectionId = 'account' | 'schedule' | 'archived' | 'sync' | 'feedback';
+type SettingsSectionId = 'account' | 'schedule' | 'reminders' | 'sync' | 'archived' | 'feedback';
 
-const SETTINGS_SECTIONS: readonly SettingsSectionId[] = ['account', 'schedule', 'archived', 'sync', 'feedback'];
+const SETTINGS_SECTIONS: readonly SettingsSectionId[] = [
+  'account',
+  'schedule',
+  'reminders',
+  'sync',
+  'archived',
+  'feedback',
+];
+
+const COMMON_TIMEZONES: Array<{ value: string; zh: string; en: string }> = [
+  { value: 'Asia/Shanghai', zh: '中国标准时间（Asia/Shanghai）', en: 'China (Asia/Shanghai)' },
+  { value: 'Asia/Hong_Kong', zh: '香港时间（Asia/Hong_Kong）', en: 'Hong Kong (Asia/Hong_Kong)' },
+  { value: 'Asia/Taipei', zh: '台北时间（Asia/Taipei）', en: 'Taipei (Asia/Taipei)' },
+  { value: 'Asia/Tokyo', zh: '东京（Asia/Tokyo）', en: 'Tokyo (Asia/Tokyo)' },
+  { value: 'Asia/Singapore', zh: '新加坡（Asia/Singapore）', en: 'Singapore (Asia/Singapore)' },
+  { value: 'Europe/London', zh: '伦敦（Europe/London）', en: 'London (Europe/London)' },
+  { value: 'Europe/Paris', zh: '巴黎（Europe/Paris）', en: 'Paris (Europe/Paris)' },
+  { value: 'Europe/Berlin', zh: '柏林（Europe/Berlin）', en: 'Berlin (Europe/Berlin)' },
+  { value: 'America/New_York', zh: '美国东部（America/New_York）', en: 'US Eastern (America/New_York)' },
+  { value: 'America/Chicago', zh: '美国中部（America/Chicago）', en: 'US Central (America/Chicago)' },
+  { value: 'America/Los_Angeles', zh: '美国太平洋（America/Los_Angeles）', en: 'US Pacific (America/Los_Angeles)' },
+  { value: 'Australia/Sydney', zh: '悉尼（Australia/Sydney）', en: 'Sydney (Australia/Sydney)' },
+  { value: 'UTC', zh: '协调世界时（UTC）', en: 'UTC' },
+];
 
 function parseSettingsSection(raw: string | null): SettingsSectionId {
   if (raw === 'metrics') return 'feedback';
@@ -144,6 +168,22 @@ export function SettingsPage({ user }: { user: User | undefined }) {
     setCalendarPalette(nextPalette);
     void saveCalendarPaletteAction.run(nextPalette);
   };
+
+  const saveTimezoneFn = useCallback(
+    async (nextTz: string, key: string) => api.updateMe({ timezone: nextTz }, key),
+    [],
+  );
+
+  const saveTimezoneAction = useIdempotentAction(saveTimezoneFn, {
+    onSuccess: async (updatedUser) => {
+      queryClient.setQueryData(queryKeys.me, updatedUser);
+      recordMutationResult({ message: t('时区已更新', 'Time zone updated') });
+      await Promise.all([
+        invalidateAfterWrite(queryClient, { includeAvailability: true }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.reminders }),
+      ]);
+    },
+  });
 
   const saveFn = useCallback(
     async (body: Availability, key: string) => api.saveAvailability(body, key),
@@ -285,7 +325,7 @@ export function SettingsPage({ user }: { user: User | undefined }) {
       draftAvail.buffer_minutes < 0 ||
       draftAvail.buffer_minutes > 120
     ) {
-      setValidationError(t('日程缓冲时间须为 0 至 120 分钟。', 'Buffer time must be between 0 and 120 minutes.'));
+      setValidationError(t('任务间隔须为 0 至 120 分钟。', 'Break between tasks must be between 0 and 120 minutes.'));
       return;
     }
 
@@ -296,8 +336,8 @@ export function SettingsPage({ user }: { user: User | undefined }) {
     ) {
       setValidationError(
         t(
-          '每天最多投入目标时间须为 1 至 1440 分钟。',
-          'Daily goal limit must be between 1 and 1440 minutes.',
+          '每日任务上限须为 1 至 1440 分钟。',
+          'Daily task limit must be between 1 and 1440 minutes.',
         ),
       );
       return;
@@ -344,8 +384,9 @@ export function SettingsPage({ user }: { user: User | undefined }) {
           {[
             { id: 'account' as const, label: t('通用与账号', 'General & Account') },
             { id: 'schedule' as const, label: t('时间偏好', 'Time Preferences') },
-            { id: 'archived' as const, label: t('已归档', 'Archived') },
+            { id: 'reminders' as const, label: t('提醒与通知', 'Reminders') },
             { id: 'sync' as const, label: t('日历同步', 'Calendar Sync') },
+            { id: 'archived' as const, label: t('已归档', 'Archived') },
             { id: 'feedback' as const, label: t('意见反馈', 'Feedback') },
           ].map((tab) => (
             <button
@@ -364,7 +405,14 @@ export function SettingsPage({ user }: { user: User | undefined }) {
           {section === 'account' ? (
             <section className="settings-section" aria-label={t('通用与账号', 'General & Account')}>
               <div className="settings-section-title">{t('通用与账号', 'General & Account')}</div>
-              <ErrorBanner error={saveLangAction.actionError ?? saveThemeAction.actionError ?? saveCalendarPaletteAction.actionError} />
+              <ErrorBanner
+                error={
+                  saveLangAction.actionError ??
+                  saveThemeAction.actionError ??
+                  saveCalendarPaletteAction.actionError ??
+                  saveTimezoneAction.actionError
+                }
+              />
               <div className="card-flat settings-card">
                 <div className="setting-row">
                   <div className="setting-name">{t('账号', 'Account')}</div>
@@ -379,9 +427,26 @@ export function SettingsPage({ user }: { user: User | undefined }) {
                   </div>
                 </div>
                 <div className="setting-row">
-                  <div className="setting-name">{t('时区', 'Time zone')}</div>
-                  <div className="setting-control tabular-nums" style={{ fontSize: 12 }}>
-                    {user?.timezone || '—'}
+                  <label className="setting-name" htmlFor="setting-timezone-select">
+                    {t('时区', 'Time zone')}
+                  </label>
+                  <div className="setting-control">
+                    <select
+                      id="setting-timezone-select"
+                      className="select"
+                      value={user?.timezone || 'Asia/Shanghai'}
+                      disabled={saveTimezoneAction.isPending}
+                      onChange={(e) => void saveTimezoneAction.run(e.target.value)}
+                    >
+                      {user?.timezone && !COMMON_TIMEZONES.some((tz) => tz.value === user.timezone) ? (
+                        <option value={user.timezone}>{user.timezone}</option>
+                      ) : null}
+                      {COMMON_TIMEZONES.map((tz) => (
+                        <option key={tz.value} value={tz.value}>
+                          {t(tz.zh, tz.en)}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                 </div>
                 <div className="setting-row">
@@ -473,7 +538,7 @@ export function SettingsPage({ user }: { user: User | undefined }) {
                   <div className="card-flat settings-card">
                     <div className="setting-row">
                       <label className="setting-name" htmlFor="pref-max-minutes">
-                        {t('每日目标上限（分钟）', 'Daily goal cap (min)')}
+                        {t('每日任务上限（分钟）', 'Daily task limit (min)')}
                       </label>
                       <div className="setting-control">
                         <input
@@ -497,9 +562,17 @@ export function SettingsPage({ user }: { user: User | undefined }) {
                     </div>
 
                     <div className="setting-row">
-                      <label className="setting-name" htmlFor="pref-buffer-minutes">
-                        {t('日程缓冲（分钟）', 'Event buffer (min)')}
-                      </label>
+                      <div className="setting-name">
+                        <label htmlFor="pref-buffer-minutes">
+                          {t('任务间隔（分钟）', 'Break between tasks (min)')}
+                        </label>
+                        <div className="setting-hint">
+                          {t(
+                            '相邻日程或任务之间预留的切换时间，填 0 允许紧挨着排',
+                            'Gap reserved between events or tasks; set 0 for back-to-back',
+                          )}
+                        </div>
+                      </div>
                       <div className="setting-control">
                         <input
                           id="pref-buffer-minutes"
@@ -725,6 +798,13 @@ export function SettingsPage({ user }: { user: User | undefined }) {
                 </div>
               )}
             </section>
+          ) : null}
+
+          {section === 'reminders' ? (
+            <RemindersSection
+              timezone={user?.timezone || 'UTC'}
+              onGoToSync={() => setSection('sync')}
+            />
           ) : null}
 
           {section === 'sync' ? (

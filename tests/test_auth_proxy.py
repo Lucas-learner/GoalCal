@@ -533,3 +533,171 @@ def test_login_preserves_deep_app_next_and_blocks_open_redirects():
                 assert bad_resp.headers["location"] == "/"
 
     asyncio.run(scenario())
+
+
+def test_password_reset_full_flow_revokes_sessions_and_is_one_time(monkeypatch):
+    from goalcal import mailer
+
+    monkeypatch.setenv("GOALCAL_PUBLIC_URL", "https://goalcal.example")
+    monkeypatch.setattr(mailer, "smtp_capabilities", lambda: {"configured": True, "from_address": "noreply@goalcal.example"})
+    sent_messages = []
+    monkeypatch.setattr(mailer, "send_email", lambda **kwargs: sent_messages.append(kwargs))
+
+    name = "pwuser_" + uuid.uuid4().hex[:8]
+    email = f"{name}@example.com"
+    auth.create_user(name, "old-password-123", admin=True, email=email)
+
+    async def scenario():
+        transport = httpx2.ASGITransport(app=app)
+        async with httpx2.AsyncClient(transport=transport, base_url="https://goalcal.example") as client:
+            login_page = await client.get("/_goalcal/login", headers={"Accept": "text/html"})
+            assert "/_goalcal/forgot-password" in login_page.text
+            logged = await client.post(
+                "/_goalcal/login",
+                data={"username": name, "password": "old-password-123", "csrf": _csrf(login_page)},
+                follow_redirects=False,
+            )
+            assert logged.status_code == 303
+            old_session = client.cookies.get(COOKIE_NAME)
+            assert old_session and auth.authenticate(old_session).username == name
+
+            forgot_page = await client.get("/_goalcal/forgot-password?next=/app/goals")
+            assert forgot_page.status_code == 200
+            assert "Reset your password" in forgot_page.text
+            forgot_resp = await client.post(
+                "/_goalcal/forgot-password",
+                data={"email": email.upper(), "next": "/app/goals", "csrf": _csrf(forgot_page)},
+            )
+            assert forgot_resp.status_code == 200
+            assert "valid for 30 minutes" in forgot_resp.text
+            assert len(sent_messages) == 1
+            assert sent_messages[0]["to_address"] == email
+
+            match = re.search(r"https://goalcal\.example/_goalcal/reset-password\?token=([^\s\"&]+)", sent_messages[0]["text_body"])
+            assert match is not None
+            token = match.group(1)
+
+            reset_get = await client.get(f"/_goalcal/reset-password?token={token}&next=/app/goals")
+            assert reset_get.status_code == 200
+            assert 'name="confirm_password"' in reset_get.text
+
+            mismatch = await client.post(
+                "/_goalcal/reset-password",
+                data={
+                    "token": token,
+                    "password": "new-password-456",
+                    "confirm_password": "different-password",
+                    "next": "/app/goals",
+                    "csrf": _csrf(reset_get),
+                },
+            )
+            assert mismatch.status_code == 200
+            assert "Passwords do not match" in mismatch.text
+
+            done_resp = await client.post(
+                "/_goalcal/reset-password",
+                data={
+                    "token": token,
+                    "password": "new-password-456",
+                    "confirm_password": "new-password-456",
+                    "next": "/app/goals",
+                    "csrf": _csrf(mismatch),
+                },
+            )
+            assert done_resp.status_code == 200
+            assert "Your password has been updated" in done_resp.text
+
+            # Old session is revoked and old password fails; new password works; token cannot be reused.
+            with pytest.raises(auth.AuthError):
+                auth.authenticate(old_session)
+            with pytest.raises(auth.AuthError):
+                auth.login(name, "old-password-123")
+            new_token = auth.login(name, "new-password-456")
+            assert auth.authenticate(new_token).username == name
+
+            reused = await client.get(f"/_goalcal/reset-password?token={token}")
+            assert "invalid or has expired" in reused.text
+
+    asyncio.run(scenario())
+
+
+def test_password_reset_anti_enumeration_rate_limit_expiry_and_smtp_unavailable(monkeypatch):
+    import time as _time
+    from goalcal import mailer
+
+    sent_messages = []
+    monkeypatch.setattr(mailer, "send_email", lambda **kwargs: sent_messages.append(kwargs))
+
+    active_email = f"active_{uuid.uuid4().hex[:8]}@example.com"
+    disabled_email = f"disabled_{uuid.uuid4().hex[:8]}@example.com"
+    auth.create_user("active_" + uuid.uuid4().hex[:6], "pw-long-1", admin=True, email=active_email)
+    dis_name = "dis_" + uuid.uuid4().hex[:6]
+    auth.create_user(dis_name, "pw-long-2", admin=True, email=disabled_email)
+    auth.manage(dis_name, disabled=True)
+
+    async def scenario():
+        transport = httpx2.ASGITransport(app=app)
+        async with httpx2.AsyncClient(transport=transport, base_url="https://goalcal.example") as client:
+            # 1. SMTP unconfigured returns friendly notice.
+            monkeypatch.setattr(mailer, "smtp_capabilities", lambda: {"configured": False, "from_address": ""})
+            unconf = await client.get("/_goalcal/forgot-password")
+            assert "not configured" in unconf.text
+
+            # 2. Unknown and disabled emails yield identical response without sending email.
+            monkeypatch.setattr(mailer, "smtp_capabilities", lambda: {"configured": True, "from_address": "bot@goalcal.example"})
+            fp = await client.get("/_goalcal/forgot-password")
+            csrf = _csrf(fp)
+            unknown_resp = await client.post("/_goalcal/forgot-password", data={"email": "nobody@example.com", "csrf": csrf})
+            disabled_resp = await client.post("/_goalcal/forgot-password", data={"email": disabled_email, "csrf": csrf})
+            assert "If an account is linked to that email" in unknown_resp.text
+            assert "If an account is linked to that email" in disabled_resp.text
+            assert sent_messages == []
+
+            # 3. Rate limit triggers after 3 requests for the same email.
+            for _ in range(3):
+                ok_resp = await client.post("/_goalcal/forgot-password", data={"email": active_email, "csrf": csrf})
+                assert "If an account is linked to that email" in ok_resp.text
+            limited = await client.post("/_goalcal/forgot-password", data={"email": active_email, "csrf": csrf})
+            assert "Too many password reset requests" in limited.text
+
+            # 4. Expired token is rejected.
+            with storage.connect() as con:
+                con.execute("UPDATE password_reset_tokens SET expires=?", (_time.time() - 5,))
+            token_match = re.search(r"\?token=([^\s\"&]+)", sent_messages[-1]["text_body"])
+            assert token_match is not None
+            expired_get = await client.get(f"/_goalcal/reset-password?token={token_match.group(1)}")
+            assert "invalid or has expired" in expired_get.text
+
+    asyncio.run(scenario())
+
+
+def test_migrate_v14_to_v15_creates_password_reset_tokens(tmp_path):
+    import sqlite3
+    from sqlalchemy import create_engine
+    from goalcal import migrations
+
+    db_path = tmp_path / "v14.db"
+    with sqlite3.connect(db_path) as con:
+        con.executescript(
+            """
+            CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, email TEXT, password_hash TEXT, disabled BOOLEAN NOT NULL DEFAULT 0, name TEXT NOT NULL DEFAULT 'demo', tz TEXT NOT NULL DEFAULT 'Asia/Shanghai', created_at DATETIME);
+            CREATE TABLE goals (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id), draft_id TEXT, title TEXT, outcome TEXT, deadline DATE, status TEXT, pinned BOOLEAN NOT NULL DEFAULT 0, created_at DATETIME, template_key TEXT, outline TEXT);
+            CREATE TABLE web_executions (id VARCHAR(32) NOT NULL PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id), event_id INTEGER NOT NULL, step_id INTEGER, habit_occurrence_id VARCHAR(40), status VARCHAR(20) NOT NULL, started_at DATETIME NOT NULL, expected_end_at DATETIME NOT NULL, resolved_at DATETIME, version INTEGER NOT NULL);
+            CREATE TABLE habits (id INTEGER PRIMARY KEY, pinned BOOLEAN NOT NULL DEFAULT 0);
+            CREATE TABLE events (id INTEGER PRIMARY KEY, sync_source_id INTEGER, all_day BOOLEAN NOT NULL DEFAULT 0);
+            INSERT INTO users (id, username, email, name, tz) VALUES (1, 'bob', 'bob@example.com', 'Bob', 'Asia/Shanghai');
+            PRAGMA user_version = 14;
+            """
+        )
+
+    engine = create_engine(f"sqlite:///{db_path}")
+    try:
+        migrations.migrate(engine)
+    finally:
+        engine.dispose()
+
+    with sqlite3.connect(db_path) as con:
+        assert con.execute("PRAGMA user_version").fetchone()[0] == migrations.VERSION
+        tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        assert "password_reset_tokens" in tables
+        assert con.execute("SELECT email FROM users WHERE id=1").fetchone()[0] == "bob@example.com"

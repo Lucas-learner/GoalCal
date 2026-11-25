@@ -19,6 +19,16 @@ class WebProposal(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime)
 
 
+class WebWeeklyPlan(Base):
+    __tablename__ = "web_weekly_plans"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    status: Mapped[str] = mapped_column(String(20), default="open")
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    payload_json: Mapped[str] = mapped_column(Text)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+
+
 class WebOperation(Base):
     __tablename__ = "web_operations"
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
@@ -103,4 +113,5 @@ __all__ = [
     "WebExecution",
     "WebOperation",
     "WebProposal",
+    "WebWeeklyPlan",
 ]

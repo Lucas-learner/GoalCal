@@ -21,6 +21,7 @@ from icalendar import Calendar, Event as ICalEvent
 
 from ..safe_fetch import FetchError, normalize_caldav_url, safe_http_request
 from .ics_import import _expand, _recurrence_id_utc, collect_recurrence_overrides, recurrence_instance_uid
+from .reminders import build_valarm
 
 UTC = timezone.utc
 
@@ -139,6 +140,13 @@ def _utc_naive(dt: datetime) -> datetime:
     return _utc_aware(dt).replace(tzinfo=None)
 
 
+def _valid_reminder_minutes(payload: dict) -> int | None:
+    raw = payload.get("reminder_minutes")
+    if isinstance(raw, bool) or not isinstance(raw, int) or not (0 <= raw <= 1440):
+        return None
+    return raw
+
+
 def _build_vevent_ics(payload: dict) -> tuple[str, bytes]:
     uid = (payload.get("remote_uid") or f"goalcal-event-{payload['event_id']}@goalcal.app").strip()
     cal = Calendar()
@@ -160,6 +168,14 @@ def _build_vevent_ics(payload: dict) -> tuple[str, bytes]:
         vevent.add("description", payload["description"])
     vevent.add("status", "CONFIRMED")
     vevent.add("x-goalcal-event-id", str(payload["event_id"]))
+    reminder_minutes = _valid_reminder_minutes(payload)
+    if reminder_minutes is not None:
+        vevent.add_component(
+            build_valarm(
+                reminder_minutes,
+                str(payload.get("alarm_description") or payload["title"]),
+            )
+        )
     cal.add_component(vevent)
     return uid, cal.to_ical()
 
@@ -793,11 +809,18 @@ class GoogleCalendarAdapter:
 
     @classmethod
     def push_upsert(cls, remote_calendar_id: str, secrets_dict: dict, payload: dict) -> PushResult:
+        reminder_minutes = _valid_reminder_minutes(payload)
+        reminders = (
+            {"useDefault": False, "overrides": [{"method": "popup", "minutes": reminder_minutes}]}
+            if reminder_minutes is not None
+            else {"useDefault": False, "overrides": []}
+        )
         body = {
             "summary": payload["title"],
             "description": payload.get("description") or "",
             "start": {"dateTime": payload["start_utc"]},
             "end": {"dateTime": payload["end_utc"]},
+            "reminders": reminders,
             "extendedProperties": {"private": {"goalcalEventId": str(payload["event_id"])}},
         }
         remote_uid = (payload.get("remote_uid") or "").strip()
@@ -1113,14 +1136,18 @@ class OutlookCalendarAdapter:
 
     @classmethod
     def push_upsert(cls, remote_calendar_id: str, secrets_dict: dict, payload: dict) -> PushResult:
-        body = {
+        reminder_minutes = _valid_reminder_minutes(payload)
+        body: dict = {
             "subject": payload["title"],
             "body": {"contentType": "text", "content": payload.get("description") or ""},
             "start": {"dateTime": payload["start_utc"].replace("Z", ""), "timeZone": "UTC"},
             "end": {"dateTime": payload["end_utc"].replace("Z", ""), "timeZone": "UTC"},
+            "isReminderOn": reminder_minutes is not None,
             "transactionId": f"goalcal-event-{payload['event_id']}",
             "singleValueExtendedProperties": [{"id": OUTLOOK_EXT_PROP_ID, "value": str(payload["event_id"])}],
         }
+        if reminder_minutes is not None:
+            body["reminderMinutesBeforeStart"] = reminder_minutes
         remote_uid = (payload.get("remote_uid") or "").strip()
         cal_q = quote(remote_calendar_id, safe="")
         if remote_uid:

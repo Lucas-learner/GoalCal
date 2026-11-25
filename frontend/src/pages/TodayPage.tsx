@@ -518,21 +518,6 @@ export function TodayPage({ fallbackTimezone }: { fallbackTimezone: string }) {
                     >
                       {t('部分完成', 'Partial')}
                     </button>
-                    <button
-                      type="button"
-                      className="inline-link-btn"
-                      disabled={checkinRecoveryAction.isPending || proposeAction.isPending}
-                      onClick={() =>
-                        void checkinRecoveryAction.run({
-                          eventId: ev.id,
-                          version: ev.version,
-                          outcome: 'missed',
-                          goalId: ev.goal_id,
-                        })
-                      }
-                    >
-                      {t('没来得及', 'Missed')}
-                    </button>
                     {ev.step_id != null ? (
                       <button
                         type="button"

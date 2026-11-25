@@ -9,6 +9,7 @@ import type {
   GoalIntakeOption,
   GoalIntakeResponse,
 } from '../api/types';
+import { AiProgressHint, type AiProgressStage } from '../components/AiProgressHint';
 import { ErrorBanner } from '../components/StateFeedback';
 import {
   addDaysIsoDate,
@@ -347,6 +348,32 @@ export function NewGoalPage({ timezone }: { timezone: string }) {
 
   const isBusy = intakeAction.isPending || generateDraftAction.isPending || saveGoalAction.isPending;
 
+  const intakeStages: readonly AiProgressStage[] = [
+    { afterMs: 0, label: t('正在理解目标与时间约束…', 'Understanding your goal and timeline…') },
+    { afterMs: 3000, label: t('正在评估期限与范围是否需要校准…', 'Checking whether scope or deadline needs calibration…') },
+    { afterMs: 8000, label: t('仍在细化校准建议，请稍候…', 'Still refining calibration suggestions…') },
+  ];
+
+  const createDraftStages: readonly AiProgressStage[] = [
+    { afterMs: 0, label: t('正在整理目标阶段大纲…', 'Mapping out goal phases…') },
+    { afterMs: 3000, label: t('正在拆解可执行步骤与最小产出…', 'Breaking down actionable steps and outcomes…') },
+    { afterMs: 8000, label: t('正在估算每步时长与精力节奏…', 'Estimating step durations and energy pace…') },
+    { afterMs: 16000, label: t('AI 仍在打磨细节，马上就好…', 'Still polishing step details, almost ready…') },
+  ];
+
+  const regenDraftStages: readonly AiProgressStage[] = [
+    { afterMs: 0, label: t('正在结合你的调整偏好重新评估…', 'Reviewing your revision preferences…') },
+    { afterMs: 3000, label: t('正在重排阶段与步骤粒度…', 'Reworking phases and step granularity…') },
+    { afterMs: 9000, label: t('正在收敛新的草稿方案，请稍候…', 'Finalizing the revised draft…') },
+  ];
+
+  const activeDraftBusy = intakeAction.isPending || generateDraftAction.isPending;
+  const activeDraftStages = intakeAction.isPending
+    ? intakeStages
+    : draft
+      ? regenDraftStages
+      : createDraftStages;
+
   return (
     <div className="new-goal-wrap">
       <div className="topbar">
@@ -439,6 +466,8 @@ export function NewGoalPage({ timezone }: { timezone: string }) {
             </div>
           ) : null}
 
+          <AiProgressHint active={activeDraftBusy} stages={activeDraftStages} />
+
           <div className="goal-form-actions" style={{ justifyContent: 'flex-end' }}>
             <div className="goal-form-buttons">
               <button
@@ -450,7 +479,11 @@ export function NewGoalPage({ timezone }: { timezone: string }) {
                 {t('取消', 'Cancel')}
               </button>
               <button type="submit" className="btn primary" disabled={isBusy}>
-                {isBusy ? t('处理中…', 'Working…') : t('生成草稿', 'Generate draft')}
+                {intakeAction.isPending
+                  ? t('分析中…', 'Analyzing…')
+                  : generateDraftAction.isPending
+                    ? t('拆解中…', 'Drafting…')
+                    : t('生成草稿', 'Generate draft')}
               </button>
             </div>
           </div>
@@ -556,6 +589,8 @@ export function NewGoalPage({ timezone }: { timezone: string }) {
               {validationError}
             </div>
           ) : null}
+
+          <AiProgressHint active={generateDraftAction.isPending} stages={createDraftStages} />
 
           <div className="goal-form-actions">
             <button
@@ -802,6 +837,8 @@ export function NewGoalPage({ timezone }: { timezone: string }) {
               {validationError}
             </div>
           ) : null}
+
+          <AiProgressHint active={generateDraftAction.isPending} stages={regenDraftStages} />
 
           <div className="goal-form-actions">
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>

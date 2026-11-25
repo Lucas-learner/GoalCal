@@ -1,5 +1,5 @@
 import { QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
@@ -721,7 +721,7 @@ describe('GoalCal critical interactions', () => {
     expect(goalNavBtn).toBeInTheDocument();
     expect(screen.getByText('账号')).toBeInTheDocument();
     expect(screen.getByText('邮箱')).toBeInTheDocument();
-    expect(screen.getByText('时区')).toBeInTheDocument();
+    expect(screen.getByLabelText('时区')).toHaveValue('Asia/Shanghai');
     expect(screen.getByLabelText('语言')).toBeInTheDocument();
     expect(screen.queryByText('用于隔离你的目标、日程与对话记录')).not.toBeInTheDocument();
 
@@ -733,7 +733,8 @@ describe('GoalCal critical interactions', () => {
     expect(screen.queryByRole('button', { name: '可用与保护时间' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '计划偏好' })).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: '时间偏好' }));
-    expect(await screen.findByLabelText('每日目标上限（分钟）')).toHaveValue(120);
+    expect(await screen.findByLabelText('每日任务上限（分钟）')).toHaveValue(120);
+    expect(screen.getByLabelText('任务间隔（分钟）')).toBeInTheDocument();
     // Single available window cannot be deleted
     expect(screen.getByRole('button', { name: '删除可用时间第 1 条' })).toBeDisabled();
     await user.click(screen.getByRole('button', { name: '添加保护时段' }));
@@ -1464,5 +1465,446 @@ describe('GoalCal critical interactions', () => {
     await waitFor(() => {
       expect(screen.queryByRole('link', { name: '重新登录' })).not.toBeInTheDocument();
     });
+  });
+
+  it('manages unified Reminders tab (calendar alarms, email digests), updates timezone, and opens deep-linked event', async () => {
+    const calls: Array<{ url: string; method: string; body?: string }> = [];
+    let currentTz = 'Asia/Shanghai';
+    let currentAlarms = {
+      enabled: true,
+      block_minutes: 10 as number | null,
+      habit_minutes: 10 as number | null,
+      manual_minutes: null as number | null,
+      version: 'al1',
+    };
+    let twoWayConnected = false;
+    let currentEmail = {
+      enabled: false,
+      morning_focus: false,
+      morning_time: '08:30',
+      evening_wrapup: true,
+      evening_time: '21:00',
+      weekly_habit_nudge: true,
+      goal_stall_nudge: true,
+      weekly_review: false,
+      weekly_review_time: '19:30',
+      quiet_start: '22:30',
+      quiet_end: '07:30',
+      daily_cap: 3,
+      version: 'em1',
+    };
+
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      const method = init?.method ?? 'GET';
+      calls.push({ url, method, body: typeof init?.body === 'string' ? init.body : undefined });
+
+      if (url === '/api/v1/me' && method === 'GET') {
+        return jsonResponse({ id: 1, name: 'Yan Li', email: 'yan@example.com', timezone: currentTz, lang: 'zh' });
+      }
+      if (url === '/api/v1/me' && method === 'PATCH') {
+        const parsed = JSON.parse(String(init?.body || '{}'));
+        if (parsed.timezone) currentTz = parsed.timezone;
+        return jsonResponse({ id: 1, name: 'Yan Li', email: 'yan@example.com', timezone: currentTz, lang: 'zh' });
+      }
+      if (url === '/api/v1/reminders' && method === 'GET') {
+        return jsonResponse({
+          calendar_alarms: currentAlarms,
+          calendar_sync_connected: { two_way: twoWayConnected, feed: false },
+          email_digests: currentEmail,
+          email_channel: {
+            smtp_configured: true,
+            from_address: 'bot@goalcal.test',
+            user_email: 'yan@example.com',
+          },
+          recent_notifications: [],
+        });
+      }
+      if (url === '/api/v1/calendar/sync') {
+        return jsonResponse({
+          feed: {
+            enabled: false,
+            path: null,
+            include_blocks: true,
+            include_habits: true,
+            include_manual: true,
+            rotated_at: null,
+            last_accessed_at: null,
+            version: null,
+          },
+          alarms: currentAlarms,
+          providers: {
+            caldav: { configured: true, label: 'Apple iCloud / CalDAV' },
+            google: { configured: false, label: 'Google Calendar' },
+            outlook: { configured: false, label: 'Outlook / Microsoft 365' },
+          },
+          connections: [],
+          sources: [],
+          conflicts: [],
+        });
+      }
+      if (url === '/api/v1/calendar/sync/alarms' && method === 'PUT') {
+        const parsed = JSON.parse(String(init?.body || '{}'));
+        currentAlarms = {
+          enabled: parsed.enabled,
+          block_minutes: parsed.block_minutes ?? null,
+          habit_minutes: parsed.habit_minutes ?? null,
+          manual_minutes: parsed.manual_minutes ?? null,
+          version: 'al2',
+        };
+        return jsonResponse({
+          alarms: currentAlarms,
+          queued_push: 1,
+          message: '已更新日历提醒闹钟设置（已排入 1 条待同步日程）。',
+        });
+      }
+      if (url === '/api/v1/reminders/email' && method === 'PUT') {
+        const parsed = JSON.parse(String(init?.body || '{}'));
+        currentEmail = { ...currentEmail, ...parsed, version: 'em2' };
+        return jsonResponse({
+          email_digests: currentEmail,
+          message: '已开启并更新邮件节奏提醒设置。',
+        });
+      }
+      if (url === '/api/v1/goals') {
+        return jsonResponse({ goals: [] });
+      }
+      if (url === '/api/v1/habits') {
+        return jsonResponse({ habits: [] });
+      }
+      if (url === '/api/v1/preferences/availability') {
+        return jsonResponse({
+          available_windows: [{ days: [0, 1, 2, 3, 4], start: '09:00', end: '18:00' }],
+          protected_windows: [],
+          preferred_windows: [],
+          buffer_minutes: 10,
+          max_goal_minutes_per_day: 120,
+          version: 'a1',
+        });
+      }
+      if (url.startsWith('/api/v1/calendar/events')) {
+        return jsonResponse({
+          events: [
+            {
+              id: 777,
+              title: '深链定位目标块',
+              start: '2026-11-28T02:00:00Z',
+              end: '2026-11-28T02:45:00Z',
+              kind: 'block',
+              status: 'planned',
+              step_id: 501,
+              step_version: 's501',
+              goal_id: 20,
+              goal_title: '主动提醒里程碑',
+              version: 'ev777',
+            },
+          ],
+          sync_conflicts: [],
+          habits: { items: [], weeks: [] },
+        });
+      }
+      return jsonResponse({});
+    });
+
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    // 1. Disconnected state guides new user cleanly to Calendar Sync & hides test-email button
+    const unlinkedRender = renderApp('/settings?section=reminders');
+    expect(await screen.findByText('尚未开启日历同步通道')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '前往日历同步' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '发送测试邮件' })).not.toBeInTheDocument();
+
+    // Save email reminder settings
+    await user.click(screen.getByRole('checkbox', { name: '已关闭' }));
+    await user.click(screen.getByRole('button', { name: '保存邮件设置' }));
+    await waitFor(() => {
+      const emailPut = calls.find((c) => c.url === '/api/v1/reminders/email' && c.method === 'PUT');
+      expect(emailPut).toBeDefined();
+      expect(JSON.parse(emailPut!.body!)).toMatchObject({ enabled: true, version: 'em1' });
+    });
+    unlinkedRender.unmount();
+
+    // 2. Connected state unlocks calendar alarm lead-time controls + timezone selector works in Account tab
+    twoWayConnected = true;
+    const connectedRender = renderApp('/settings?section=reminders');
+    const blockSelect = await screen.findByLabelText('目标执行块提醒');
+    expect(blockSelect).toHaveValue('10');
+
+    await user.selectOptions(blockSelect, '15');
+    await waitFor(() => {
+      const putCall = calls.find((c) => c.url === '/api/v1/calendar/sync/alarms' && c.method === 'PUT');
+      expect(putCall).toBeDefined();
+      expect(JSON.parse(putCall!.body!)).toMatchObject({
+        enabled: true,
+        block_minutes: 15,
+        habit_minutes: 10,
+        manual_minutes: null,
+        version: 'al1',
+      });
+    });
+
+    await user.click(screen.getByRole('button', { name: '通用与账号' }));
+    await user.selectOptions(await screen.findByLabelText('时区'), 'America/New_York');
+    await waitFor(() => {
+      const patchMe = calls.find((c) => c.url === '/api/v1/me' && c.method === 'PATCH');
+      expect(patchMe).toBeDefined();
+      expect(JSON.parse(patchMe!.body!)).toEqual({ timezone: 'America/New_York' });
+    });
+    connectedRender.unmount();
+
+    renderApp('/calendar?date=2026-11-28&event=777');
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('深链定位目标块')).toBeInTheDocument();
+  });
+
+  it('shows multi-stage progress hints during slow goal drafting and assistant replanning', async () => {
+    let resolveDraft!: (res: Response) => void;
+    let resolveTurn!: (res: Response) => void;
+
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      const method = init?.method ?? 'GET';
+
+      if (url === '/api/v1/me') {
+        return jsonResponse({ id: 1, name: 'Yan Li', timezone: 'Asia/Shanghai', lang: 'zh' });
+      }
+      if (url === '/api/v1/today') {
+        return jsonResponse({
+          date: '2026-11-25',
+          timezone: 'Asia/Shanghai',
+          next: null,
+          execution: null,
+          recovery: [],
+          events: [],
+        });
+      }
+      if (url === '/api/v1/goal-intake' && method === 'POST') {
+        return jsonResponse({ needs_calibration: false, suggested_title: '21 天完成个人站点上线' });
+      }
+      if (url === '/api/v1/goal-drafts' && method === 'POST') {
+        return new Promise<Response>((resolve) => {
+          resolveDraft = resolve;
+        });
+      }
+      if (url === '/api/v1/assistant' && method === 'GET') {
+        return jsonResponse({ messages: [], proposal: null, version: 'asst-1' });
+      }
+      if (url === '/api/v1/assistant/turns' && method === 'POST') {
+        return new Promise<Response>((resolve) => {
+          resolveTurn = resolve;
+        });
+      }
+      return jsonResponse({});
+    });
+
+    vi.stubGlobal('fetch', fetchMock);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      // 1. Slow AI goal draft shows progressive stages and elapsed timer, then disappears cleanly.
+      const newGoalView = renderApp('/goals/new');
+      const goalInput = await screen.findByLabelText('目标');
+      fireEvent.change(goalInput, { target: { value: '21 天上线个人站点' } });
+      fireEvent.click(screen.getByRole('button', { name: '生成草稿' }));
+
+      expect(await screen.findByText('正在整理目标阶段大纲…')).toBeInTheDocument();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3500);
+      });
+      expect(screen.getByText('正在拆解可执行步骤与最小产出…')).toBeInTheDocument();
+      expect(screen.getByText(/2\/4 · 3s/)).toBeInTheDocument();
+
+      await act(async () => {
+        resolveDraft(
+          jsonResponse({
+            id: 'd-slow',
+            version: 'v1',
+            title: '21 天完成个人站点上线',
+            deadline: '2026-12-16',
+            source: 'llm',
+            outline: ['准备', '上线'],
+            steps: [{ title: '确定首页信息结构', outcome: '草图', est_min: 30, energy: 1, kind: 'deep', milestone: '准备' }],
+          }),
+        );
+      });
+      expect(await screen.findByText('AI 生成草稿')).toBeInTheDocument();
+      expect(screen.queryByText('正在拆解可执行步骤与最小产出…')).not.toBeInTheDocument();
+      newGoalView.unmount();
+
+      // 2. Slow assistant replanning shows replanning stages and hides once reply resolves.
+      renderApp('/');
+      fireEvent.click(await screen.findByRole('button', { name: '问 GoalCal' }));
+      const composer = await screen.findByLabelText('向 GoalCal 助手发送消息');
+      fireEvent.change(composer, { target: { value: '帮我重新规划「个人站点」' } });
+      fireEvent.click(screen.getByRole('button', { name: '发送消息' }));
+
+      expect(await screen.findByText('正在读取目标与当前进度…')).toBeInTheDocument();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2700);
+      });
+      expect(screen.getByText('正在重新规划剩余步骤与节奏…')).toBeInTheDocument();
+
+      await act(async () => {
+        resolveTurn(
+          jsonResponse({
+            version: 'asst-2',
+            messages: [
+              { id: 1, role: 'user', content: '帮我重新规划「个人站点」', kind: 'text', created_at: '2026-11-25T13:00:00Z' },
+              { id: 2, role: 'assistant', content: '已为你调整剩余步骤节奏。', kind: 'text', created_at: '2026-11-25T13:00:05Z' },
+            ],
+            proposal: null,
+          }),
+        );
+      });
+      expect(await screen.findByText('已为你调整剩余步骤节奏。')).toBeInTheDocument();
+      expect(screen.queryByText('正在重新规划剩余步骤与节奏…')).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('generates multi-goal weekly plan preview on Calendar, toggles items, accepts selected subset, and exposes Undo', async () => {
+    const calls: Array<{ url: string; method: string; body?: Record<string, unknown> }> = [];
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      const method = init?.method ?? 'GET';
+      const body = typeof init?.body === 'string' ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
+      calls.push({ url, method, body });
+
+      if (url === '/api/v1/me') {
+        return jsonResponse({ id: 1, name: 'Yan Li', timezone: 'Asia/Shanghai' });
+      }
+      if (url === '/api/v1/goals') {
+        return jsonResponse({ goals: [] });
+      }
+      if (url === '/api/v1/habits') {
+        return jsonResponse({ habits: [] });
+      }
+      if (url === '/api/v1/preferences/availability') {
+        return jsonResponse({
+          available_windows: [{ days: [0, 1, 2, 3, 4, 5, 6], start: '08:00', end: '22:00' }],
+          protected_windows: [],
+          preferred_windows: [{ days: [0, 1, 2, 3, 4, 5, 6], start: '09:00', end: '12:00' }],
+          buffer_minutes: 10,
+          max_goal_minutes_per_day: 120,
+          version: 'avail-1',
+        });
+      }
+      if (url.startsWith('/api/v1/calendar/events')) {
+        return jsonResponse({ events: [], habits: { items: [], weeks: [] }, sync_conflicts: [] });
+      }
+      if (url === '/api/v1/weekly-plans' && method === 'POST') {
+        return jsonResponse({
+          id: 'wp-1',
+          version: '1',
+          status: 'open',
+          scope: 'this_week',
+          strategy: 'balanced',
+          keep_existing_blocks: true,
+          week_start: '2026-11-23',
+          week_end: '2026-11-29',
+          window_start: '2026-11-25T01:00:00Z',
+          window_end: '2026-11-29T16:00:00Z',
+          expires_at: '2099-01-01T00:00:00Z',
+          available_goals: [
+            { goal_id: 1, title: '站点上线', pinned: true, deadline: '2026-11-29', todo_count: 2 },
+            { goal_id: 2, title: '钢琴练习', pinned: false, deadline: null, todo_count: 1 },
+          ],
+          capacity: { free_minutes: 360, weekly_limit_minutes: 600, existing_minutes: 0, planned_minutes: 90 },
+          goal_summaries: [
+            {
+              goal_id: 1,
+              goal_title: '站点上线',
+              pinned: true,
+              deadline: '2026-11-29',
+              weight: 2.0,
+              existing_minutes: 0,
+              planned_minutes: 45,
+              planned_count: 1,
+              total_todo_minutes: 90,
+            },
+            {
+              goal_id: 2,
+              goal_title: '钢琴练习',
+              pinned: false,
+              deadline: null,
+              weight: 1.25,
+              existing_minutes: 0,
+              planned_minutes: 45,
+              planned_count: 1,
+              total_todo_minutes: 45,
+            },
+          ],
+          items: [
+            {
+              goal_id: 1,
+              goal_title: '站点上线',
+              step_id: 101,
+              step_title: '完善登录流程',
+              milestone: '核心功能',
+              est_min: 45,
+              start: '2026-11-26T01:00:00Z',
+              end: '2026-11-26T01:45:00Z',
+              score: 0.88,
+              reasons: ['上午 9–11 点是你精力最好的整块时间，适合深度任务'],
+              replaces_event_id: null,
+            },
+            {
+              goal_id: 2,
+              goal_title: '钢琴练习',
+              step_id: 201,
+              step_title: '音阶指法训练',
+              milestone: '基础',
+              est_min: 45,
+              start: '2026-11-27T01:00:00Z',
+              end: '2026-11-27T01:45:00Z',
+              score: 0.82,
+              reasons: ['错开安排在本周不同日期，均衡推进多目标'],
+              replaces_event_id: null,
+            },
+          ],
+          unscheduled: [],
+        });
+      }
+      if (url === '/api/v1/weekly-plans/wp-1/accept' && method === 'POST') {
+        return jsonResponse({
+          message: '已采纳本周平衡排期，共安排 1 个时间块',
+          accepted_count: 1,
+          events: [],
+          operation_id: 'op-wp-1',
+        });
+      }
+      return jsonResponse({});
+    });
+
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    renderApp('/calendar');
+
+    const planBtn = await screen.findByRole('button', { name: '排本周' });
+    await user.click(planBtn);
+
+    expect(await screen.findByText('排期预览')).toBeInTheDocument();
+    expect(screen.getByText('完善登录流程')).toBeInTheDocument();
+    expect(screen.getByText('音阶指法训练')).toBeInTheDocument();
+
+    // Uncheck the second planned item before accepting
+    const pianoLabel = screen.getByText('音阶指法训练').closest('label');
+    expect(pianoLabel).not.toBeNull();
+    const pianoCheckbox = within(pianoLabel!).getByRole('checkbox');
+    await user.click(pianoCheckbox);
+
+    const acceptBtn = screen.getByRole('button', { name: '采纳（1 块）' });
+    await user.click(acceptBtn);
+
+    await waitFor(() => {
+      const acceptCall = calls.find((c) => c.url === '/api/v1/weekly-plans/wp-1/accept' && c.method === 'POST');
+      expect(acceptCall).toBeDefined();
+      expect(acceptCall?.body).toEqual({ version: '1', step_ids: [101] });
+    });
+
+    expect(await screen.findByRole('button', { name: '撤销' })).toBeInTheDocument();
+    expect(screen.getByText('已采纳本周平衡排期，共安排 1 个时间块', { selector: '.undo-toast span' })).toBeVisible();
   });
 });

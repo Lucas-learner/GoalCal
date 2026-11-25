@@ -80,15 +80,16 @@ def _active_replan_context(raw_messages: list[dict]):
 
 
 def _replan_detail(text: str, goal_title: str) -> str:
-    # Keep deadline-modification and step-refinement phrases intact so evaluate_replan_turn knows the user's intent.
-    if re.search(r'截止(?:时间|日期)?|拆细|拆成更小|拆小|细化|更细一点|太粗了|\b(?:deadline|due\s*date|break\s+down|smaller\s+steps?|split\s+steps?)\b', text, re.I):
-        return text.strip()
-    cleaned = _REPLAN_TRIGGER.sub(' ', text)
+    cleaned = text or ''
     if goal_title:
         cleaned = re.sub(re.escape(goal_title), ' ', cleaned, flags=re.I)
+    # Strip deadline/refinement phrases AFTER removing goal_title so dates/words in goal titles never leak.
+    if re.search(r'截止(?:时间|日期)?|拆细|拆成更小|拆小|细化|更细一点|太粗了|\b(?:deadline|due\s*date|break\s+down|smaller\s+steps?|split\s+steps?)\b', cleaned, re.I):
+        return re.sub(r'[「」『』“”"\'《》【】]+', ' ', cleaned).strip()
+    cleaned = _REPLAN_TRIGGER.sub(' ', cleaned)
     cleaned = re.sub(r'[「」『』“”"\'《》【】\[\]()（）,，。:：;；?？!！\s]+', ' ', cleaned).strip()
     residual = _REPLAN_FILLER.sub('', cleaned).strip()
-    return text.strip() if len(residual) >= 2 else ''
+    return re.sub(r'[「」『』“”"\'《》【】]+', ' ', text).strip() if len(residual) >= 2 else ''
 
 
 def _resolve_replan_goal(session, uid: int, text: str, row, body: dict, stale: bool, active_replan_id: int | None):
@@ -517,16 +518,19 @@ def turn(svc, body):
                 if ask_reply:
                     reply = ask_reply
                 else:
-                    todo_steps = [s for s in sorted(target_goal.steps, key=lambda x: x.seq) if s.status == 'todo']
-                    total_min = sum(s.est_min for s in todo_steps)
-                    dl_note = (
-                        pick(lang, f'，截止 {target_goal.deadline.isoformat()}', f', due {target_goal.deadline.isoformat()}')
-                        if target_goal.deadline else ''
-                    )
-                    reply = pick(
-                        lang,
-                        f'「{target_goal.title}」目前还有 {len(todo_steps)} 个待办步骤（共 {total_min} 分钟{dl_note}）。\n你想怎么调整？比如：修改截止日期、缩短单步时长、放慢节奏，或调整重点方向？',
-                        f'"{target_goal.title}" currently has {len(todo_steps)} remaining todo steps ({total_min} min total{dl_note}).\nHow would you like to adjust it — change the deadline, shorten steps, slow the pace, or shift focus?',
+                    from ..domain import goals as goal_service
+                    from ..llm.replan import _build_replan_ask_reply
+                    todo_steps = [
+                        {'title': s.title, 'est_min': s.est_min}
+                        for s in sorted(target_goal.steps, key=lambda x: x.seq)
+                        if s.status == 'todo'
+                    ]
+                    reply = _build_replan_ask_reply(
+                        goal_title=target_goal.title,
+                        base_deadline=target_goal.deadline,
+                        todo_steps=todo_steps,
+                        outline=goal_service.outline_phases(target_goal),
+                        lang=lang,
                     )
         elif isinstance(decision_data, dict) and '_replan' in decision_data:
             replan_data = decision_data['_replan']

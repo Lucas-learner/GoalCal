@@ -339,6 +339,62 @@ def test_replan_deadline_multiturn_and_chat_confirm(service):
     assert "取消" in r6["messages"][-1]["content"]
 
 
+def test_replan_clarifies_area_first_and_ignores_duration_in_goal_title(service):
+    from datetime import date
+    from types import SimpleNamespace
+    from goalcal.models import Goal, Step
+    from goalcal.web import assistant as asst
+
+    goal_row = Goal(
+        user_id=service.user_id,
+        title="一个月内拿到实习 offer",
+        status="active",
+        deadline=date(2026, 12, 23),
+        outline='["准备材料", "批量投递", "面试冲刺"]',
+    )
+    service.session.add(goal_row)
+    service.session.flush()
+    service.session.add_all([
+        Step(goal_id=goal_row.id, seq=0, title="梳理项目经历要点", est_min=30, milestone="准备材料", status="todo"),
+        Step(goal_id=goal_row.id, seq=1, title="完成一版中文简历", est_min=45, milestone="准备材料", status="todo"),
+    ])
+    service.session.flush()
+    principal = SimpleNamespace(user_id=service.user_id, tz=service.tz)
+
+    # Seed non-empty conversation history so even with recent_messages, kickoff asks first
+    pre = asst.turn(service, {
+        "text": "你好",
+        "version": "0",
+        "page_goal_id": goal_row.id,
+        "_decision": None,
+    })
+
+    # 1. Bare kickoff with duration inside title MUST ask first (NOT propose shifting deadline to +1 month)
+    b1 = {"text": "帮我重新规划「一个月内拿到实习 offer」", "version": pre["version"], "page_goal_id": goal_row.id}
+    d1 = asst.prepare_turn(service.session, principal, b1, service.now, lang="zh")
+    assert "_replan_ask" in d1
+    assert "_replan" not in d1
+    r1 = asst.turn(service, {**b1, "_decision": d1})
+    assert "replan_goal" not in r1
+    ask_text = r1["messages"][-1]["content"]
+    assert "大阶段" in ask_text and "当前阶段的步骤" in ask_text and "截止日期" in ask_text
+
+    # 2. Broad area reply ("大阶段不对" / "当前阶段的步骤不对") still clarifies *how* before drafting
+    b2 = {"text": "大阶段不对", "version": r1["version"], "page_goal_id": goal_row.id}
+    d2 = asst.prepare_turn(service.session, principal, b2, service.now, lang="zh")
+    assert "_replan_ask" in d2
+    r2 = asst.turn(service, {**b2, "_decision": d2})
+    assert "replan_goal" not in r2
+
+    # 3. Once concrete direction is provided, draft proposal card cleanly
+    b3 = {"text": "先跳过海投准备，直接聚焦模拟面试和高频算法刷题，每步30分钟", "version": r2["version"], "page_goal_id": goal_row.id}
+    d3 = asst.prepare_turn(service.session, principal, b3, service.now, lang="zh")
+    assert "_replan" in d3
+    r3 = asst.turn(service, {**b3, "_decision": d3})
+    assert r3["replan_goal"]["goal_id"] == goal_row.id
+    assert r3["replan_goal"]["steps_changed"] is True
+
+
 def test_assistant_query_pause_disambiguate_and_habit_title(service):
     from datetime import date, datetime
     from types import SimpleNamespace

@@ -369,6 +369,68 @@ export interface CalendarFeed {
   version: string | null;
 }
 
+export interface CalendarAlarmPrefs {
+  enabled: boolean;
+  block_minutes: number | null;
+  habit_minutes: number | null;
+  manual_minutes: number | null;
+  version: string | null;
+}
+
+export interface CalendarAlarmsMutationResponse {
+  alarms: CalendarAlarmPrefs;
+  queued_push?: number;
+  message: string;
+}
+
+export interface EmailDigestPrefs {
+  enabled: boolean;
+  morning_focus: boolean;
+  morning_time: string;
+  evening_wrapup: boolean;
+  evening_time: string;
+  weekly_habit_nudge: boolean;
+  goal_stall_nudge: boolean;
+  weekly_review: boolean;
+  weekly_review_time: string;
+  quiet_start: string;
+  quiet_end: string;
+  daily_cap: number;
+  version: string | null;
+}
+
+export interface ReminderEmailChannelStatus {
+  smtp_configured: boolean;
+  from_address: string;
+  user_email: string | null;
+}
+
+export interface NotificationLogItem {
+  id: number;
+  channel: string;
+  kind: string;
+  subject: string;
+  status: 'pending' | 'sent' | 'skipped' | 'dead' | string;
+  sent_at: string | null;
+  scheduled_for: string | null;
+}
+
+export interface RemindersState {
+  calendar_alarms: CalendarAlarmPrefs;
+  calendar_sync_connected: {
+    two_way: boolean;
+    feed: boolean;
+  };
+  email_digests: EmailDigestPrefs;
+  email_channel: ReminderEmailChannelStatus;
+  recent_notifications: NotificationLogItem[];
+}
+
+export interface EmailRemindersMutationResponse {
+  email_digests: EmailDigestPrefs;
+  message: string;
+}
+
 export interface ProviderCapability {
   configured: boolean;
   label: string;
@@ -430,6 +492,7 @@ export interface CalendarSource {
 
 export interface CalendarSyncState {
   feed: CalendarFeed;
+  alarms?: CalendarAlarmPrefs;
   providers?: Record<string, ProviderCapability>;
   connections?: CalendarConnection[];
   sources: CalendarSource[];
@@ -496,4 +559,84 @@ export type FeedbackCategory =
 export interface FeedbackResponse {
   id: number;
   message: string;
+}
+
+export type WeeklyPlanScope = 'auto' | 'this_week' | 'next_week';
+export type WeeklyPlanStrategy = 'balanced' | 'deadline' | 'pinned';
+
+export interface WeeklyPlanAvailableGoal {
+  goal_id: number;
+  title: string;
+  pinned: boolean;
+  deadline: string | null;
+  todo_count: number;
+}
+
+export interface WeeklyPlanCapacity {
+  free_minutes: number;
+  weekly_limit_minutes: number;
+  existing_minutes: number;
+  planned_minutes: number;
+}
+
+export interface WeeklyPlanGoalSummary {
+  goal_id: number;
+  goal_title: string;
+  pinned: boolean;
+  deadline: string | null;
+  weight: number;
+  existing_minutes: number;
+  planned_minutes: number;
+  planned_count: number;
+  total_todo_minutes: number;
+}
+
+export interface WeeklyPlanItem {
+  goal_id: number;
+  goal_title: string;
+  step_id: number;
+  step_title: string;
+  milestone: string;
+  est_min: number;
+  start: string;
+  end: string;
+  score: number;
+  reasons: string[];
+  replaces_event_id: number | null;
+}
+
+export interface WeeklyPlanUnscheduled {
+  goal_id: number;
+  goal_title: string;
+  step_id: number;
+  step_title: string;
+  est_min: number;
+  reason_code: string;
+  reason: string;
+}
+
+export interface WeeklyPlan {
+  id: string;
+  version: string;
+  status: string;
+  scope: 'this_week' | 'next_week' | string;
+  strategy: WeeklyPlanStrategy | string;
+  keep_existing_blocks: boolean;
+  week_start: string;
+  week_end: string;
+  window_start: string;
+  window_end: string;
+  expires_at: string;
+  available_goals: WeeklyPlanAvailableGoal[];
+  capacity: WeeklyPlanCapacity;
+  goal_summaries: WeeklyPlanGoalSummary[];
+  items: WeeklyPlanItem[];
+  unscheduled: WeeklyPlanUnscheduled[];
+}
+
+export interface WeeklyPlanAcceptResponse {
+  message: string;
+  accepted_count: number;
+  events: CalendarEvent[];
+  operation_id?: string;
 }

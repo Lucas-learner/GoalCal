@@ -15,7 +15,7 @@ from sqlalchemy import inspect, or_, select
 
 from .. import memory, metrics
 from ..data.goal_templates import first_batch, full_steps, milestones, pick_template
-from ..domain import goals as goal_service, recovery, scheduler
+from ..domain import goals as goal_service, recovery, scheduler, weekly_planner
 from ..domain.calendar_sync import detect_sync_conflicts, event_blocks_scheduling
 from ..i18n import format_when, normalize_lang, pick
 from ..models import (
@@ -23,7 +23,7 @@ from ..models import (
     Interaction, Step, User, RescheduleLog,
 )
 from .availability import allows, validate_availability
-from .models import Habit, HabitOccurrence, WebDraft, WebExecution, WebOperation, WebProposal
+from .models import Habit, HabitOccurrence, WebDraft, WebExecution, WebOperation, WebProposal, WebWeeklyPlan
 from .transport_models import WebThread
 
 UTC = timezone.utc
@@ -46,7 +46,7 @@ def _hash(value) -> str:
 
 def version_token(row) -> str:
     """Opaque version including legacy-only fields that may change elsewhere."""
-    if isinstance(row, (WebDraft, WebExecution, WebProposal)):
+    if isinstance(row, (WebDraft, WebExecution, WebProposal, WebWeeklyPlan)):
         return str(row.version)
     values = {c.key: getattr(row, c.key) for c in inspect(type(row)).columns}
     if isinstance(row, CalendarFeed):
@@ -150,6 +150,11 @@ class Service:
     def calendar_sync(self):
         from .calendar_sync import CalendarSyncService
         return CalendarSyncService(self)
+
+    @property
+    def reminders(self):
+        from .reminders import ReminderService
+        return ReminderService(self)
 
     def _get(self, model, id):
         row = self.session.get(model, id)
@@ -336,7 +341,7 @@ class Service:
             minutes = sum(max(0, (min(_utc(e.end_utc), day_end) - max(_utc(e.start_utc), day_start)).total_seconds()) / 60
                           for e in occupied if e.kind == "block" and _utc(e.end_utc) > day_start and _utc(e.start_utc) < day_end)
             if minutes + (end - start).total_seconds() / 60 > config["max_goal_minutes_per_day"]:
-                raise ApiError("daily_limit", self._t("该日目标时间已达上限", "Daily goal-time limit reached for that day"))
+                raise ApiError("daily_limit", self._t("该日任务时长已达上限", "Daily task limit reached for that day"))
 
     def _slot_override_note(self, start, end, *, ignore=(), check_availability=True) -> str:
         start, end = _utc(start), _utc(end)
@@ -544,8 +549,9 @@ class Service:
         return {"message": self._t(f"已创建目标「{goal.title}」", f'Created goal "{goal.title}"'), "goal": self.serialize_goal(goal)}
 
     def _auto_refill(self, goal: Goal, body: dict) -> str:
-        """Auto-generate the next outline phase once all current todo steps are completed."""
-        if goal.status != "active" or any(s.status == "todo" for s in goal.steps):
+        """Auto-generate the next outline phase once <= 1 todo step remains."""
+        todo_count = sum(1 for s in goal.steps if s.status == "todo")
+        if goal.status != "active" or todo_count > 1:
             return ""
         remaining = set(goal_service.outline_phases(goal)) - {s.milestone for s in goal.steps}
         if not remaining:
@@ -821,6 +827,7 @@ class Service:
                     Event.user_id == self.user_id, Event.id.in_(event_ids))):
                 self.session.delete(event)
         self.session.flush()
+        self.supersede_weekly_plans()
         self.session.delete(goal)
         self.session.flush()
         return {"message": self._t(f"已删除目标「{title}」", f'Deleted goal "{title}"')}
@@ -937,6 +944,391 @@ class Service:
         for row in self.session.scalars(select(WebProposal).where(WebProposal.user_id == self.user_id, WebProposal.status == "open")):
             row.status, row.version = "superseded", row.version + 1
         self.session.flush()
+
+    def supersede_weekly_plans(self):
+        for row in self.session.scalars(select(WebWeeklyPlan).where(WebWeeklyPlan.user_id == self.user_id, WebWeeklyPlan.status == "open")):
+            row.status, row.version = "superseded", row.version + 1
+        self.session.flush()
+
+    def serialize_weekly_plan(self, plan: WebWeeklyPlan) -> dict:
+        payload = json.loads(plan.payload_json)
+        status = plan.status
+        if status == "open" and plan.expires_at <= self.now_naive:
+            status = "expired"
+        return {
+            "id": plan.id,
+            "version": version_token(plan),
+            "status": status,
+            "scope": payload["scope"],
+            "strategy": payload["strategy"],
+            "keep_existing_blocks": payload["keep_existing_blocks"],
+            "week_start": payload["week_start"],
+            "week_end": payload["week_end"],
+            "window_start": payload["window_start"],
+            "window_end": payload["window_end"],
+            "expires_at": _iso(plan.expires_at),
+            "available_goals": payload["available_goals"],
+            "capacity": payload["capacity"],
+            "goal_summaries": payload["goal_summaries"],
+            "items": payload["items"],
+            "unscheduled": payload["unscheduled"],
+        }
+
+    def create_weekly_plan(self, body):
+        scope = body.get("scope", "auto")
+        strategy = body.get("strategy", "balanced")
+        keep_existing_blocks = bool(body.get("keep_existing_blocks", True))
+        requested_goal_ids = body.get("goal_ids")
+
+        now_local = self.now.astimezone(self.zone)
+        resolved_scope, week_start, week_end, win_start_local, win_end_local = weekly_planner.resolve_week_window(now_local, scope)
+        win_start_utc = win_start_local.astimezone(UTC)
+        win_end_utc = win_end_local.astimezone(UTC)
+
+        active_goals = sorted(
+            self.session.scalars(select(Goal).where(Goal.user_id == self.user_id, Goal.status == "active")),
+            key=lambda g: (not g.pinned, g.deadline or date.max, g.id),
+        )
+        available_goals = []
+        eligible_goals: list[Goal] = []
+        for g in active_goals:
+            todo_steps = [s for s in g.steps if s.status == "todo"]
+            if not todo_steps:
+                continue
+            available_goals.append({
+                "goal_id": g.id,
+                "title": g.title,
+                "pinned": bool(g.pinned),
+                "deadline": g.deadline.isoformat() if g.deadline else None,
+                "todo_count": len(todo_steps),
+            })
+            eligible_goals.append(g)
+
+        selected_id_set = set(requested_goal_ids) if requested_goal_ids is not None else {g.id for g in eligible_goals}
+        selected_goals = [g for g in eligible_goals if g.id in selected_id_set]
+
+        running = self._running()
+        running_event_id = running.event_id if running else None
+        all_events = self._events()
+        recent_cutoff = self.now_naive - timedelta(days=7)
+
+        recent_step_ids = {
+            c.step_id
+            for c in self.session.scalars(select(Checkin).where(Checkin.ts >= recent_cutoff))
+        }
+        recent_event_step_ids = {
+            e.step_id for e in all_events
+            if e.step_id is not None and e.status in ("done", "partial")
+            and ((e.resolved_at and e.resolved_at >= recent_cutoff) or e.end_utc >= recent_cutoff)
+        }
+
+        replaceable_event_ids: set[int] = set()
+        replaceable_event_versions: dict[str, str] = {}
+        goal_inputs: list[weekly_planner.WeeklyGoalInput] = []
+        step_versions: dict[str, str] = {}
+        goal_versions: dict[str, str] = {}
+
+        open_events_by_step: dict[int, list[Event]] = {}
+        for ev in all_events:
+            if ev.step_id is not None and ev.kind == "block" and ev.status in OPEN:
+                open_events_by_step.setdefault(ev.step_id, []).append(ev)
+
+        selected_step_ids: set[int] = set()
+        for g in selected_goals:
+            goal_versions[str(g.id)] = version_token(g)
+            todo_steps = sorted((s for s in g.steps if s.status == "todo"), key=lambda s: (s.seq, s.id))
+            all_step_ids = {s.id for s in g.steps}
+            recent_activity = any(
+                (s.completed_at is not None and s.completed_at >= recent_cutoff)
+                or s.id in recent_step_ids
+                or s.id in recent_event_step_ids
+                for s in g.steps
+            )
+            step_inputs: list[weekly_planner.WeeklyStepInput] = []
+            for s in todo_steps:
+                step_open = open_events_by_step.get(s.id, [])
+                replaces_id: int | None = None
+                if step_open:
+                    if keep_existing_blocks:
+                        continue
+                    can_replace = all(
+                        ev.id != running_event_id
+                        and _utc(ev.start_utc) >= max(self.now, win_start_utc)
+                        and _utc(ev.end_utc) <= win_end_utc
+                        for ev in step_open
+                    )
+                    if not can_replace:
+                        continue
+                    for ev in step_open:
+                        replaceable_event_ids.add(ev.id)
+                        replaceable_event_versions[str(ev.id)] = version_token(ev)
+                    replaces_id = step_open[0].id
+                step_versions[str(s.id)] = version_token(s)
+                selected_step_ids.add(s.id)
+                step_inputs.append(
+                    weekly_planner.WeeklyStepInput(
+                        step_id=s.id,
+                        seq=s.seq,
+                        title=s.title,
+                        est_min=s.est_min,
+                        energy=s.energy,
+                        kind=s.kind,
+                        milestone=s.milestone,
+                        replaces_event_id=replaces_id,
+                    )
+                )
+
+            existing_win_min = 0
+            for ev in all_events:
+                if (
+                    ev.id not in replaceable_event_ids
+                    and ev.step_id in all_step_ids
+                    and ev.kind == "block"
+                    and ev.status not in ("skipped", "missed")
+                    and self._blocks_scheduling(ev)
+                ):
+                    es, ee = _utc(ev.start_utc), _utc(ev.end_utc)
+                    if ee > win_start_utc and es < win_end_utc:
+                        existing_win_min += int(round((min(ee, win_end_utc) - max(es, win_start_utc)).total_seconds() / 60.0))
+
+            goal_inputs.append(
+                weekly_planner.WeeklyGoalInput(
+                    goal_id=g.id,
+                    title=g.title,
+                    pinned=bool(g.pinned),
+                    deadline=g.deadline,
+                    total_todo_minutes=sum(s.est_min for s in todo_steps),
+                    recent_activity=recent_activity,
+                    existing_window_minutes=existing_win_min,
+                    steps=tuple(step_inputs),
+                )
+            )
+
+        avail_cfg = self._availability()
+        prefs = self._prefs()
+        prefs.web_availability = avail_cfg
+        busy = [
+            scheduler.BusyBlock(_utc(e.start_utc).astimezone(self.zone), _utc(e.end_utc).astimezone(self.zone), e.kind)
+            for e in all_events
+            if e.id not in replaceable_event_ids
+            and e.status not in ("skipped", "missed")
+            and self._blocks_scheduling(e)
+        ]
+
+        plan_res = weekly_planner.plan_week(
+            goal_inputs,
+            now_local,
+            (win_start_local, win_end_local),
+            busy,
+            prefs,
+            scope=resolved_scope,
+            week_start=week_start,
+            week_end=week_end,
+            strategy=strategy,
+            keep_existing_blocks=keep_existing_blocks,
+            lang=self.lang,
+        )
+
+        self.supersede_weekly_plans()
+        payload = {
+            "scope": plan_res.scope,
+            "strategy": plan_res.strategy,
+            "keep_existing_blocks": plan_res.keep_existing_blocks,
+            "week_start": plan_res.week_start.isoformat(),
+            "week_end": plan_res.week_end.isoformat(),
+            "window_start": _iso(win_start_utc),
+            "window_end": _iso(win_end_utc),
+            "preferences": _hash(avail_cfg),
+            "step_versions": step_versions,
+            "goal_versions": goal_versions,
+            "replaceable_event_versions": replaceable_event_versions,
+            "available_goals": available_goals,
+            "selected_goal_ids": [g.id for g in selected_goals],
+            "capacity": {
+                "free_minutes": plan_res.capacity_free_minutes,
+                "weekly_limit_minutes": plan_res.capacity_weekly_limit_minutes,
+                "existing_minutes": plan_res.capacity_existing_minutes,
+                "planned_minutes": plan_res.capacity_planned_minutes,
+            },
+            "goal_summaries": [
+                {
+                    "goal_id": gs.goal_id,
+                    "goal_title": gs.goal_title,
+                    "pinned": gs.pinned,
+                    "deadline": gs.deadline.isoformat() if gs.deadline else None,
+                    "weight": gs.weight,
+                    "existing_minutes": gs.existing_minutes,
+                    "planned_minutes": gs.planned_minutes,
+                    "planned_count": gs.planned_count,
+                    "total_todo_minutes": gs.total_todo_minutes,
+                }
+                for gs in plan_res.goal_summaries
+            ],
+            "items": [
+                {
+                    "goal_id": item.goal_id,
+                    "goal_title": item.goal_title,
+                    "step_id": item.step_id,
+                    "step_title": item.step_title,
+                    "milestone": item.milestone,
+                    "est_min": item.est_min,
+                    "start": _iso(item.start),
+                    "end": _iso(item.end),
+                    "score": item.score,
+                    "reasons": item.reasons,
+                    "replaces_event_id": item.replaces_event_id,
+                }
+                for item in plan_res.items
+            ],
+            "unscheduled": [
+                {
+                    "goal_id": u.goal_id,
+                    "goal_title": u.goal_title,
+                    "step_id": u.step_id,
+                    "step_title": u.step_title,
+                    "est_min": u.est_min,
+                    "reason_code": u.reason_code,
+                    "reason": u.reason,
+                }
+                for u in plan_res.unscheduled
+            ],
+        }
+        row = WebWeeklyPlan(
+            id=uuid4().hex,
+            user_id=self.user_id,
+            status="open",
+            version=1,
+            expires_at=self.now_naive + timedelta(minutes=30),
+            payload_json=_json(payload),
+        )
+        self.session.add(row)
+        self.session.flush()
+        return self.serialize_weekly_plan(row)
+
+    def accept_weekly_plan(self, plan_id: str, body):
+        plan = self._get(WebWeeklyPlan, plan_id)
+        self.check_version(plan, body)
+        if plan.status != "open" or plan.expires_at <= self.now_naive:
+            raise ApiError("stale_proposal", self._t("该周排期草案已失效，请重新生成", "This weekly plan has expired; please generate a new one"))
+        payload = json.loads(plan.payload_json)
+        if payload["preferences"] != _hash(self._availability()):
+            raise ApiError("stale_proposal", self._t("可用时间偏好已更新，请重新生成周排期", "Availability preferences changed; please regenerate the weekly plan"))
+
+        all_items = payload.get("items", [])
+        if not all_items:
+            raise ApiError("validation", self._t("该草案没有可采纳的时段", "No planned blocks available to accept"), 422)
+
+        requested_ids = body.get("step_ids")
+        if requested_ids is not None:
+            by_step = {item["step_id"]: item for item in all_items}
+            dedup_ids = list(dict.fromkeys(requested_ids))
+            if not dedup_ids or any(sid not in by_step for sid in dedup_ids):
+                raise ApiError("validation", self._t("选择的步骤不在该排期草案中", "Selected steps must belong to this weekly plan"), 422)
+            selected_items = [by_step[sid] for sid in dedup_ids]
+        else:
+            selected_items = list(all_items)
+
+        step_versions = payload.get("step_versions", {})
+        goal_versions = payload.get("goal_versions", {})
+        replaceable_versions = payload.get("replaceable_event_versions", {})
+
+        resolved_entries = []
+        old_events_by_id: dict[int, Event] = {}
+        for item in selected_items:
+            step = self._get(Step, item["step_id"])
+            goal = self._active_step(step)
+            self._ensure_not_running(step_id=step.id)
+            if (step_versions.get(str(step.id)) != version_token(step)
+                    or goal_versions.get(str(goal.id)) != version_token(goal)):
+                raise ApiError("stale_proposal", self._t("目标或步骤已更新，请重新生成周排期", "Goal or step changed; please regenerate the weekly plan"))
+            open_evts = self._open_step_events(step.id)
+            for old_ev in open_evts:
+                if str(old_ev.id) in replaceable_versions and replaceable_versions[str(old_ev.id)] != version_token(old_ev):
+                    raise ApiError("stale_proposal", self._t("已有日程已变更，请重新生成周排期", "Existing schedule changed; please regenerate the weekly plan"))
+                old_events_by_id[old_ev.id] = old_ev
+            start = parse_datetime(item["start"], lang=self.lang)
+            end = parse_datetime(item["end"], lang=self.lang)
+            resolved_entries.append((item, step, goal, start, end))
+
+        ignore_ids = set(old_events_by_id.keys())
+        config = self._availability()
+        buffer = timedelta(minutes=config["buffer_minutes"])
+
+        for _, step, goal, start, end in resolved_entries:
+            self._slot(start, end, ignore=ignore_ids, step=step, goal=goal, strict=True)
+
+        for i, (_, _, _, s1, e1) in enumerate(resolved_entries):
+            for _, _, _, s2, e2 in resolved_entries[i + 1:]:
+                if s1 < e2 + buffer and e1 > s2 - buffer:
+                    raise ApiError("schedule_conflict", self._t("所选排期块之间存在时间或缓冲冲突", "Selected blocks conflict with each other"))
+
+        existing_blocks = [
+            e for e in self._events()
+            if e.id not in ignore_ids
+            and e.kind == "block"
+            and e.status not in ("skipped", "missed")
+            and self._blocks_scheduling(e)
+        ]
+        affected_days = {start.astimezone(self.zone).date() for _, _, _, start, _ in resolved_entries}
+        for day in affected_days:
+            lo = datetime.combine(day, time(), self.zone).astimezone(UTC)
+            hi = datetime.combine(day + timedelta(days=1), time(), self.zone).astimezone(UTC)
+            spans = [(_utc(e.start_utc), _utc(e.end_utc)) for e in existing_blocks]
+            spans += [(s, e) for _, _, _, s, e in resolved_entries]
+            day_minutes = sum(
+                max(0.0, (min(ee, hi) - max(ss, lo)).total_seconds() / 60.0)
+                for ss, ee in spans if ee > lo and ss < hi
+            )
+            if day_minutes > config["max_goal_minutes_per_day"]:
+                raise ApiError("daily_limit", self._t("该日任务时长已达上限", "Daily task limit reached for that day"))
+
+        old_events = sorted(old_events_by_id.values(), key=lambda e: e.id)
+        changes = [(e, self._event_snapshot(e)) for e in old_events]
+        self._soft_cancel(old_events)
+
+        created_events: list[Event] = []
+        for _, step, goal, start, end in resolved_entries:
+            ev = Event(
+                user_id=self.user_id,
+                title=step.title[:200],
+                start_utc=_naive(start),
+                end_utc=_naive(end),
+                kind="block",
+                status="planned",
+                source="proposal",
+                step_id=step.id,
+            )
+            self.session.add(ev)
+            created_events.append(ev)
+        self.session.flush()
+        for ev in created_events:
+            changes.append((ev, None))
+
+        plan.status = "accepted"
+        plan.version += 1
+        self.supersede_proposals()
+        operation = self._operation(changes)
+        for ev, (_, step, goal, _, _) in zip(created_events, resolved_entries):
+            metrics.record(
+                self.session,
+                self.user_id,
+                metrics.PROPOSAL_ACCEPTED,
+                self.now_naive,
+                goal_id=goal.id,
+                step_id=step.id,
+                event_id=ev.id,
+                payload={"source": "weekly_plan", "plan_id": plan.id},
+            )
+        count = len(created_events)
+        return {
+            "message": self._t(
+                f"已采纳本周平衡排期，共安排 {count} 个时间块",
+                f"Accepted weekly plan with {count} block(s)",
+            ),
+            "accepted_count": count,
+            "events": [self.serialize_event(ev) for ev in created_events],
+            "operation_id": operation,
+        }
 
     def propose(self, step_id, body):
         step = self._get(Step, step_id)
@@ -1089,7 +1481,7 @@ class Service:
             spans += [(parse_datetime(b["start"], lang=self.lang), parse_datetime(b["end"], lang=self.lang)) for e, b in restored if e.kind == "block"]
             minutes = sum(max(0, (min(end, hi) - max(start, lo)).total_seconds()) / 60 for start, end in spans if end > lo and start < hi)
             if minutes > config["max_goal_minutes_per_day"]:
-                raise ApiError("daily_limit", self._t("恢复日程将超出每日目标时间上限", "Restoring would exceed your daily goal-time limit"))
+                raise ApiError("daily_limit", self._t("恢复日程将超出每日任务时长上限", "Restoring would exceed your daily task limit"))
         for event, before in rows:
             if before is None:
                 self._soft_cancel([event])

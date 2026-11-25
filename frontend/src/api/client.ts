@@ -3,6 +3,7 @@ import type {
   AssistantState,
   AssistantTurnResponse,
   Availability,
+  CalendarAlarmsMutationResponse,
   CalendarConnectionDeleteResponse,
   CalendarConnectionMutationResponse,
   CalendarEventsResponse,
@@ -13,6 +14,7 @@ import type {
   CalendarSyncState,
   Draft,
   DraftStep,
+  EmailRemindersMutationResponse,
   Goal,
   GoalsListResponse,
   Habit,
@@ -26,10 +28,15 @@ import type {
   MetricsResponse,
   MutationResult,
   Proposal,
+  RemindersState,
   StepStatus,
   StepUpdateResponse,
   TodayResponse,
   User,
+  WeeklyPlan,
+  WeeklyPlanAcceptResponse,
+  WeeklyPlanScope,
+  WeeklyPlanStrategy,
 } from './types';
 
 export const API_BASE = '/api/v1';
@@ -252,8 +259,15 @@ export async function apiWrite<T>(
 
 export const api = {
   getMe: () => apiGet<User>('/me'),
-  updateMe: (body: { lang?: '' | 'zh' | 'en'; theme?: '' | 'light' | 'dark'; calendar_palette?: '' | 'calm' | 'mono' | 'vivid' }, idempotencyKey?: string) =>
-    apiWrite<User>('/me', 'PATCH', body, { idempotencyKey }),
+  updateMe: (
+    body: {
+      lang?: '' | 'zh' | 'en';
+      theme?: '' | 'light' | 'dark';
+      calendar_palette?: '' | 'calm' | 'mono' | 'vivid';
+      timezone?: string;
+    },
+    idempotencyKey?: string,
+  ) => apiWrite<User>('/me', 'PATCH', body, { idempotencyKey }),
   getToday: () => apiGet<TodayResponse>('/today'),
   getHabits: () => apiGet<{ habits: Habit[] }>('/habits'),
   getHabit: (id: number, through?: string) =>
@@ -388,6 +402,22 @@ export const api = {
     idempotencyKey?: string,
   ) => apiWrite<MutationResult>(`/proposals/${proposalId}/accept`, 'POST', body, { idempotencyKey }),
 
+  createWeeklyPlan: (
+    body: {
+      scope?: WeeklyPlanScope;
+      strategy?: WeeklyPlanStrategy;
+      goal_ids?: number[];
+      keep_existing_blocks?: boolean;
+    } = {},
+    idempotencyKey?: string,
+  ) => apiWrite<WeeklyPlan>('/weekly-plans', 'POST', body, { idempotencyKey }),
+
+  acceptWeeklyPlan: (
+    planId: string,
+    body: { version: string; step_ids?: number[] },
+    idempotencyKey?: string,
+  ) => apiWrite<WeeklyPlanAcceptResponse>(`/weekly-plans/${planId}/accept`, 'POST', body, { idempotencyKey }),
+
   undoOperation: (operationId: string, idempotencyKey?: string) =>
     apiWrite<MutationResult>(`/operations/${encodeURIComponent(operationId)}/undo`, 'POST', {}, { idempotencyKey }),
 
@@ -441,6 +471,17 @@ export const api = {
     },
     idempotencyKey?: string,
   ) => apiWrite<CalendarFeedMutationResponse>('/calendar/sync/feed', 'PUT', body, { idempotencyKey }),
+
+  updateCalendarAlarms: (
+    body: {
+      enabled: boolean;
+      block_minutes: number | null;
+      habit_minutes: number | null;
+      manual_minutes: number | null;
+      version?: string;
+    },
+    idempotencyKey?: string,
+  ) => apiWrite<CalendarAlarmsMutationResponse>('/calendar/sync/alarms', 'PUT', body, { idempotencyKey }),
 
   rotateCalendarFeed: (body: { version?: string } = {}, idempotencyKey?: string) =>
     apiWrite<CalendarFeedMutationResponse>('/calendar/sync/feed/rotate', 'POST', body, { idempotencyKey }),
@@ -496,6 +537,27 @@ export const api = {
 
   deleteCalendarSource: (id: number, body: { version: string }, idempotencyKey?: string) =>
     apiWrite<CalendarSourceDeleteResponse>(`/calendar/sync/sources/${id}`, 'DELETE', body, { idempotencyKey }),
+
+  getReminders: () => apiGet<RemindersState>('/reminders'),
+
+  updateEmailReminders: (
+    body: {
+      enabled: boolean;
+      morning_focus: boolean;
+      morning_time: string;
+      evening_wrapup: boolean;
+      evening_time: string;
+      weekly_habit_nudge: boolean;
+      goal_stall_nudge: boolean;
+      weekly_review: boolean;
+      weekly_review_time: string;
+      quiet_start: string;
+      quiet_end: string;
+      daily_cap: number;
+      version?: string;
+    },
+    idempotencyKey?: string,
+  ) => apiWrite<EmailRemindersMutationResponse>('/reminders/email', 'PUT', body, { idempotencyKey }),
 
   getMetrics: () => apiGet<MetricsResponse>('/metrics'),
 

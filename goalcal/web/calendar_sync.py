@@ -6,7 +6,11 @@ from datetime import datetime, timedelta
 from sqlalchemy import func, select
 
 from ..crypto import encrypt_secrets
-from ..domain.bidirectional_sync import apply_native_pull, backfill_goalcal_source
+from ..domain.bidirectional_sync import (
+    apply_native_pull,
+    backfill_goalcal_source,
+    requeue_upcoming_goalcal_events,
+)
 from ..domain.calendar_sync import (
     MAX_SOURCES_PER_USER,
     apply_source_sync,
@@ -16,6 +20,7 @@ from ..domain.calendar_sync import (
     new_feed_token,
     record_source_error,
 )
+from ..domain.reminders import get_calendar_alarms_with_row, set_calendar_alarms
 from ..domain.sync_providers import RemoteCalendar, provider_capabilities
 from ..models import CalendarConnection, CalendarFeed, CalendarSource, SyncOutbox
 from ..safe_fetch import FetchError
@@ -217,14 +222,49 @@ class CalendarSyncService:
             "version": version_token(source),
         }
 
+    def serialize_alarms(self) -> dict:
+        alarms, row = get_calendar_alarms_with_row(self.session, self.user_id, now=self.core.now_naive)
+        return {
+            **alarms,
+            "version": version_token(row) if row is not None else None,
+        }
+
     def state(self) -> dict:
         pending_map = self._outbox_pending_counts()
         return {
             "feed": self.serialize_feed(self._feed_row()),
+            "alarms": self.serialize_alarms(),
             "providers": provider_capabilities(),
             "connections": [self.serialize_connection(c) for c in self._connections()],
             "sources": [self.serialize_source(s, pending_map.get(s.id, 0)) for s in self._sources()],
             "conflicts": detect_sync_conflicts(self.session, self.user_id, self.core.now_naive),
+        }
+
+    def update_alarms(self, body: dict) -> dict:
+        _, existing_row = get_calendar_alarms_with_row(self.session, self.user_id, now=self.core.now_naive)
+        if existing_row is not None and body.get("version") is not None:
+            self.core.check_version(existing_row, body)
+        payload = {
+            "enabled": bool(body["enabled"]),
+            "block_minutes": body.get("block_minutes", None),
+            "habit_minutes": body.get("habit_minutes", None),
+            "manual_minutes": body.get("manual_minutes", None),
+        }
+        alarms, row = set_calendar_alarms(self.session, self.user_id, payload)
+        self.session.flush()
+        queued = requeue_upcoming_goalcal_events(self.session, self.user_id, now_naive=self.core.now_naive)
+        msg = (
+            self._t(
+                f"已更新日历提醒闹钟设置（已排入 {queued} 条待同步日程）。",
+                f"Calendar reminders updated ({queued} upcoming synced event(s) queued).",
+            )
+            if queued > 0
+            else self._t("已更新日历提醒闹钟设置。", "Calendar reminders updated.")
+        )
+        return {
+            "alarms": {**alarms, "version": version_token(row)},
+            "queued_push": queued,
+            "message": msg,
         }
 
     def update_feed(self, body: dict) -> dict:

@@ -13,6 +13,7 @@ export const queryKeys = {
   calendarAll: ['calendar'] as const,
   calendarRange: (start: string, end: string) => ['calendar', start, end] as const,
   calendarSync: ['calendar-sync'] as const,
+  reminders: ['reminders'] as const,
   availability: ['preferences', 'availability'] as const,
   assistant: ['assistant'] as const,
   metrics: ['metrics'] as const,

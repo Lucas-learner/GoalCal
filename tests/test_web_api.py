@@ -423,6 +423,48 @@ def test_completing_last_step_auto_refills_via_llm(accounts, monkeypatch):
     assert any(s['milestone'] == '扶板打腿' and s['status'] == 'todo' for s in latest['steps'])
 
 
+def test_completing_step_with_one_todo_left_auto_refills_silently(accounts, monkeypatch):
+    from types import SimpleNamespace
+    from goalcal.domain import refine
+    from goalcal.web.core import version_token
+
+    uid, token = accounts[0][0], accounts[1][0]
+    with db.new_session() as s:
+        goal = create_goal(
+            s, uid, '一个月拿到实习 offer',
+            deadline=(datetime.now(timezone.utc) + timedelta(days=30)).date(),
+            with_template=False,
+            step_defs=[
+                {'title': '修改并打磨一页简历', 'est_min': 30, 'milestone': '准备材料', 'seq': 0},
+                {'title': '整理目标公司投递清单', 'est_min': 25, 'milestone': '准备材料', 'seq': 1},
+            ],
+            outline=['准备材料', '投递与面试'],
+        )
+        first = goal.steps[0]
+        first_id, first_ver = first.id, version_token(first)
+        s.commit()
+
+    class FakeClient:
+        ready = True
+        def complete_json(self, system, user_text, temperature=0.0):
+            return {'steps': [
+                {'milestone': '投递与面试', 'title': '每天投递 5 家目标岗位并记录跟进', 'outcome': '完成首轮投递清单', 'est_min': 35, 'energy': 1, 'kind': 'admin'},
+                {'milestone': '投递与面试', 'title': '整理高频技术面题库并刷前 5 题', 'outcome': '形成错题笔记', 'est_min': 40, 'energy': 2, 'kind': 'deep'},
+            ]}
+
+    monkeypatch.setattr(refine, 'settings', SimpleNamespace(llm_enabled=True))
+    monkeypatch.setattr(refine, 'plan_client', lambda: FakeClient())
+
+    res = request(token, 'PATCH', f'/steps/{first_id}', {'version': first_ver, 'status': 'done'}, key='low-watermark-refill-1')
+    assert res.status_code == 200, res.text
+    payload = res.json()
+    assert '投递与面试' in payload['message']
+    todo_titles = [s['title'] for s in payload['goal']['steps'] if s['status'] == 'todo']
+    assert '整理目标公司投递清单' in todo_titles
+    assert '每天投递 5 家目标岗位并记录跟进' in todo_titles
+    assert len(todo_titles) == 3
+
+
 def test_schedule_step_direct_and_undo(accounts):
     from goalcal.web.core import version_token
     uid, token = accounts[0][0], accounts[1][0]

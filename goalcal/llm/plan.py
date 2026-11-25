@@ -37,8 +37,10 @@ Rules:
    days_left: a short deadline needs fewer, broader phases; a long horizon allows
    more gradual ones. If a phase has a hard peak target (a distance, volume, or
    score to reach before wind-down), say so in the phase name.
-2. steps: 2-3 concrete steps for the FIRST phase only; their milestone must be
-   exactly outline[0]. The very first step should be small enough to start today.
+2. steps:
+   - If days_left is not null and days_left <= 14 (short goal): output 4-6 concrete steps covering the FULL goal across the phases in outline, in order.
+   - Otherwise (longer or open-ended goal): output 4-6 concrete steps covering outline[0] and, if phase 1 has fewer than 4 steps, continuing cleanly into the start of outline[1].
+   - Every step's milestone MUST exactly match one of the phase names in outline, and steps must appear in outline phase order. The very first step should be small enough to start today.
 3. Every step must be specific to THIS goal. One step = one observable action
    that can fit in 15-60 minutes. Do not put dates or clock times in steps.
 4. Each step needs an observable outcome, est_min, energy (0=low, 1=medium,
@@ -224,11 +226,12 @@ def generate_outline_plan(
         return None
 
     steps = []
-    for seq, step in enumerate(plan.steps[:3], 1):
+    for seq, step in enumerate(plan.steps[:6], 1):
+        milestone = step.milestone if step.milestone in outline else outline[0]
         steps.append(
             {
                 "seq": seq,
-                "milestone": outline[0],
+                "milestone": milestone,
                 "title": step.title,
                 "outcome": step.outcome.strip()[:200],
                 "est_min": step.est_min,

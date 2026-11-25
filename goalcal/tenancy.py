@@ -12,13 +12,13 @@ from . import auth
 from .db import get_engine
 from .models import (
     User, Goal, Step, Event, Checkin, StateLog, RescheduleLog, Interaction,
-    UserPreference, Conversation, Message,
+    UserPreference, Conversation, Message, NotificationOutbox,
 )
 
 from .web.models import (
     CalendarConnection, CalendarFeed, CalendarSource, EventSyncLink,
     Habit, HabitOccurrence, HabitRule, SyncOutbox,
-    WebProposal, WebOperation, WebExecution, WebDraft,
+    WebProposal, WebOperation, WebExecution, WebDraft, WebWeeklyPlan,
 )
 from .web.transport_models import WebRequest, WebThread
 
@@ -41,6 +41,7 @@ def criteria(uid):
     return {
         WebProposal: WebProposal.user_id == uid, WebOperation: WebOperation.user_id == uid,
         WebExecution: WebExecution.user_id == uid, WebDraft: WebDraft.user_id == uid,
+        WebWeeklyPlan: WebWeeklyPlan.user_id == uid,
         WebRequest: WebRequest.user_id == uid, WebThread: WebThread.user_id == uid,
         Habit: Habit.user_id == uid, HabitRule: HabitRule.user_id == uid,
         HabitOccurrence: HabitOccurrence.user_id == uid,
@@ -49,6 +50,7 @@ def criteria(uid):
         CalendarFeed: CalendarFeed.user_id == uid,
         EventSyncLink: EventSyncLink.user_id == uid,
         SyncOutbox: SyncOutbox.user_id == uid,
+        NotificationOutbox: NotificationOutbox.user_id == uid,
         User: User.id == uid, Goal: Goal.user_id == uid,
         Step: Step.goal_id.in_(goals), Event: Event.user_id == uid,
         Checkin: Checkin.step_id.in_(steps), StateLog: StateLog.user_id == uid,

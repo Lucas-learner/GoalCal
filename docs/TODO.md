@@ -1,55 +1,34 @@
 # GoalCal 待办清单（TODO）
 
-> 更新日期：2026-11-24
-> 当前已上线版本：日历同步 V2.2 全能力版（`goalcal.zhang.sarl` / Cloudflare Tunnel `goalcal-v2` / 正式数据库 `var/production/goalcal.db` Schema `v13`）
+> 更新日期：2026-11-25
+> 当前已上线版本：主动提醒阶段 0/1 + 自助密码重置 + AI 阶段提示 + 多目标全局每周平衡排期 Phase 1（`goalcal.zhang.sarl` / Cloudflare Tunnel `goalcal-v2` / 正式数据库 `var/production/goalcal.db` Schema `v16`）
 
 ---
 
-## 一、长期习惯
+## 一、待推进事项
 
-- [ ] 连续达成统计、助手排期与提醒。首版的管理与日常执行流程见 [习惯功能设计](habits-design.md)。
-
----
-
-## 二、日历与外部日程联动
-
-- [ ] **每周固定重复日程与批量编辑（`EventSeries`）**
-  - 在 `NewEventDialog` 支持“按周重复”（周几多选 + 持续周数 + 预计生成条数预览）。
-  - 在 `EventDialog` 支持按“仅此事件 / 此后全部”批量改期或取消。
-- [x] **ICS 双向订阅同步（只读导出 + 外部链接定时拉取）**
-  - 已实现用户专属只读 `.ics` 订阅导出地址（支持 `https://`、`webcal://`、内容筛选、ETag 与重置链接）及外部 `.ics`/`webcal://` 订阅源定时自动拉取与取消清理，详见 [日历同步设计](calendar-sync.md)。
-- [x] **原生双向读写同步与智能联动（V2.0–V2.2）**
-  - 已实现 `blocks_scheduling` / `all_day_mode` / 标识色控制、同步冲突检测与一键重排、Apple iCloud / 通用 CalDAV、Google Calendar OAuth + Watch Webhook、Microsoft Outlook Graph OAuth + Delta + Webhook，以及 `sync_outbox` 异步推送与 `event_sync_links` 防循环双向合并，详见 [日历同步设计](calendar-sync.md)。
-- [ ] **日历弹窗就地完成 & 颜色图例**
-  - 在 `CalendarPage` 顶部增加各状态色块图例（计划中 / 已完成 / 部分完成 / 未完成 / 外部固定日程）。
-  - 在 `EventDialog` 为已排期目标块增加一步点选“已完成 / 部分 / 跳过”，无需再经“开始执行”或跳回目标页。
+- [ ] **提醒阶段 2 — PWA + Web Push 实时推送**（详见 [主动提醒设计](reminders-design.md)）
+  - 先观察阶段 0 & 1 实际使用效果后再定；含 `manifest.webmanifest`、Service Worker、`push_subscriptions`、外部日历冲突实时预警与块结束轻签到。
 
 ---
 
-## 三、账号安全、设置与反馈
+## 二、近期已完成里程碑
 
-- [ ] **SMTP 发信与自助“忘记密码”找回**
-  - 目前已收集并唯一保存用户 `email`，支持邮箱登录及管理员命令行按邮箱重置；待配置 SMTP 凭据后补全“发送重置邮件链接/验证码”自助找回流程。
-- [ ] **网页端修改时区**
-  - 目前 `SettingsPage` 仅展示当前时区，注册后不能在网页设置页修改；后续补充时区选择器，并扩展现有 `PATCH /me`（目前仅语言）。
+- [x] **多目标全局每周平衡排期（Phase 1）**
+  - 已上线确定性周排期引擎（[weekly_planner.py](../goalcal/domain/weekly_planner.py)）、Schema `v16` `web_weekly_plans`、日历周视图幽灵块预览与批量采纳/一键撤销（基于置顶 `pinned`、截止日期、剩余工作量与防饿死加权）。
 
----
+- [x] **Cloudflare HTTPS 强制跳转加固**
+  - 已在 Cloudflare 控制台开启 **Always Use HTTPS**。
+- [x] **自助「忘记密码」邮件找回**
+  - 已上线 Schema `v15` `password_reset_tokens`（SHA-256 摘要、30 分钟一次性失效、防枚举与限流保护、重置后自动吊销旧会话），并通过 Resend SMTP 发送双语重置链接邮件（`/_goalcal/forgot-password`、`/_goalcal/reset-password`）。
+- [x] **AI 拆解 / 重规划长耗时阶段提示**
+  - 新增通用 [AiProgressHint.tsx](../frontend/src/components/AiProgressHint.tsx) 组件，接入新建目标校准/拆解/重生成与助手对话（含重规划专属阶段与计时反馈）。
 
-## 四、执行体验与智能调度
+- [x] **ICS 双向订阅同步与原生双向读写同步（V2.0–V2.2）**
+  - 已实现 Apple iCloud / CalDAV、Google Calendar、Microsoft Outlook 双向同步、双向 `.ics` 订阅、来源配色/全天策略/排期避让与同步冲突一键重排，详见 [日历同步设计](calendar-sync.md)。
+- [x] **网页端修改时区**
+  - 已在 `SettingsPage`「通用与账号」支持 IANA 时区选择器，并扩展 `PATCH /api/v1/me` 与 `auth.update_timezone` 实时生效。
+- [x] **主动提醒阶段 0 & 1**
+  - 已上线原生日历闹钟（`VALARM` / Google `reminders` / Outlook `isReminderOn` + 深链）、Schema `v14` `notification_outbox`、5 条反内疚节奏规则、Resend SMTP 邮件摘要与设置页「提醒与通知」独立分组，详见 [主动提醒设计](reminders-design.md)。
 
-- [ ] **到点提醒与未签到主动通知**
-  - 块开始前提醒（浏览器通知 / 邮件 / 后续移动端推送）与过期未签到主动提醒。
-- [ ] **快捷状态切换 & 可视化进度细节**
-  - 在 Goals / Today 页增加轻量状态胶囊（正常 / 累了 / 很忙 / 卡住），一键触发重排或恢复建议，无需在助手抽屉手输。
-  - 在当前 React 目标详情补充分段进度展示，以及助手拆解长耗时操作时的分阶段进度提示。
-- [ ] **多目标全局每周平衡排期**
-  - 支持按多目标优先级与截止日期紧迫度，生成“本周整体排期草案”并预览采纳。
-
----
-
-## 五、工程整合、测试与运维收尾
-
-- [ ] **Cloudflare HTTPS 强制跳转加固**
-  - 在 Cloudflare 控制台 `zhang.sarl` → `SSL/TLS` → `Edge Certificates` 确认开启 **Always Use HTTPS**，并将非 HTTPS 请求自动 301 到 HTTPS。
-
-已完成的反馈接入、浏览器验收、主仓库归并及旧实例下线见 [归并记录](records/consolidation-2026-11-17.md)。
+历史归并记录与旧实例下线证据见 [归并记录](records/consolidation-2026-11-17.md)。

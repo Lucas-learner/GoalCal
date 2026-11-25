@@ -1,6 +1,6 @@
 # GoalCal Web 生产维护手册
 
-更新：2026-11-24。正式入口 https://goalcal.zhang.sarl。源码工作区为 `/Users/macmini/projects/GoalCal`，应用与备份任务从已验证的发布目录启动。旧版 ngrok 和 `local.goalcal.*` 已退役。
+更新：2026-11-25。正式入口 https://goalcal.zhang.sarl。源码工作区为 `/Users/macmini/projects/GoalCal`，应用与备份任务从已验证的发布目录启动。旧版 ngrok 和 `local.goalcal.*` 已退役。
 
 ## 实例与路径
 
@@ -9,9 +9,9 @@
 | 网关 | `127.0.0.1:8521`，Starlette/Uvicorn，同进程 API + React 静态文件 |
 | 公网 | Cloudflare Tunnel，指定域名转发 8521；其他域名 404 |
 | 环境文件 | 仓库根目录 `.env.production`，权限 600 |
-| 数据库 | `var/production/goalcal.db`，schema 13，SQLite WAL |
+| 数据库 | `var/production/goalcal.db`，schema 16，SQLite WAL |
 | 日志 / 备份 | `var/production/logs/` / `var/production/backups/` |
-| 当前发布 | `var/releases/clean-dots-v13-20261124/`，包含源码、`frontend/dist/` 和 `SHA256SUMS`（同 schema 上一版本：`var/releases/cal-mono-v13-20261124/`；v12 跨 schema 回滚包：`var/releases/calendar-sync-ui-v12-20261124/`，切换前备份路径记录在 `var/releases/calendar-sync-v13-20261124/CUTOVER_BACKUP`） |
+| 当前发布 | `var/releases/replan-clarify-rolling-v16-20261125/`，包含源码、`frontend/dist/` 和 `SHA256SUMS`（同 schema 上一版本：`var/releases/weekly-plan-polish-v16-20261125/`；`v15` 跨 schema 回滚基准：`var/releases/remove-missed-btn-v15-20261125/`，对应切换前备份路径记录在 `var/releases/weekly-plan-v16-20261125/CUTOVER_BACKUP`） |
 | 后台服务 | `local.goalcal-v2.app`、`.tunnel`、`.backup` |
 | 健康检查 | `http://127.0.0.1:8521/_goalcal/health` |
 
@@ -82,6 +82,6 @@ curl -fsS http://127.0.0.1:8521/_goalcal/health
 
 恢复命令需要停服：`.venv/bin/python -m goalcal.admin restore /绝对路径/备份.db --app-stopped`。恢复会撤销登录会话；备份之后的数据需另行恢复，不能声称回滚无损保留所有新写入。
 
-当前发布为同 Schema `v13` 的全站来源圆点与配色预览点清理版本（源码与构建位于 `var/releases/clean-dots-v13-20261124/`，统一移除日历、筛选芯片、弹窗、冲突条、同步设置中的来源小圆点及设置页选色旁预览圆点；在线备份与停服切换备份记录在 `ONLINE_BACKUP` 与 `CUTOVER_BACKUP`）。此前 Schema `v12 → v13` 升级至 **日历同步 V2.2**（`var/releases/calendar-sync-v13-20261124/`）、折叠优化（`var/releases/calendar-sync-collapse-v13-20261124/`）、CalDAV 重复日程修复（`var/releases/calendar-sync-rrule-v13-20261124/`）、只读提示优化（`var/releases/calendar-sync-ux-v13-20261124/`）、交互打磨版本（`var/releases/ui-polish-v13-20261124/`）、可选日历配色版本（`var/releases/cal-palette-v13-20261124/`）、原生低饱和矿物配色版本（`var/releases/cal-mineral-v13-20261124/`）与配色命名及单色去点版本（`var/releases/cal-mono-v13-20261124/`）；若需同 Schema 回滚可切回 `var/releases/cal-mono-v13-20261124/`，若需跨 Schema 回滚至 v12 则需停服恢复 `var/releases/calendar-sync-v13-20261124/CUTOVER_BACKUP` 并切回 `var/releases/calendar-sync-ui-v12-20261124/`。若 `GOALCAL_CREDENTIAL_KEY` 未显式设置，生产环境使用数据库同目录 `0600` 权限 `.credential_key`。历史发布与备份归档：`var/releases/cal-mono-v13-20261124/`、`var/releases/cal-mineral-v13-20261124/`、`var/releases/cal-palette-v13-20261124/`、`var/releases/ui-polish-v13-20261124/`、`var/releases/calendar-sync-ux-v13-20261124/`、`var/releases/calendar-sync-rrule-v13-20261124/`、`var/releases/calendar-sync-collapse-v13-20261124/`、`var/releases/calendar-sync-v13-20261124/`、`var/releases/calendar-sync-ui-v12-20261124/`、`var/releases/calendar-sync-v12-20261124/`、`var/releases/perf-v11-20261123/`、`var/releases/rollback-3b022e1-v8/`。
+当前线上版本为 **Schema `v16`（多目标全局每周平衡排期 Phase 1 + 每日任务上限默认 240 分钟 / 任务间隔提示 / 前置紧凑排期 / 滚动步骤扩充与剩 1 步静默续杯 / 重新规划先澄清大阶段或步骤问题并屏蔽目标名时间误判）**（发布于 `var/releases/replan-clarify-rolling-v16-20261125/`；同 schema 上一版 `var/releases/weekly-plan-polish-v16-20261125/`）。若需同 Schema `v16` 回滚，可直接切回 `var/releases/weekly-plan-polish-v16-20261125/` 并保留当前数据库；若需跨 Schema 回滚至 `v15`，须先停服并使用 `var/releases/weekly-plan-v16-20261125/CUTOVER_BACKUP` 恢复数据库，再切回 `var/releases/remove-missed-btn-v15-20261125/`。若 `GOALCAL_CREDENTIAL_KEY` 未显式设置，生产环境使用数据库同目录 `0600` 权限 `.credential_key`。
 
 本次归并的快照、旧数据与旧配置位置见 [整合记录](records/consolidation-2026-11-17.md)。旧数据只归档，不合并进正式新版库。

@@ -11,7 +11,9 @@
 | [接口契约](接口契约.md) | 当前 API、校验与业务边界 |
 | [界面设计](DESIGN.md) | 当前 React 样式与交互 |
 | [助手与对话](conversation-redesign.md) | 当前助手线程与领域能力复用 |
-| [日历同步](calendar-sync.md) | 双向 ICS 订阅架构、安全边界与后续原生同步演进 |
+| [习惯功能](habits-design.md) | 固定日与周次数习惯的创建、执行与统计边界 |
+| [日历同步](calendar-sync.md) | 双向 ICS 订阅架构、原生双向同步与安全边界 |
+| [主动提醒](reminders-design.md) | 阶段 0/1 原生日历闹钟、统一提醒引擎、SMTP 选型与后续规划 |
 | [待办](TODO.md) | 尚未完成的产品与运维事项 |
 
 [归并记录](records/consolidation-2026-11-17.md) 保存已完成的服务切换与验收证据；[归并前审计](records/version-audit-2026-11-17.md) 是问题发现时的快照，其待办状态已被归并记录取代。

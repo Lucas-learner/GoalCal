@@ -94,6 +94,9 @@ def english_auth_error(message: str) -> str:
         "注册尝试过多，请稍后再试": "Too many registration attempts. Please try again later.",
         "登录尝试过多，请在 15 分钟后重试": "Too many login attempts. Try again in 15 minutes.",
         "用户名或密码错误": "Incorrect username or password.",
+        "密码重置请求过于频繁，请 15 分钟后再试": "Too many password reset requests. Try again in 15 minutes.",
+        "重置链接无效或已过期，请重新申请": "This reset link is invalid or has expired. Please request a new one.",
+        "两次输入的密码不一致": "Passwords do not match.",
     }.get(message, message)
 
 
@@ -132,6 +135,22 @@ _AUTH_COPY = {
         "created": "账号已创建，请登录。",
         "form_expired": "表单会话已过期，请再试一次。",
         "switch_label": "语言",
+        "forgot_link": "忘记密码？",
+        "forgot_title": "找回密码",
+        "forgot_desc": "输入绑定账号的邮箱地址，我们会发送一次性重置链接（30 分钟内有效）。",
+        "forgot_btn": "发送重置邮件",
+        "forgot_sent": "如果该邮箱已绑定 GoalCal 账号，重置密码邮件已发送（30 分钟内有效），请查收收件箱及垃圾邮件箱。",
+        "forgot_smtp_missing": "当前服务端尚未配置邮件发送（SMTP），请联系管理员协助重置密码。",
+        "forgot_send_failed": "邮件发送暂时失败，请稍后重试。",
+        "back_to_login": "返回登录",
+        "reset_title": "设置新密码",
+        "reset_desc": "请为你的 GoalCal 账号设置新密码（至少 6 个字符）。重置完成后原有登录会话将自动退出。",
+        "reset_new_pw": "新密码（至少 6 位）",
+        "reset_confirm_pw": "确认新密码",
+        "reset_btn": "确认重置密码",
+        "reset_invalid": "重置链接无效或已过期，请重新申请。",
+        "reset_request_again": "重新申请重置链接",
+        "password_reset_done": "密码已重置，请使用新密码登录。",
     },
     "en": {
         "html_lang": "en",
@@ -151,59 +170,40 @@ _AUTH_COPY = {
         "created": "Account created. Please log in.",
         "form_expired": "Form session expired. Please try again.",
         "switch_label": "Language",
+        "forgot_link": "Forgot password?",
+        "forgot_title": "Reset your password",
+        "forgot_desc": "Enter the email linked to your account and we will send a one-time reset link (valid for 30 minutes).",
+        "forgot_btn": "Send reset email",
+        "forgot_sent": "If an account is linked to that email, a password reset link has been sent (valid for 30 minutes). Please check your inbox and spam folder.",
+        "forgot_smtp_missing": "Outbound email (SMTP) is not configured on this server yet. Please contact the administrator to reset your password.",
+        "forgot_send_failed": "Unable to send email right now. Please try again later.",
+        "back_to_login": "Back to log in",
+        "reset_title": "Set a new password",
+        "reset_desc": "Choose a new password for your GoalCal account (at least 6 characters). Existing sessions will be signed out.",
+        "reset_new_pw": "New password (at least 6 characters)",
+        "reset_confirm_pw": "Confirm new password",
+        "reset_btn": "Update password",
+        "reset_invalid": "This reset link is invalid or has expired. Please request a new one.",
+        "reset_request_again": "Request a new link",
+        "password_reset_done": "Your password has been updated. Please log in with your new password.",
     },
 }
 
 
-def _login_page(
+def _auth_shell_response(
     request: Request,
-    message: str = "",
     *,
-    register: bool = False,
-    app_login: bool = False,
-    next_target: str | None = None,
+    lang: str,
+    card_html: str,
+    current_page: str,
+    form_token: str,
+    script: str = "",
+    script_nonce: str = "",
     status_code: int = 200,
 ) -> HTMLResponse:
-    lang = _request_lang(request)
     theme = _request_theme(request)
     theme_attr = f' data-theme="{theme}"' if theme else ""
     copy = _AUTH_COPY[lang]
-    existing_form_token = request.cookies.get(FORM_COOKIE_NAME, "")
-    # Reuse the browser's CSRF cookie across tabs and history navigation instead of clobbering it on every GET.
-    form_token = (
-        existing_form_token
-        if _FORM_TOKEN_RE.fullmatch(existing_form_token)
-        else secrets.token_urlsafe(32)
-    )
-    script_nonce = secrets.token_urlsafe(32)
-    notice = f'<p class="notice" role="alert">{html.escape(message)}</p>' if message else ""
-    open_reg = auth.open_registration_enabled()
-    if register:
-        extra = (
-            f'<label>{copy["email"]}<input name="email" type="email" autocomplete="email" required></label>'
-            if open_reg
-            else f'<label>{copy["invitation"]}<input name="invitation" required></label>'
-        )
-        fields = f"""<label>{copy["username"]}<input name="username" autocomplete="username" required></label>
-{extra}
-<label>{copy["password_new"]}<input name="password" type="password" autocomplete="new-password" required></label>
-<label>{copy["timezone"]}<select name="tz" required>{_TZ_OPTIONS_HTML}</select></label>"""
-        action, button = "/_goalcal/register", copy["btn_register"]
-        login_current, register_current = "", ' aria-current="page"'
-        script = _DETECT_TZ_SCRIPT.format(nonce=script_nonce)
-    else:
-        user_label = copy["username_or_email"] if open_reg else copy["username"]
-        fields = f"""<label>{user_label}<input name="username" autocomplete="username" required></label>
-<label>{copy["password"]}<input name="password" type="password" autocomplete="current-password" required></label>"""
-        action, button = "/_goalcal/login", copy["btn_login"]
-        login_current, register_current = ' aria-current="page"', ""
-        script = ""
-    target = next_target if next_target is not None else ("/app/" if app_login else None)
-    return_field = f'<input type="hidden" name="next" value="{html.escape(target, quote=True)}">' if target else ""
-    encoded_target = quote(target, safe="/") if target else ""
-    login_href = f"/_goalcal/login?next={encoded_target}" if target else "/"
-    register_href = f"/_goalcal/register?next={encoded_target}" if target else "/_goalcal/register"
-    current_page = register_href if register else login_href
     zh_href = f"/_goalcal/lang?lang=zh&next={quote(current_page, safe='/')}"
     en_href = f"/_goalcal/lang?lang=en&next={quote(current_page, safe='/')}"
     zh_cls = ' class="active"' if lang == "zh" else ""
@@ -212,9 +212,9 @@ def _login_page(
     body = f"""<!doctype html><html lang="{copy["html_lang"]}"{theme_attr}><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GoalCal</title><style>
-:root{{color-scheme:light;--bg:#fafaf8;--surface:#fffefd;--surface-soft:#f4f4f1;--ink:#1d1d1f;--muted:#6e6e73;--faint:#a1a1a6;--line:rgba(29,29,31,0.08);--line-strong:rgba(29,29,31,0.16);--accent:#303638;--accent-hover:#23282a;--accent-ink:#fff;--blue:#6b7f89;--tab-shadow:0 1px 2px rgba(20,22,24,0.06);--notice-bg:#fdf3e7;--notice-border:rgba(180,120,40,0.2);--notice-ink:#5c3d15;--radius:13px;--control:9px;--shadow:0 1px 2px rgba(20,22,24,0.02),0 8px 24px rgba(20,22,24,0.025)}}
-:root[data-theme="dark"]{{color-scheme:dark;--bg:#131415;--surface:#1b1c1e;--surface-soft:#242629;--ink:#f0f0ee;--muted:#a2a3a8;--faint:#73757a;--line:rgba(255,255,255,0.09);--line-strong:rgba(255,255,255,0.18);--accent:#e5e7e6;--accent-hover:#d4d7d6;--accent-ink:#161819;--blue:#8aa2ad;--tab-shadow:0 1px 2px rgba(0,0,0,0.35);--notice-bg:rgba(218,162,86,0.12);--notice-border:rgba(218,162,86,0.28);--notice-ink:#f2cd98;--shadow:0 1px 2px rgba(0,0,0,0.28),0 8px 24px rgba(0,0,0,0.34)}}
-@media (prefers-color-scheme:dark){{:root:not([data-theme="light"]){{color-scheme:dark;--bg:#131415;--surface:#1b1c1e;--surface-soft:#242629;--ink:#f0f0ee;--muted:#a2a3a8;--faint:#73757a;--line:rgba(255,255,255,0.09);--line-strong:rgba(255,255,255,0.18);--accent:#e5e7e6;--accent-hover:#d4d7d6;--accent-ink:#161819;--blue:#8aa2ad;--tab-shadow:0 1px 2px rgba(0,0,0,0.35);--notice-bg:rgba(218,162,86,0.12);--notice-border:rgba(218,162,86,0.28);--notice-ink:#f2cd98;--shadow:0 1px 2px rgba(0,0,0,0.28),0 8px 24px rgba(0,0,0,0.34)}}}}
+:root{{color-scheme:light;--bg:#fafaf8;--surface:#fffefd;--surface-soft:#f4f4f1;--ink:#1d1d1f;--muted:#6e6e73;--faint:#a1a1a6;--line:rgba(29,29,31,0.08);--line-strong:rgba(29,29,31,0.16);--accent:#303638;--accent-hover:#23282a;--accent-ink:#fff;--blue:#6b7f89;--tab-shadow:0 1px 2px rgba(20,22,24,0.06);--notice-bg:#fdf3e7;--notice-border:rgba(180,120,40,0.2);--notice-ink:#5c3d15;--info-bg:#f2f5f7;--info-border:rgba(107,127,137,0.24);--info-ink:#32444d;--radius:13px;--control:9px;--shadow:0 1px 2px rgba(20,22,24,0.02),0 8px 24px rgba(20,22,24,0.025)}}
+:root[data-theme="dark"]{{color-scheme:dark;--bg:#131415;--surface:#1b1c1e;--surface-soft:#242629;--ink:#f0f0ee;--muted:#a2a3a8;--faint:#73757a;--line:rgba(255,255,255,0.09);--line-strong:rgba(255,255,255,0.18);--accent:#e5e7e6;--accent-hover:#d4d7d6;--accent-ink:#161819;--blue:#8aa2ad;--tab-shadow:0 1px 2px rgba(0,0,0,0.35);--notice-bg:rgba(218,162,86,0.12);--notice-border:rgba(218,162,86,0.28);--notice-ink:#f2cd98;--info-bg:rgba(138,162,173,0.12);--info-border:rgba(138,162,173,0.28);--info-ink:#d0dce2;--shadow:0 1px 2px rgba(0,0,0,0.28),0 8px 24px rgba(0,0,0,0.34)}}
+@media (prefers-color-scheme:dark){{:root:not([data-theme="light"]){{color-scheme:dark;--bg:#131415;--surface:#1b1c1e;--surface-soft:#242629;--ink:#f0f0ee;--muted:#a2a3a8;--faint:#73757a;--line:rgba(255,255,255,0.09);--line-strong:rgba(255,255,255,0.18);--accent:#e5e7e6;--accent-hover:#d4d7d6;--accent-ink:#161819;--blue:#8aa2ad;--tab-shadow:0 1px 2px rgba(0,0,0,0.35);--notice-bg:rgba(218,162,86,0.12);--notice-border:rgba(218,162,86,0.28);--notice-ink:#f2cd98;--info-bg:rgba(138,162,173,0.12);--info-border:rgba(138,162,173,0.28);--info-ink:#d0dce2;--shadow:0 1px 2px rgba(0,0,0,0.28),0 8px 24px rgba(0,0,0,0.34)}}}}
 *{{box-sizing:border-box}}
 body{{font:14px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro Display","PingFang SC","Helvetica Neue",Arial,sans-serif;background:var(--bg);color:var(--ink);margin:0;-webkit-font-smoothing:antialiased}}
 main{{min-height:100dvh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:32px 18px}}
@@ -229,27 +229,33 @@ nav{{display:grid;grid-template-columns:1fr 1fr;gap:4px;padding:4px;background:v
 nav a{{display:flex;align-items:center;justify-content:center;min-height:34px;padding:0 12px;border-radius:8px;color:var(--muted);text-decoration:none;font-size:13px;font-weight:500;transition:background-color .15s,color .15s}}
 nav a:hover{{color:var(--ink)}}
 nav a[aria-current="page"]{{background:var(--surface);color:var(--ink);font-weight:620;box-shadow:var(--tab-shadow)}}
+.card-title{{margin:0 0 8px;font-size:16px;font-weight:660;color:var(--ink)}}
+.card-desc{{margin:0 0 18px;font-size:12.5px;line-height:1.55;color:var(--muted)}}
 label{{display:block;margin:0 0 15px;font-size:12px;font-weight:600;color:var(--ink)}}
 input,select{{display:block;width:100%;min-height:40px;margin-top:6px;padding:8px 12px;border:1px solid var(--line-strong);border-radius:var(--control);background:var(--surface);font:400 14px/1.4 inherit;color:var(--ink)}}
-input:focus,select:focus,button:focus-visible,nav a:focus-visible,.lang-switch a:focus-visible{{outline:2px solid var(--blue);outline-offset:2px}}
+input:focus,select:focus,button:focus-visible,nav a:focus-visible,.lang-switch a:focus-visible,.auth-link:focus-visible{{outline:2px solid var(--blue);outline-offset:2px}}
 button{{display:inline-flex;align-items:center;justify-content:center;width:100%;height:40px;margin-top:6px;padding:0 16px;border:1px solid var(--accent);border-radius:var(--control);background:var(--accent);color:var(--accent-ink);font:600 13px/1 inherit;cursor:pointer;transition:background-color .15s}}
 button:hover{{background:var(--accent-hover)}}
+.btn-secondary{{display:inline-flex;align-items:center;justify-content:center;width:100%;height:40px;margin-top:6px;padding:0 16px;border:1px solid var(--line-strong);border-radius:var(--control);background:var(--surface-soft);color:var(--ink);font:600 13px/1 inherit;text-decoration:none;cursor:pointer}}
+.btn-secondary:hover{{background:var(--line)}}
 .notice{{padding:10px 12px;background:var(--notice-bg);border:1px solid var(--notice-border);border-radius:var(--control);color:var(--notice-ink);font-size:12.5px;margin:0 0 16px}}
+.notice.info{{background:var(--info-bg);border-color:var(--info-border);color:var(--info-ink)}}
+.auth-links{{display:flex;justify-content:center;margin-top:14px;font-size:12px}}
+.auth-link{{color:var(--muted);text-decoration:none;padding:2px 6px;border-radius:6px}}
+.auth-link:hover{{color:var(--ink);text-decoration:underline}}
 .lang-switch{{display:flex;justify-content:center;align-items:center;gap:6px;margin-top:16px;font-size:11.5px;color:var(--faint)}}
 .lang-switch a{{color:var(--muted);text-decoration:none;padding:2px 7px;border-radius:6px}}
 .lang-switch a.active{{color:var(--ink);font-weight:620;background:var(--surface-soft)}}
 </style></head><body><main><div class="shell">
 <div class="brand-wrap"><h1 class="brand">{brand_html}</h1><p class="subtitle">{copy["subtitle"]}</p></div>
-<div class="card">
-<nav aria-label="{copy["nav_label"]}"><a href="{login_href}"{login_current}>{copy["tab_login"]}</a><a href="{register_href}"{register_current}>{copy["tab_register"]}</a></nav>
-{notice}<form method="post" action="{action}"><input type="hidden" name="csrf" value="{form_token}">{return_field}{fields}<button type="submit">{button}</button></form>
-</div>
+<div class="card">{card_html}</div>
 <div class="lang-switch" aria-label="{copy["switch_label"]}"><a href="{zh_href}"{zh_cls}>中文</a><span>/</span><a href="{en_href}"{en_cls}>EN</a></div>
 </div></main>{script}</body></html>"""
     response = HTMLResponse(body, status_code=status_code)
     response.headers["Cache-Control"] = "no-store"
+    effective_nonce = script_nonce or secrets.token_urlsafe(32)
     response.headers["Content-Security-Policy"] = (
-        f"default-src 'none'; script-src 'nonce-{script_nonce}'; style-src 'unsafe-inline'; form-action 'self'; "
+        f"default-src 'none'; script-src 'nonce-{effective_nonce}'; style-src 'unsafe-inline'; form-action 'self'; "
         "base-uri 'none'; frame-ancestors 'none'"
     )
     # Chrome sends a null Origin for same-origin form posts under no-referrer.
@@ -261,6 +267,182 @@ button:hover{{background:var(--accent-hover)}}
         secure=_secure_cookie(request), httponly=True, samesite="lax",
     )
     return response
+
+
+def _form_token_for(request: Request) -> str:
+    existing_form_token = request.cookies.get(FORM_COOKIE_NAME, "")
+    return (
+        existing_form_token
+        if _FORM_TOKEN_RE.fullmatch(existing_form_token)
+        else secrets.token_urlsafe(32)
+    )
+
+
+def _login_page(
+    request: Request,
+    message: str = "",
+    *,
+    register: bool = False,
+    app_login: bool = False,
+    next_target: str | None = None,
+    status_code: int = 200,
+    info_notice: bool = False,
+) -> HTMLResponse:
+    lang = _request_lang(request)
+    copy = _AUTH_COPY[lang]
+    form_token = _form_token_for(request)
+    script_nonce = secrets.token_urlsafe(32)
+    notice_cls = "notice info" if info_notice else "notice"
+    notice = f'<p class="{notice_cls}" role="alert">{html.escape(message)}</p>' if message else ""
+    open_reg = auth.open_registration_enabled()
+    target = next_target if next_target is not None else ("/app/" if app_login else None)
+    return_field = f'<input type="hidden" name="next" value="{html.escape(target, quote=True)}">' if target else ""
+    encoded_target = quote(target, safe="/") if target else ""
+    login_href = f"/_goalcal/login?next={encoded_target}" if target else "/"
+    register_href = f"/_goalcal/register?next={encoded_target}" if target else "/_goalcal/register"
+    forgot_href = f"/_goalcal/forgot-password?next={encoded_target}" if target else "/_goalcal/forgot-password"
+    if register:
+        extra = (
+            f'<label>{copy["email"]}<input name="email" type="email" autocomplete="email" required></label>'
+            if open_reg
+            else f'<label>{copy["invitation"]}<input name="invitation" required></label>'
+        )
+        fields = f"""<label>{copy["username"]}<input name="username" autocomplete="username" required></label>
+{extra}
+<label>{copy["password_new"]}<input name="password" type="password" autocomplete="new-password" required></label>
+<label>{copy["timezone"]}<select name="tz" required>{_TZ_OPTIONS_HTML}</select></label>"""
+        action, button = "/_goalcal/register", copy["btn_register"]
+        login_current, register_current = "", ' aria-current="page"'
+        script = _DETECT_TZ_SCRIPT.format(nonce=script_nonce)
+        footer_html = ""
+    else:
+        user_label = copy["username_or_email"] if open_reg else copy["username"]
+        fields = f"""<label>{user_label}<input name="username" autocomplete="username" required></label>
+<label>{copy["password"]}<input name="password" type="password" autocomplete="current-password" required></label>"""
+        action, button = "/_goalcal/login", copy["btn_login"]
+        login_current, register_current = ' aria-current="page"', ""
+        script = ""
+        footer_html = f'<div class="auth-links"><a class="auth-link" href="{forgot_href}">{copy["forgot_link"]}</a></div>'
+    current_page = register_href if register else login_href
+    card_html = (
+        f'<nav aria-label="{copy["nav_label"]}"><a href="{login_href}"{login_current}>{copy["tab_login"]}</a>'
+        f'<a href="{register_href}"{register_current}>{copy["tab_register"]}</a></nav>'
+        f'{notice}<form method="post" action="{action}"><input type="hidden" name="csrf" value="{form_token}">'
+        f'{return_field}{fields}<button type="submit">{button}</button></form>{footer_html}'
+    )
+    return _auth_shell_response(
+        request,
+        lang=lang,
+        card_html=card_html,
+        current_page=current_page,
+        form_token=form_token,
+        script=script,
+        script_nonce=script_nonce if script else "",
+        status_code=status_code,
+    )
+
+
+def _forgot_password_page(
+    request: Request,
+    message: str = "",
+    *,
+    info_notice: bool = False,
+    smtp_configured: bool = True,
+    email_value: str = "",
+    next_target: str | None = None,
+    status_code: int = 200,
+) -> HTMLResponse:
+    lang = _request_lang(request)
+    copy = _AUTH_COPY[lang]
+    form_token = _form_token_for(request)
+    encoded_target = quote(next_target, safe="/") if next_target else ""
+    current_page = f"/_goalcal/forgot-password?next={encoded_target}" if next_target else "/_goalcal/forgot-password"
+    login_href = f"/_goalcal/login?next={encoded_target}" if next_target else "/_goalcal/login"
+    return_field = f'<input type="hidden" name="next" value="{html.escape(next_target, quote=True)}">' if next_target else ""
+    notice_html = ""
+    if message:
+        cls = "notice info" if info_notice else "notice"
+        notice_html = f'<p class="{cls}" role="alert">{html.escape(message)}</p>'
+    elif not smtp_configured:
+        notice_html = f'<p class="notice" role="alert">{html.escape(copy["forgot_smtp_missing"])}</p>'
+    form_html = (
+        f'<form method="post" action="/_goalcal/forgot-password">'
+        f'<input type="hidden" name="csrf" value="{form_token}">{return_field}'
+        f'<label>{copy["email"]}<input name="email" type="email" autocomplete="email" '
+        f'value="{html.escape(email_value, quote=True)}" required></label>'
+        f'<button type="submit">{copy["forgot_btn"]}</button></form>'
+        if smtp_configured
+        else ""
+    )
+    card_html = (
+        f'<h2 class="card-title">{copy["forgot_title"]}</h2>'
+        f'<p class="card-desc">{copy["forgot_desc"]}</p>'
+        f'{notice_html}{form_html}'
+        f'<div class="auth-links"><a class="auth-link" href="{login_href}">{copy["back_to_login"]}</a></div>'
+    )
+    return _auth_shell_response(
+        request,
+        lang=lang,
+        card_html=card_html,
+        current_page=current_page,
+        form_token=form_token,
+        status_code=status_code,
+    )
+
+
+def _reset_password_page(
+    request: Request,
+    message: str = "",
+    *,
+    token: str = "",
+    token_valid: bool = True,
+    next_target: str | None = None,
+    status_code: int = 200,
+) -> HTMLResponse:
+    lang = _request_lang(request)
+    copy = _AUTH_COPY[lang]
+    form_token = _form_token_for(request)
+    encoded_target = quote(next_target, safe="/") if next_target else ""
+    encoded_token = quote(token, safe="") if token else ""
+    current_page = "/_goalcal/reset-password"
+    if encoded_token:
+        current_page += f"?token={encoded_token}" + (f"&next={encoded_target}" if encoded_target else "")
+    elif encoded_target:
+        current_page += f"?next={encoded_target}"
+    login_href = f"/_goalcal/login?next={encoded_target}" if next_target else "/_goalcal/login"
+    forgot_href = f"/_goalcal/forgot-password?next={encoded_target}" if next_target else "/_goalcal/forgot-password"
+    return_field = f'<input type="hidden" name="next" value="{html.escape(next_target, quote=True)}">' if next_target else ""
+
+    if token_valid:
+        notice_html = f'<p class="notice" role="alert">{html.escape(message)}</p>' if message else ""
+        body_html = (
+            f'<p class="card-desc">{copy["reset_desc"]}</p>{notice_html}'
+            f'<form method="post" action="/_goalcal/reset-password">'
+            f'<input type="hidden" name="csrf" value="{form_token}">{return_field}'
+            f'<input type="hidden" name="token" value="{html.escape(token, quote=True)}">'
+            f'<label>{copy["reset_new_pw"]}<input name="password" type="password" autocomplete="new-password" minlength="{auth.MIN_PASSWORD_LEN}" required></label>'
+            f'<label>{copy["reset_confirm_pw"]}<input name="confirm_password" type="password" autocomplete="new-password" minlength="{auth.MIN_PASSWORD_LEN}" required></label>'
+            f'<button type="submit">{copy["reset_btn"]}</button></form>'
+        )
+    else:
+        err = message or copy["reset_invalid"]
+        body_html = (
+            f'<p class="notice" role="alert">{html.escape(err)}</p>'
+            f'<a class="btn-secondary" href="{forgot_href}">{copy["reset_request_again"]}</a>'
+        )
+    card_html = (
+        f'<h2 class="card-title">{copy["reset_title"]}</h2>'
+        f'{body_html}'
+        f'<div class="auth-links"><a class="auth-link" href="{login_href}">{copy["back_to_login"]}</a></div>'
+    )
+    return _auth_shell_response(
+        request,
+        lang=lang,
+        card_html=card_html,
+        current_page=current_page,
+        form_token=form_token,
+        status_code=status_code,
+    )
 
 
 async def _small_form(request: Request) -> bool:
@@ -433,7 +615,187 @@ async def register(request: Request) -> Response:
         )
     except auth.AuthError as exc:
         return _login_page(request, localize_auth_error(str(exc), lang), register=True, next_target=next_target)
-    return _login_page(request, _AUTH_COPY[lang]["created"], next_target=next_target)
+    return _login_page(request, _AUTH_COPY[lang]["created"], next_target=next_target, info_notice=True)
+
+
+def _build_password_reset_email(reset_url: str, username: str) -> tuple[str, str, str]:
+    subject = "GoalCal 密码重置 / Password Reset"
+    safe_user = html.escape(username)
+    safe_url = html.escape(reset_url, quote=True)
+    text_body = (
+        f"你好 {username}：\n\n"
+        "我们收到了你的 GoalCal 密码重置请求。请点击下方链接设置新密码（30 分钟内有效，仅可使用一次）：\n"
+        f"{reset_url}\n\n"
+        "如果这不是你本人操作，请忽略此邮件，你的密码不会发生任何变化。\n\n"
+        "—\n"
+        f"Hi {username},\n\n"
+        "We received a request to reset your GoalCal password. Open the link below to set a new password "
+        "(valid for 30 minutes, one-time use):\n"
+        f"{reset_url}\n\n"
+        "If you did not request this, you can safely ignore this email."
+    )
+    html_body = (
+        '<!doctype html><html><body style="margin:0;padding:24px;background:#fafaf8;color:#1d1d1f;'
+        'font-family:-apple-system,BlinkMacSystemFont,\'SF Pro Display\',\'PingFang SC\',Arial,sans-serif;">'
+        '<div style="max-width:520px;margin:0 auto;background:#fffefd;border:1px solid rgba(29,29,31,0.1);'
+        'border-radius:13px;padding:24px;">'
+        '<div style="font-size:16px;font-weight:700;margin-bottom:12px;">GoalCal</div>'
+        f'<p style="font-size:14px;line-height:1.6;margin:0 0 12px;">你好 {safe_user}，</p>'
+        '<p style="font-size:14px;line-height:1.6;margin:0 0 18px;color:#4a4a4f;">'
+        '请点击下方按钮重置你的 GoalCal 密码（链接 <strong>30 分钟</strong>内有效，仅可使用一次）：</p>'
+        f'<p style="margin:0 0 18px;"><a href="{safe_url}" '
+        'style="display:inline-block;padding:10px 18px;background:#303638;color:#ffffff;'
+        'text-decoration:none;border-radius:9px;font-size:13px;font-weight:600;">重置密码 / Reset password</a></p>'
+        f'<p style="font-size:12px;line-height:1.5;color:#6e6e73;word-break:break-all;margin:0 0 16px;">{safe_url}</p>'
+        '<p style="font-size:12px;line-height:1.5;color:#6e6e73;margin:0;">'
+        '如果这不是你本人发起的请求，请直接忽略本邮件。<br>'
+        'If you did not request a password reset, you can safely ignore this email.</p>'
+        '</div></body></html>'
+    )
+    return subject, text_body, html_body
+
+
+async def forgot_password(request: Request) -> Response:
+    from . import mailer
+
+    caps = mailer.smtp_capabilities()
+    smtp_ok = bool(caps.get("configured"))
+    if request.method == "GET":
+        return _forgot_password_page(
+            request,
+            smtp_configured=smtp_ok,
+            next_target=_resolve_app_next(request.query_params.get("next")),
+        )
+    if not _same_origin_post(request) or not await _small_form(request):
+        return PlainTextResponse("Invalid form submission", status_code=403)
+    form = await request.form()
+    next_target = _resolve_app_next(str(form.get("next")) if form.get("next") is not None else None)
+    lang = _request_lang(request)
+    copy = _AUTH_COPY[lang]
+    email_raw = str(form.get("email", ""))
+    if not _valid_form_token(request, form):
+        return _forgot_password_page(
+            request,
+            copy["form_expired"],
+            smtp_configured=smtp_ok,
+            email_value=email_raw,
+            next_target=next_target,
+            status_code=403,
+        )
+    if not smtp_ok:
+        return _forgot_password_page(
+            request,
+            copy["forgot_smtp_missing"],
+            smtp_configured=False,
+            email_value=email_raw,
+            next_target=next_target,
+            status_code=503,
+        )
+    try:
+        issued = await run_in_threadpool(auth.request_password_reset, email_raw)
+    except auth.AuthError as exc:
+        return _forgot_password_page(
+            request,
+            localize_auth_error(str(exc), lang),
+            smtp_configured=smtp_ok,
+            email_value=email_raw,
+            next_target=next_target,
+        )
+
+    if issued is not None:
+        token, to_email, username = issued
+        public_base = os.getenv("GOALCAL_PUBLIC_URL", "").strip().rstrip("/") or _public_base_url(request).rstrip("/")
+        reset_url = f"{public_base}/_goalcal/reset-password?token={quote(token, safe='')}"
+        if next_target:
+            reset_url += f"&next={quote(next_target, safe='')}"
+        subject, text_body, html_body = _build_password_reset_email(reset_url, username)
+        try:
+            await run_in_threadpool(
+                mailer.send_email,
+                to_address=to_email,
+                subject=subject,
+                text_body=text_body,
+                html_body=html_body,
+            )
+        except mailer.MailerError:
+            logging.getLogger("goalcal.audit").warning("password_reset_email_failed", exc_info=True)
+            return _forgot_password_page(
+                request,
+                copy["forgot_send_failed"],
+                smtp_configured=smtp_ok,
+                email_value=email_raw,
+                next_target=next_target,
+                status_code=502,
+            )
+
+    return _forgot_password_page(
+        request,
+        copy["forgot_sent"],
+        info_notice=True,
+        smtp_configured=smtp_ok,
+        next_target=next_target,
+    )
+
+
+async def reset_password(request: Request) -> Response:
+    if request.method == "GET":
+        token = request.query_params.get("token", "").strip()
+        next_target = _resolve_app_next(request.query_params.get("next"))
+        valid = await run_in_threadpool(auth.verify_password_reset_token, token)
+        return _reset_password_page(
+            request,
+            token=token,
+            token_valid=valid,
+            next_target=next_target,
+        )
+    if not _same_origin_post(request) or not await _small_form(request):
+        return PlainTextResponse("Invalid form submission", status_code=403)
+    form = await request.form()
+    next_target = _resolve_app_next(str(form.get("next")) if form.get("next") is not None else None)
+    token = str(form.get("token", "")).strip()
+    lang = _request_lang(request)
+    copy = _AUTH_COPY[lang]
+    if not _valid_form_token(request, form):
+        valid = await run_in_threadpool(auth.verify_password_reset_token, token)
+        return _reset_password_page(
+            request,
+            copy["form_expired"],
+            token=token,
+            token_valid=valid,
+            next_target=next_target,
+            status_code=403,
+        )
+    password = str(form.get("password", ""))
+    confirm_password = str(form.get("confirm_password", ""))
+    if password != confirm_password:
+        valid = await run_in_threadpool(auth.verify_password_reset_token, token)
+        return _reset_password_page(
+            request,
+            localize_auth_error("两次输入的密码不一致", lang),
+            token=token,
+            token_valid=valid,
+            next_target=next_target,
+        )
+    try:
+        await run_in_threadpool(auth.complete_password_reset, token, password)
+    except auth.AuthError as exc:
+        msg = str(exc)
+        is_token_err = "重置链接无效" in msg
+        return _reset_password_page(
+            request,
+            localize_auth_error(msg, lang),
+            token="" if is_token_err else token,
+            token_valid=not is_token_err,
+            next_target=next_target,
+        )
+    response = _login_page(
+        request,
+        copy["password_reset_done"],
+        next_target=next_target,
+        info_notice=True,
+    )
+    response.delete_cookie(COOKIE_NAME, path="/")
+    return response
 
 
 def _safe_auth_next(target: str | None) -> str:
@@ -1025,12 +1387,28 @@ async def _sync_outbox_loop() -> None:
             log.warning("sync_outbox_tick_failed", exc_info=True)
 
 
+async def _reminder_loop() -> None:
+    from .domain.reminder_engine import plan_due_notifications_once, process_notification_outbox_once
+
+    log = logging.getLogger("goalcal.reminders")
+    while True:
+        try:
+            await asyncio.sleep(60)
+            await run_in_threadpool(plan_due_notifications_once)
+            await run_in_threadpool(process_notification_outbox_once)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.warning("reminder_loop_tick_failed", exc_info=True)
+
+
 @asynccontextmanager
 async def _lifespan(_app: Starlette):
     tasks: list[asyncio.Task] = []
     if _sync_worker_enabled():
         tasks.append(asyncio.create_task(_calendar_sync_loop()))
         tasks.append(asyncio.create_task(_sync_outbox_loop()))
+        tasks.append(asyncio.create_task(_reminder_loop()))
     try:
         yield
     finally:
@@ -1059,6 +1437,8 @@ app = Starlette(
         Route("/_goalcal/oauth/{provider:str}/callback", oauth_callback, methods=["GET"]),
         Route("/_goalcal/login", login, methods=["GET", "POST"]),
         Route("/_goalcal/register", register, methods=["GET", "POST"]),
+        Route("/_goalcal/forgot-password", forgot_password, methods=["GET", "POST"]),
+        Route("/_goalcal/reset-password", reset_password, methods=["GET", "POST"]),
         Route("/_goalcal/logout", logout, methods=["POST"]),
         Route("/_goalcal/lang", set_language, methods=["GET"]),
         Route("/{path:path}", proxy_http, methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]),

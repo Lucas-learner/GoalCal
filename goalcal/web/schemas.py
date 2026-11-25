@@ -124,6 +124,17 @@ class Accept(Version):
     index: int = Field(ge=0, le=5)
 
 
+class CreateWeeklyPlan(Input):
+    scope: Literal['auto', 'this_week', 'next_week'] = 'auto'
+    strategy: Literal['balanced', 'deadline', 'pinned'] = 'balanced'
+    goal_ids: list[int] | None = Field(default=None, max_length=100)
+    keep_existing_blocks: bool = True
+
+
+class AcceptWeeklyPlan(Version):
+    step_ids: list[int] | None = Field(default=None, min_length=1, max_length=100)
+
+
 class ExecutionCheckin(Version):
     outcome: Literal['done','extend','adjust']
 
@@ -167,6 +178,14 @@ class RotateCalendarFeed(Input):
     version: str | None = Field(default=None, max_length=128)
 
 
+class UpdateCalendarAlarms(Input):
+    enabled: bool
+    block_minutes: int | None = Field(default=None, ge=0, le=1440)
+    habit_minutes: int | None = Field(default=None, ge=0, le=1440)
+    manual_minutes: int | None = Field(default=None, ge=0, le=1440)
+    version: str | None = Field(default=None, max_length=128)
+
+
 class CreateCalendarSource(Input):
     name: str = Field(min_length=1, max_length=120)
     url: str = Field(min_length=1, max_length=2000)
@@ -204,6 +223,23 @@ class UpdateMe(Input):
     lang: Literal['', 'zh', 'en'] | None = None
     theme: Literal['', 'light', 'dark'] | None = None
     calendar_palette: Literal['', 'calm', 'mono', 'vivid'] | None = None
+    timezone: str | None = Field(default=None, min_length=1, max_length=64)
+
+
+class UpdateEmailReminders(Input):
+    enabled: bool
+    morning_focus: bool = False
+    morning_time: str = Field(default='08:30', pattern=r'^([01][0-9]|2[0-3]):[0-5][0-9]$')
+    evening_wrapup: bool = True
+    evening_time: str = Field(default='21:00', pattern=r'^([01][0-9]|2[0-3]):[0-5][0-9]$')
+    weekly_habit_nudge: bool = True
+    goal_stall_nudge: bool = True
+    weekly_review: bool = False
+    weekly_review_time: str = Field(default='19:30', pattern=r'^([01][0-9]|2[0-3]):[0-5][0-9]$')
+    quiet_start: str = Field(default='22:30', pattern=r'^([01][0-9]|2[0-3]):[0-5][0-9]$')
+    quiet_end: str = Field(default='07:30', pattern=r'^([01][0-9]|2[0-3]):[0-5][0-9]$')
+    daily_cap: int = Field(default=3, ge=1, le=10)
+    version: str | None = Field(default=None, max_length=128)
 
 
 class SubmitFeedback(Input):

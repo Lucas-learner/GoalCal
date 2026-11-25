@@ -29,6 +29,12 @@ from .calendar_sync import (
     reserved_habit_spans,
     try_acquire_source,
 )
+from .reminders import (
+    event_deep_link,
+    format_alarm_description,
+    get_calendar_alarms,
+    resolve_event_alarm_minutes,
+)
 from .ics_import import ImportResult, _delete_synced_event
 from .sync_providers import (
     CalDavAdapter,
@@ -82,10 +88,19 @@ def is_exportable_goalcal_event(event: Event) -> bool:
     return event.kind in {"block", "habit", "external"}
 
 
-def build_push_payload(session: Session, user: User, event: Event, *, base_url: str | None = None) -> dict:
+def build_push_payload(
+    session: Session,
+    user: User,
+    event: Event,
+    *,
+    base_url: str | None = None,
+    alarms: dict | None = None,
+) -> dict:
+    alarms_cfg = alarms if alarms is not None else get_calendar_alarms(session, user.id)
     effective_status = event.status
     summary = event.title
     desc_lines: list[str] = []
+    outcome_text = ""
 
     if event.kind == "block":
         step = session.get(Step, event.step_id) if event.step_id is not None else None
@@ -94,6 +109,9 @@ def build_push_payload(session: Session, user: User, event: Event, *, base_url: 
             desc_lines.append(f"Goal: {goal.title}")
         if step is not None and step.milestone:
             desc_lines.append(f"Phase: {step.milestone}")
+        if step is not None and (step.outcome or "").strip():
+            outcome_text = step.outcome.strip()
+            desc_lines.append(f"Outcome: {outcome_text[:300]}")
         desc_lines.append(f"Status: {effective_status}")
     elif event.kind == "habit":
         occ = session.scalar(
@@ -112,8 +130,16 @@ def build_push_payload(session: Session, user: User, event: Event, *, base_url: 
     if effective_status == "done" and not summary.startswith("✓ "):
         summary = f"✓ {summary}"
 
-    if base_url:
-        desc_lines.append(f"GoalCal: {base_url.rstrip('/')}/app/calendar")
+    deep_link = event_deep_link(base_url, event.id, event.start_utc, user.tz)
+    if deep_link:
+        desc_lines.append(f"GoalCal: {deep_link}")
+
+    reminder_minutes = resolve_event_alarm_minutes(
+        alarms_cfg,
+        kind=event.kind,
+        effective_status=effective_status,
+        all_day=bool(event.all_day),
+    )
 
     return {
         "event_id": event.id,
@@ -122,6 +148,8 @@ def build_push_payload(session: Session, user: User, event: Event, *, base_url: 
         "start_utc": _utc_iso_z(event.start_utc),
         "end_utc": _utc_iso_z(event.end_utc),
         "all_day": bool(event.all_day),
+        "reminder_minutes": reminder_minutes,
+        "alarm_description": format_alarm_description(summary, outcome_text),
         "content_hash": canonical_event_hash(
             summary,
             event.start_utc,
@@ -140,6 +168,7 @@ def enqueue_event_sync(
     action: str | None = None,
     now_naive: datetime,
     suppress_source_id: int | None = None,
+    force: bool = False,
 ) -> int:
     """Queue outbox push tasks for all enabled bidirectional GoalCal calendars of a user."""
     if not is_exportable_goalcal_event(event):
@@ -177,7 +206,8 @@ def enqueue_event_sync(
         if resolved_action == "delete" and link is None:
             continue
         if (
-            resolved_action == "upsert"
+            not force
+            and resolved_action == "upsert"
             and link is not None
             and link.sync_state == "synced"
             and link.last_synced_hash == payload.get("content_hash")
@@ -973,6 +1003,37 @@ def process_outbox_once(*, now: datetime | None = None, batch_size: int = 20) ->
     return processed
 
 
+def requeue_upcoming_goalcal_events(session: Session, user_id: int, *, now_naive: datetime) -> int:
+    """Re-queue upcoming active GoalCal events so changed alarm/description settings sync out."""
+    win_end = now_naive + timedelta(days=180)
+    events = list(
+        session.scalars(
+            select(Event)
+            .where(
+                Event.user_id == user_id,
+                Event.status.in_(("planned", "moved")),
+                Event.end_utc > now_naive,
+                Event.start_utc <= win_end,
+            )
+            .order_by(Event.start_utc, Event.id)
+        )
+    )
+    queued = 0
+    for ev in events:
+        if not is_exportable_goalcal_event(ev):
+            continue
+        queued += enqueue_event_sync(
+            session,
+            user_id,
+            ev,
+            action="upsert",
+            now_naive=now_naive,
+            force=True,
+        )
+    session.flush()
+    return queued
+
+
 __all__ = [
     "apply_native_pull",
     "backfill_goalcal_source",
@@ -982,5 +1043,6 @@ __all__ = [
     "is_exportable_goalcal_event",
     "process_outbox_once",
     "pull_native_for_source",
+    "requeue_upcoming_goalcal_events",
     "sync_native_source_once",
 ]

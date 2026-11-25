@@ -302,6 +302,33 @@ class SyncOutbox(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive, onupdate=utcnow_naive)
 
 
+class NotificationOutbox(Base):
+    """Idempotent asynchronous queue for proactive user notifications (email/push/webhook)."""
+
+    __tablename__ = "notification_outbox"
+    __table_args__ = (
+        UniqueConstraint("user_id", "dedupe_key", name="uq_notification_outbox_user_dedupe"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    channel: Mapped[str] = mapped_column(String(24), default="email")  # email|web_push|webhook
+    kind: Mapped[str] = mapped_column(String(40), index=True)
+    dedupe_key: Mapped[str] = mapped_column(String(160))
+    recipient: Mapped[str] = mapped_column(String(255), default="")
+    subject: Mapped[str] = mapped_column(String(240), default="")
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    scheduled_for: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive, index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=4)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive, index=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)  # pending|sent|skipped|dead
+    last_error: Mapped[str] = mapped_column(String(500), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive, onupdate=utcnow_naive)
+
+
 class CalendarFeed(Base):
     """Read-only outbound .ics subscription feed per user."""
 

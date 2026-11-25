@@ -48,7 +48,7 @@ class Requirement:
 class Preferences:
     day_start_hour: int = 8
     day_end_hour: int = 22
-    max_goal_minutes_per_day: int = 120
+    max_goal_minutes_per_day: int = 240
     buffer_minutes: int = 10
     lunch: tuple[int, int] = (12, 13)
     preferred_windows: tuple[tuple[int, int], ...] = ((9, 12), (14, 18))
@@ -245,7 +245,7 @@ def _score(
     # 6) 当日过载
     if goal_minutes_that_day + req.est_min > prefs.max_goal_minutes_per_day:
         score -= 0.45
-        reasons.append(pick(lang, "当天目标时间已接近上限，不建议再加块", "Near your daily goal-time limit; adding another block isn't recommended"))
+        reasons.append(pick(lang, "当天任务时长已接近上限，不建议再加块", "Near your daily task limit; adding another block isn't recommended"))
 
     # 7) 切换成本 / 缓冲
     if adjacent_before:
@@ -290,22 +290,18 @@ def _kind_reason(kind: str, hour: int, *, lang: str = "zh") -> str:
 # ---------------------------------------------------------------- 对外主入口
 
 
-def propose(
+def generate_candidates(
     req: Requirement,
     now: datetime,
     busy: list[BusyBlock],
     prefs: Preferences | None = None,
+    *,
     days: int = 5,
-    top_n: int = 3,
     deadline: date | None = None,
     window: tuple[datetime, datetime] | None = None,
     lang: str = "zh",
 ) -> list[Candidate]:
-    """在 now 之后的 days 天内，给出 top_n 个候选时段（按分数降序）。
-
-    给了 window 就只在窗口内挖空档（窗口可能跨天），窗口外日期不扫描；
-    窗口内没有候选就返回空，由上层决定提示或回退。
-    """
+    """在指定窗口或 days 天内生成所有符合约束的候选时段（按分数降序、起点升序）。"""
     prefs = prefs or Preferences()
     today = now.date()
     pool: list[Candidate] = []
@@ -395,6 +391,37 @@ def propose(
                 pool.append(Candidate(start=start, end=end, score=score, reasons=reasons))
 
     pool.sort(key=lambda c: (-c.score, _instant(c.start)))
+    return pool
+
+
+def propose(
+    req: Requirement,
+    now: datetime,
+    busy: list[BusyBlock],
+    prefs: Preferences | None = None,
+    days: int = 5,
+    top_n: int = 3,
+    deadline: date | None = None,
+    window: tuple[datetime, datetime] | None = None,
+    lang: str = "zh",
+) -> list[Candidate]:
+    """在 now 之后的 days 天内，给出 top_n 个候选时段（按分数降序）。
+
+    给了 window 就只在窗口内挖空档（窗口可能跨天），窗口外日期不扫描；
+    窗口内没有候选就返回空，由上层决定提示或回退。
+    """
+    prefs = prefs or Preferences()
+    today = now.date()
+    pool = generate_candidates(
+        req,
+        now,
+        busy,
+        prefs,
+        days=days,
+        deadline=deadline,
+        window=window,
+        lang=lang,
+    )
     if not pool:
         return []
 

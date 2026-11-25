@@ -50,6 +50,10 @@ MIN_PASSWORD_LEN = 6
 DEFAULT_SESSION_DAYS = 30
 SESSION_SECONDS = DEFAULT_SESSION_DAYS * 24 * 60 * 60
 SESSION_RENEW_INTERVAL_SECONDS = 24 * 60 * 60
+PASSWORD_RESET_TTL_SECONDS = 30 * 60
+_RESET_LIMIT_WINDOW = 900
+_RESET_EMAIL_LIMIT = 3
+_RESET_GLOBAL_LIMIT = 30
 
 
 def session_ttl_seconds() -> int:
@@ -261,6 +265,23 @@ def logout(token):
         log.info('logged_out user_id=%s', row['user_id'])
 
 
+def update_timezone(user_id: int, tz: str) -> str:
+    cleaned = (tz or '').strip()
+    if not cleaned or len(cleaned) > 64:
+        raise AuthError('无效的时区')
+    try:
+        ZoneInfo(cleaned)
+    except (ValueError, KeyError):
+        raise AuthError('无效的时区') from None
+    with connect() as con:
+        con.execute('BEGIN IMMEDIATE')
+        cur = con.execute('UPDATE users SET tz=? WHERE id=? AND disabled=0', (cleaned, user_id))
+        if cur.rowcount == 0:
+            raise AuthError('账号不存在或已停用')
+    log.info('timezone_updated user_id=%s tz=%s', user_id, cleaned)
+    return cleaned
+
+
 def manage(username, *, password=None, disabled=None):
     hashed = _hash_password(password) if password is not None else None
     identifier = username.strip().lower()
@@ -275,4 +296,86 @@ def manage(username, *, password=None, disabled=None):
         if disabled is not None:
             con.execute('UPDATE users SET disabled=? WHERE id=?', (disabled, row['id']))
         con.execute('DELETE FROM auth_sessions WHERE user_id=?', (row['id'],))
+        con.execute('DELETE FROM password_reset_tokens WHERE user_id=?', (row['id'],))
     log.info('account_changed user_id=%s', row['id'])
+
+
+def request_password_reset(email: str) -> tuple[str, str, str] | None:
+    """Create a one-time reset token for an active email account, or return None without leaking existence."""
+    norm_email = normalize_email(email)
+    if not norm_email:
+        raise AuthError('请填写有效的邮箱地址')
+    now = time.time()
+    email_limit_key = f'pwreset:{digest(norm_email)}'
+    with connect() as con:
+        con.execute('BEGIN IMMEDIATE')
+        for key, limit in [(email_limit_key, _RESET_EMAIL_LIMIT), ('pwreset_global', _RESET_GLOBAL_LIMIT)]:
+            con.execute(
+                'INSERT INTO login_limits VALUES (?, 0, ?) '
+                'ON CONFLICT(key) DO UPDATE SET attempts=0, reset_at=excluded.reset_at WHERE login_limits.reset_at<=?',
+                (key, now + _RESET_LIMIT_WINDOW, now),
+            )
+            row = con.execute('SELECT attempts FROM login_limits WHERE key=?', (key,)).fetchone()
+            if row[0] >= limit:
+                raise AuthError('密码重置请求过于频繁，请 15 分钟后再试')
+        con.execute('UPDATE login_limits SET attempts=attempts+1 WHERE key IN (?, ?)', (email_limit_key, 'pwreset_global'))
+        con.execute('DELETE FROM password_reset_tokens WHERE expires<=?', (now,))
+        user_row = con.execute(
+            'SELECT id, username, email, disabled FROM users WHERE email=?',
+            (norm_email,),
+        ).fetchone()
+        if not user_row or user_row['disabled'] or not user_row['email']:
+            return None
+        con.execute('DELETE FROM password_reset_tokens WHERE user_id=? AND used_at IS NULL', (user_row['id'],))
+        token = secrets.token_urlsafe(32)
+        con.execute(
+            'INSERT INTO password_reset_tokens (digest, user_id, expires, used_at) VALUES (?, ?, ?, NULL)',
+            (digest(token), user_row['id'], now + PASSWORD_RESET_TTL_SECONDS),
+        )
+    log.info('password_reset_requested user_id=%s', user_row['id'])
+    return token, user_row['email'], user_row['username'] or user_row['email']
+
+
+def verify_password_reset_token(token: str) -> bool:
+    """Read-only check confirming whether a reset token is unused, unexpired, and belongs to an active user."""
+    cleaned = (token or '').strip()
+    if not cleaned:
+        return False
+    with connect() as con:
+        row = con.execute(
+            'SELECT 1 FROM password_reset_tokens t '
+            'JOIN users u ON u.id=t.user_id '
+            'WHERE t.digest=? AND t.used_at IS NULL AND t.expires>? AND u.disabled=0',
+            (digest(cleaned), time.time()),
+        ).fetchone()
+    return row is not None
+
+
+def complete_password_reset(token: str, new_password: str) -> int:
+    """Validate token and password, update password hash, burn tokens, and revoke existing sessions."""
+    hashed = _hash_password(new_password)
+    cleaned = (token or '').strip()
+    if not cleaned:
+        raise AuthError('重置链接无效或已过期，请重新申请')
+    now = time.time()
+    token_digest = digest(cleaned)
+    with connect() as con:
+        con.execute('BEGIN IMMEDIATE')
+        row = con.execute(
+            'SELECT t.user_id, t.expires, t.used_at, u.username, u.email, u.disabled '
+            'FROM password_reset_tokens t JOIN users u ON u.id=t.user_id WHERE t.digest=?',
+            (token_digest,),
+        ).fetchone()
+        if not row or row['used_at'] is not None or row['expires'] <= now or row['disabled']:
+            raise AuthError('重置链接无效或已过期，请重新申请')
+        uid = int(row['user_id'])
+        con.execute('UPDATE users SET password_hash=? WHERE id=?', (hashed, uid))
+        con.execute('UPDATE password_reset_tokens SET used_at=? WHERE digest=?', (now, token_digest))
+        con.execute('DELETE FROM password_reset_tokens WHERE user_id=? AND used_at IS NULL', (uid,))
+        con.execute('DELETE FROM auth_sessions WHERE user_id=?', (uid,))
+        if row['username']:
+            con.execute('DELETE FROM login_limits WHERE key=?', (digest(row['username'].strip().lower()),))
+        if row['email']:
+            con.execute('DELETE FROM login_limits WHERE key=?', (digest(row['email'].strip().lower()),))
+    log.info('password_reset_completed user_id=%s', uid)
+    return uid
