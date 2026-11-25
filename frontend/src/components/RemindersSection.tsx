@@ -209,8 +209,8 @@ export function RemindersSection({
         <div className="settings-section-title">{t('通道一：系统日历闹钟', 'Channel 1: System calendar alarms')}</div>
         <p className="settings-section-copy">
           {t(
-            '借由 Apple / Google / Outlook 或 .ics 订阅把安排同步到手机和手表，到点原生强响；已完成或已跳过会自动消除闹钟。',
-            'Delivers native phone/watch alerts via Apple, Google, Outlook, or .ics feeds. Completed or skipped events automatically omit alarms.',
+            '借由 Apple / Google 原生双向同步或 .ics 订阅把安排同步到手机和手表，到点原生强响；已完成或已跳过会自动消除闹钟。',
+            'Delivers native phone/watch alerts via Apple/Google two-way sync or .ics feeds. Completed or skipped events automatically omit alarms.',
           )}
         </p>
 

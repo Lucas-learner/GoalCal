@@ -50,10 +50,10 @@ GoalCal 的核心理念是 **“让计划适应生活节奏，而不是惩罚用
   - 默认值：开启状态，目标块提前 10 分钟，习惯安排提前 10 分钟，手动日程关闭（避免打扰常规日程）。
 - **生效条件**：仅对未来尚未结束且状态为 `planned` / `moved` 的非全天（`all_day=False`）日程生成闹钟；已完成（`done`）、部分完成（`partial`）、未完成（`missed`）、已跳过（`skipped`）及全天事件自动不带闹钟，避免无效响铃。
 
-### 2. 三大原生日历通道映射
+### 2. 已启用日历通道映射（与预留通道）
 - **Apple iCloud / CalDAV 与通用 `.ics` 订阅**：在 `VEVENT` 内生成 RFC 5545 `VALARM`（`ACTION:DISPLAY`、`TRIGGER:-PT{minutes}M` 或 `TRIGGER:PT0S`、`DESCRIPTION` 携带标题与步骤 `outcome` 摘要）。
 - **Google Calendar**：在 `events.insert` / `events.patch` 载荷中设置 `reminders: { useDefault: false, overrides: [{ method: "popup", minutes }] }`；当关闭或事件已结束/完成时显式清空 `overrides: []`。
-- **Microsoft Outlook / Graph**：在创建/更新载荷中设置 `isReminderOn: true` 与 `reminderMinutesBeforeStart: minutes`；关闭或非开放状态时设置 `isReminderOn: false`。
+- **Microsoft Outlook / Graph（内部预留代码、未做且未启用）**：代码层面预留了 `isReminderOn` 与 `reminderMinutesBeforeStart` 字段映射；实际 Outlook 用户现阶段通过通用 `.ics` 订阅触发 `VALARM`。
 
 ### 3. 描述增强与精准深链（Deep Link）
 - 对目标执行块（`kind="block"`），在日历描述中补充 `Outcome: <Step.outcome>`，让用户从手机日历弹窗或手表通知中一眼看清本次最小产出。

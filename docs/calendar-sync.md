@@ -3,21 +3,23 @@
 > 更新日期：2026-11-24
 > Schema 版本：`v13`
 
-GoalCal 已完成 **V1（双向 `.ics` 订阅）→ V2.0（排期冲突联动与来源控制）→ V2.1（Apple iCloud / CalDAV 原生双向同步）→ V2.2（Google Calendar / Microsoft Outlook OAuth 实时双向同步）** 的全链路接入。
+GoalCal 已完成 **V1（双向 `.ics` 订阅）→ V2.0（排期冲突联动与来源控制）→ V2.1（Apple iCloud / CalDAV 原生双向同步）→ V2.2（Google Calendar OAuth 实时双向同步）** 的全链路接入。
+
+> **内部状态说明**：Microsoft Outlook / Graph 原生双向同步当前**未完成 / 线上未启用**，后端仅保留预留代码且未配置密钥，前端连接入口默认隐藏；现阶段 Outlook 用户统一通过通用 `.ics` 双向订阅接入。
 
 ---
 
 ## 一、三层同步能力概览
 
-### 1. 原生双向同步（Apple iCloud / CalDAV + Google Calendar + Outlook）
+### 1. 原生双向同步（Apple iCloud / CalDAV + Google Calendar）
 - 入口：`设置 → 日历同步 → 原生双向同步`
 - 账号接入与专属子日历：
   - **Apple iCloud / Fastmail / 自定义 CalDAV**：通过应用专用密码验证（服务端通过 `goalcal/crypto.py` Fernet 对称加密保存，绝不回传前端或进入日志），自动发现日历并创建 **`GoalCal` 专属双向子日历**（`is_goalcal_calendar=True, writable=True`），无需在 iCloud 开启「公开共享日历」。
   - **Google Calendar**：基于 OAuth 2.0 + PKCE（`/_goalcal/oauth/google/start` / `callback`）连接，支持增量 `syncToken` 拉取、`events.watch` Webhook 实时推送及自动创建 `GoalCal` 子日历。
-  - **Outlook / Microsoft 365**：基于 Microsoft Graph OAuth 2.0 + PKCE、`/calendarView/delta` 增量同步及 `/subscriptions` Webhook 推送。
+  - **Outlook / Microsoft 365（内部预留、暂未启用）**：代码层面预留了 Graph OAuth 2.0 + `/calendarView/delta` + `/subscriptions` 骨架，因未完成接入验证，未向用户开放。
 - 异步推送与防循环：
   - **Outbox 异步队列（`sync_outbox`）**：在 `goalcal/web/http.py` 的 SQLite 写事务内通过 `before_flush` / `after_flush` 捕获可导出日程的创建、改期、完成和取消，仅写入轻量的 outbox 记录；网关后台 `_sync_outbox_loop`（每 3 秒）与 `_calendar_sync_loop`（每 60 秒）在 **SQLite 写锁之外**完成全部外部 HTTPS 请求，并支持指数退避重试。
-  - **状态映射与防乒乓回弹**：通过 `event_sync_links` 记录 `(event_id, source_id, remote_uid, remote_href, remote_etag, last_synced_hash)`。外部拉回时比对 `last_synced_hash` 过滤自身推送；在苹果/Google/Outlook 中拖拽改期 `GoalCal` 子日历中的执行块会回写本地时间，删除则仅将本次执行块标记为 `skipped` 并把步骤释放回「尚未安排」（绝不误删目标步骤）。
+  - **状态映射与防乒乓回弹**：通过 `event_sync_links` 记录 `(event_id, source_id, remote_uid, remote_href, remote_etag, last_synced_hash)`。外部拉回时比对 `last_synced_hash` 过滤自身推送；在苹果日历 / Google 日历中拖拽改期 `GoalCal` 子日历中的执行块会回写本地时间，删除则仅将本次执行块标记为 `skipped` 并把步骤释放回「尚未安排」（绝不误删目标步骤）。
   - 授权失效（401 / `invalid_grant`）时自动把 `calendar_connections.status` 置为 `reauth_required`，在设置页展示「需重新授权」提示。
 
 ### 2. 智能排期联动与来源控制（V2.0）
@@ -48,7 +50,7 @@ GoalCal 已完成 **V1（双向 `.ics` 订阅）→ V2.0（排期冲突联动与
 ## 三、OAuth 环境变量说明（可选）
 
 - Apple iCloud / CalDAV **开箱即用**，无需任何第三方平台密钥。
-- 如需开启 Google Calendar / Microsoft Outlook 一键 OAuth，只需在 `.env.production`（或环境变量）配置对应凭据并配置回调白名单：
+- 如需开启 Google Calendar 一键 OAuth，只需在 `.env.production`（或环境变量）配置对应凭据并配置回调白名单：
   - Google：`GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET`（回调地址：`https://<域名>/_goalcal/oauth/google/callback`）
-  - Outlook：`MICROSOFT_CLIENT_ID`、`MICROSOFT_CLIENT_SECRET`、`MICROSOFT_TENANT_ID`（默认 `common`；回调地址：`https://<域名>/_goalcal/oauth/outlook/callback`）
+  - Outlook（未做 / 内部预留代码，暂不配置与启用）：`MICROSOFT_CLIENT_ID`、`MICROSOFT_CLIENT_SECRET`、`MICROSOFT_TENANT_ID`（默认 `common`；预留回调地址：`https://<域名>/_goalcal/oauth/outlook/callback`）
   - 加密主密钥：`GOALCAL_CREDENTIAL_KEY`（未显式设置时，生产环境会自动在数据库同目录生成 `0600` 权限的 `.credential_key`）

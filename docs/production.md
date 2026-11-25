@@ -1,6 +1,6 @@
 # GoalCal Web 生产维护手册
 
-更新：2026-11-25。正式入口 https://goalcal.zhang.sarl。源码工作区为 `/Users/macmini/projects/GoalCal`，应用与备份任务从已验证的发布目录启动。旧版 ngrok 和 `local.goalcal.*` 已退役。
+更新：2026-11-26。正式入口 https://goalcal.zhang.sarl。源码工作区为 `/Users/macmini/projects/GoalCal`，应用与备份任务从已验证的发布目录启动。旧版 ngrok 和 `local.goalcal.*` 已退役。
 
 ## 实例与路径
 
@@ -11,7 +11,7 @@
 | 环境文件 | 仓库根目录 `.env.production`，权限 600 |
 | 数据库 | `var/production/goalcal.db`，schema 16，SQLite WAL |
 | 日志 / 备份 | `var/production/logs/` / `var/production/backups/` |
-| 当前发布 | `var/releases/replan-clarify-rolling-v16-20261125/`，包含源码、`frontend/dist/` 和 `SHA256SUMS`（同 schema 上一版本：`var/releases/weekly-plan-polish-v16-20261125/`；`v15` 跨 schema 回滚基准：`var/releases/remove-missed-btn-v15-20261125/`，对应切换前备份路径记录在 `var/releases/weekly-plan-v16-20261125/CUTOVER_BACKUP`） |
+| 当前发布 | `var/releases/outlook-copy-fix-v16-20261126/`，包含源码、`frontend/dist/` 和 `SHA256SUMS`（同 schema 上一版本：`var/releases/replan-clarify-rolling-v16-20261125/`；`v15` 跨 schema 回滚基准：`var/releases/remove-missed-btn-v15-20261125/`，对应切换前备份路径记录在 `var/releases/weekly-plan-v16-20261125/CUTOVER_BACKUP`） |
 | 后台服务 | `local.goalcal-v2.app`、`.tunnel`、`.backup` |
 | 健康检查 | `http://127.0.0.1:8521/_goalcal/health` |
 
@@ -82,6 +82,6 @@ curl -fsS http://127.0.0.1:8521/_goalcal/health
 
 恢复命令需要停服：`.venv/bin/python -m goalcal.admin restore /绝对路径/备份.db --app-stopped`。恢复会撤销登录会话；备份之后的数据需另行恢复，不能声称回滚无损保留所有新写入。
 
-当前线上版本为 **Schema `v16`（多目标全局每周平衡排期 Phase 1 + 每日任务上限默认 240 分钟 / 任务间隔提示 / 前置紧凑排期 / 滚动步骤扩充与剩 1 步静默续杯 / 重新规划先澄清大阶段或步骤问题并屏蔽目标名时间误判）**（发布于 `var/releases/replan-clarify-rolling-v16-20261125/`；同 schema 上一版 `var/releases/weekly-plan-polish-v16-20261125/`）。若需同 Schema `v16` 回滚，可直接切回 `var/releases/weekly-plan-polish-v16-20261125/` 并保留当前数据库；若需跨 Schema 回滚至 `v15`，须先停服并使用 `var/releases/weekly-plan-v16-20261125/CUTOVER_BACKUP` 恢复数据库，再切回 `var/releases/remove-missed-btn-v15-20261125/`。若 `GOALCAL_CREDENTIAL_KEY` 未显式设置，生产环境使用数据库同目录 `0600` 权限 `.credential_key`。
+当前线上版本为 **Schema `v16`（多目标全局每周平衡排期 Phase 1 + 每日任务上限默认 240 分钟 / 任务间隔提示 / 前置紧凑排期 / 滚动步骤扩充与剩 1 步静默续杯 / 重新规划先澄清大阶段或步骤问题并修正 Outlook 同步说明）**（发布于 `var/releases/outlook-copy-fix-v16-20261126/`；同 schema 上一版 `var/releases/replan-clarify-rolling-v16-20261125/`）。若需同 Schema `v16` 回滚，可直接切回 `var/releases/replan-clarify-rolling-v16-20261125/` 并保留当前数据库；若需跨 Schema 回滚至 `v15`，须先停服并使用 `var/releases/weekly-plan-v16-20261125/CUTOVER_BACKUP` 恢复数据库，再切回 `var/releases/remove-missed-btn-v15-20261125/`。若 `GOALCAL_CREDENTIAL_KEY` 未显式设置，生产环境使用数据库同目录 `0600` 权限 `.credential_key`。
 
 本次归并的快照、旧数据与旧配置位置见 [整合记录](records/consolidation-2026-11-17.md)。旧数据只归档，不合并进正式新版库。

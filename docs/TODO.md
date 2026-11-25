@@ -25,10 +25,10 @@
   - 新增通用 [AiProgressHint.tsx](../frontend/src/components/AiProgressHint.tsx) 组件，接入新建目标校准/拆解/重生成与助手对话（含重规划专属阶段与计时反馈）。
 
 - [x] **ICS 双向订阅同步与原生双向读写同步（V2.0–V2.2）**
-  - 已实现 Apple iCloud / CalDAV、Google Calendar、Microsoft Outlook 双向同步、双向 `.ics` 订阅、来源配色/全天策略/排期避让与同步冲突一键重排，详见 [日历同步设计](calendar-sync.md)。
+  - 已实现 Apple iCloud / CalDAV、Google Calendar 原生双向同步、通用双向 `.ics` 订阅（适配 Apple / Google / Outlook / 飞书等）、来源配色/全天策略/排期避让与同步冲突一键重排，详见 [日历同步设计](calendar-sync.md)（Microsoft Outlook 原生双向同步暂未启用，详见该文档内部说明）。
 - [x] **网页端修改时区**
   - 已在 `SettingsPage`「通用与账号」支持 IANA 时区选择器，并扩展 `PATCH /api/v1/me` 与 `auth.update_timezone` 实时生效。
 - [x] **主动提醒阶段 0 & 1**
-  - 已上线原生日历闹钟（`VALARM` / Google `reminders` / Outlook `isReminderOn` + 深链）、Schema `v14` `notification_outbox`、5 条反内疚节奏规则、Resend SMTP 邮件摘要与设置页「提醒与通知」独立分组，详见 [主动提醒设计](reminders-design.md)。
+  - 已上线原生日历闹钟（`VALARM` / Google `reminders` + 深链）、Schema `v14` `notification_outbox`、5 条反内疚节奏规则、Resend SMTP 邮件摘要与设置页「提醒与通知」独立分组，详见 [主动提醒设计](reminders-design.md)。
 
 历史归并记录与旧实例下线证据见 [归并记录](records/consolidation-2026-11-17.md)。
