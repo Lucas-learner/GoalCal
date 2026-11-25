@@ -234,6 +234,9 @@ def test_frontend_requires_login_and_prevents_traversal(accounts,tmp_path,monkey
     async def check():
         async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=app),base_url=ORIGIN) as c:
             assert (await c.get('/app/')).status_code==303
+            unauthed_deep = await c.get('/app/calendar?view=week', follow_redirects=False)
+            assert unauthed_deep.status_code == 303
+            assert unauthed_deep.headers['location'] == '/_goalcal/login?next=/app/calendar%3Fview%3Dweek'
             # Content-hashed assets are publicly cacheable without a session cookie.
             asset = await c.get('/app/assets/index-abc12345.js', headers={'Accept-Encoding': 'gzip'})
             assert asset.status_code == 200

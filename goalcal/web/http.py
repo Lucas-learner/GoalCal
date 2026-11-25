@@ -8,7 +8,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from pydantic import ValidationError
 from sqlalchemy import event as sa_event, select
@@ -27,6 +27,26 @@ from .transport_models import WebRequest
 
 COOKIE = 'goalcal_session'
 LANG_COOKIE = 'goalcal_lang'
+
+
+def _secure_cookie(request: Request) -> bool:
+    host = request.headers.get('host', '').split(':', 1)[0].lower()
+    return (
+        request.headers.get('x-forwarded-proto', '').lower() == 'https'
+        or host not in {'127.0.0.1', 'localhost', '[::1]'}
+    )
+
+
+def _set_session_cookie(resp, request: Request, token: str, max_age: int) -> None:
+    resp.set_cookie(
+        COOKIE,
+        token,
+        max_age=max_age,
+        path='/',
+        secure=_secure_cookie(request),
+        httponly=True,
+        samesite='lax',
+    )
 
 
 def _request_lang(request: Request) -> str:
@@ -643,7 +663,7 @@ async def endpoint(request: Request, *, action, schema=None):
     token = request.cookies.get(COOKIE)
     lang = _request_lang(request)
     try:
-        principal = await run_in_threadpool(auth.authenticate, token)
+        principal, session_expires = await run_in_threadpool(auth.authenticate_session, token)
         body = {}
         key = digest = None
         if request.method != 'GET':
@@ -670,7 +690,12 @@ async def endpoint(request: Request, *, action, schema=None):
         result = await run_in_threadpool(execute, token, action, request.path_params.get('id'),
                                          body, dict(request.query_params), key, digest, lang,
                                          principal=principal)
-        return response(result)
+        resp = response(result)
+        if token and auth.should_renew_session(session_expires):
+            renewed_ttl = await run_in_threadpool(auth.renew_session_if_needed, token, expires=session_expires)
+            if renewed_ttl:
+                _set_session_cookie(resp, request, token, renewed_ttl)
+        return resp
     except auth.AuthError:
         return error('unauthenticated', pick(lang, '登录已过期，请重新登录。', 'Your session has expired. Please log in again.'), 401)
     except tenancy.AccessDenied:
@@ -749,19 +774,31 @@ async def frontend(request):
             'X-Content-Type-Options': 'nosniff',
             'Referrer-Policy': 'same-origin',
         })
+    token = request.cookies.get(COOKIE)
     try:
-        await run_in_threadpool(auth.authenticate, request.cookies.get(COOKIE))
+        _, session_expires = await run_in_threadpool(auth.authenticate_session, token)
     except auth.AuthError:
-        return RedirectResponse('/_goalcal/login?next=/app/', status_code=303)
+        if path and not Path(path).suffix and not path.startswith('assets/'):
+            next_path = f'/app/{path}'
+            if request.url.query:
+                next_path += f'?{request.url.query}'
+        else:
+            next_path = '/app/'
+        return RedirectResponse(f'/_goalcal/login?next={quote(next_path, safe="/")}', status_code=303)
     if not path or not candidate.is_file():
         if Path(path).suffix:
             return PlainTextResponse('Not found', status_code=404)
         candidate = dist / 'index.html'
     if not candidate.is_file():
         return PlainTextResponse('Frontend not built. Run npm ci && npm run build in frontend/.', status_code=503)
-    return FileResponse(candidate, headers={
+    resp = FileResponse(candidate, headers={
         'Cache-Control': 'no-store' if candidate.name == 'index.html' else 'private, max-age=3600',
         'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
         'X-Content-Type-Options': 'nosniff',
         'Referrer-Policy': 'same-origin',
     })
+    if token and auth.should_renew_session(session_expires):
+        renewed_ttl = await run_in_threadpool(auth.renew_session_if_needed, token, expires=session_expires)
+        if renewed_ttl:
+            _set_session_cookie(resp, request, token, renewed_ttl)
+    return resp

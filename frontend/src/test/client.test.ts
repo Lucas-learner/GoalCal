@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ApiError, apiWrite, setUnauthorizedHandler } from '../api/client';
+import { ApiError, apiGet, apiWrite, setAuthorizedHandler, setUnauthorizedHandler } from '../api/client';
 import { shouldRetryQuery } from '../App';
 
 describe('apiWrite idempotency and retry semantics', () => {
@@ -92,6 +92,22 @@ describe('apiWrite idempotency and retry semantics', () => {
     ).rejects.toMatchObject({ status: 401 });
     expect(onUnauth).toHaveBeenCalledTimes(1);
     setUnauthorizedHandler(null);
+  });
+
+  it('invokes authorizedHandler on successful 200 responses', async () => {
+    const onAuth = vi.fn();
+    setAuthorizedHandler(onAuth);
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ id: 1 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await apiGet<{ id: number }>('/me');
+    expect(onAuth).toHaveBeenCalledTimes(1);
+    setAuthorizedHandler(null);
   });
 });
 

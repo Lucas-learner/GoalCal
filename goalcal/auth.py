@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import secrets
+import sqlite3
 import time
 from zoneinfo import ZoneInfo
 from argon2 import PasswordHasher, Type
@@ -46,6 +47,20 @@ def digest(value):
 
 
 MIN_PASSWORD_LEN = 6
+DEFAULT_SESSION_DAYS = 30
+SESSION_SECONDS = DEFAULT_SESSION_DAYS * 24 * 60 * 60
+SESSION_RENEW_INTERVAL_SECONDS = 24 * 60 * 60
+
+
+def session_ttl_seconds() -> int:
+    raw = os.getenv('GOALCAL_SESSION_DAYS', '').strip()
+    if raw:
+        try:
+            days = int(raw)
+        except ValueError:
+            return SESSION_SECONDS
+        return max(1, min(365, days)) * 86400
+    return SESSION_SECONDS
 
 
 def _hash_password(password: str) -> str:
@@ -170,26 +185,72 @@ def login(username, password):
         log.info('login_failed')
         raise AuthError('用户名或密码错误')
     token = secrets.token_urlsafe(32)
+    ttl = session_ttl_seconds()
     with connect() as con:
         con.execute('BEGIN IMMEDIATE')
         current = con.execute('SELECT * FROM users WHERE id=?', (row['id'],)).fetchone()
         if current['disabled'] or current['password_hash'] != row['password_hash']:
             raise AuthError('账号状态已改变，请重新登录')
         con.execute('DELETE FROM auth_sessions WHERE expires<=?', (now,))
-        con.execute('INSERT INTO auth_sessions VALUES (?, ?, ?)', (digest(token), row['id'], now+43200))
+        con.execute('INSERT INTO auth_sessions VALUES (?, ?, ?)', (digest(token), row['id'], now + ttl))
         con.execute('DELETE FROM login_limits WHERE key=?', (digest(identifier),))
     log.info('login_succeeded user_id=%s', row['id'])
     return token
 
 
-def authenticate(token):
+def authenticate_session(token) -> tuple[Principal, float]:
+    """Read-only session check returning the principal and session expiry timestamp."""
     if not token:
         raise AuthError('请登录')
     with connect() as con:
-        row = con.execute('SELECT u.* FROM users u JOIN auth_sessions s ON u.id=s.user_id WHERE s.digest=? AND s.expires>? AND u.disabled=0', (digest(token), time.time())).fetchone()
+        row = con.execute(
+            'SELECT u.*, s.expires AS session_expires FROM users u '
+            'JOIN auth_sessions s ON u.id=s.user_id '
+            'WHERE s.digest=? AND s.expires>? AND u.disabled=0',
+            (digest(token), time.time()),
+        ).fetchone()
     if row is None:
         raise AuthError('登录已失效，请重新登录')
-    return Principal(row['id'], row['username'], row['tz'])
+    return Principal(row['id'], row['username'], row['tz']), float(row['session_expires'])
+
+
+def authenticate(token):
+    return authenticate_session(token)[0]
+
+
+def should_renew_session(expires: float, *, now: float | None = None, ttl: int | None = None) -> bool:
+    current = time.time() if now is None else now
+    effective_ttl = session_ttl_seconds() if ttl is None else ttl
+    interval = min(SESSION_RENEW_INTERVAL_SECONDS, effective_ttl / 2)
+    return expires > current and (expires - current) <= (effective_ttl - interval)
+
+
+def renew_session_if_needed(
+    token: str | None, *, expires: float | None = None, now: float | None = None
+) -> int | None:
+    """Extend active session expiry on a sliding window; returns new TTL if renewed."""
+    if not token:
+        return None
+    current = time.time() if now is None else now
+    ttl = session_ttl_seconds()
+    if expires is not None and not should_renew_session(expires, now=current, ttl=ttl):
+        return None
+    interval = min(SESSION_RENEW_INTERVAL_SECONDS, ttl / 2)
+    new_expires = current + ttl
+    cutoff = current + ttl - interval
+    try:
+        with connect() as con:
+            con.execute('BEGIN IMMEDIATE')
+            cur = con.execute(
+                'UPDATE auth_sessions SET expires=? '
+                'WHERE digest=? AND expires>? AND expires<=? '
+                'AND user_id IN (SELECT id FROM users WHERE disabled=0)',
+                (new_expires, digest(token), current, cutoff),
+            )
+            return ttl if cur.rowcount > 0 else None
+    except sqlite3.OperationalError:
+        log.warning('session_renew_skipped_lock', exc_info=True)
+        return None
 
 
 def logout(token):

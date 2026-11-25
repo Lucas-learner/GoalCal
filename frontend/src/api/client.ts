@@ -65,9 +65,14 @@ export function generateIdempotencyKey(): string {
 }
 
 let unauthorizedHandler: (() => void) | null = null;
+let authorizedHandler: (() => void) | null = null;
 
 export function setUnauthorizedHandler(handler: (() => void) | null): void {
   unauthorizedHandler = handler;
+}
+
+export function setAuthorizedHandler(handler: (() => void) | null): void {
+  authorizedHandler = handler;
 }
 
 interface RequestOptions {
@@ -160,6 +165,7 @@ export async function apiGet<T>(path: string, timeoutMs = 20000): Promise<T> {
   if (!response.ok) {
     throw await parseErrorResponse(response);
   }
+  authorizedHandler?.();
   return (await response.json()) as T;
 }
 
@@ -208,6 +214,7 @@ export async function apiWrite<T>(
         throw await parseErrorResponse(response, key);
       }
 
+      authorizedHandler?.();
       return (await response.json()) as T;
     } catch (err) {
       if (err instanceof ApiError) {

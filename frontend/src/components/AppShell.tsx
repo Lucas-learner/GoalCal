@@ -95,10 +95,17 @@ export function AppShell({
     try {
       await queryClient.fetchQuery({ queryKey: queryKeys.me, queryFn: api.getMe });
       clearAuthExpired();
+      await queryClient.invalidateQueries();
     } catch {
       // Remain in authExpired banner while preserving all user drafts.
     }
   };
+
+  const currentAppPath = `/app${location.pathname === '/' ? '/' : location.pathname}${location.search}`;
+  const loginHref =
+    currentAppPath === '/app/'
+      ? '/_goalcal/login?next=/app/'
+      : `/_goalcal/login?next=${encodeURIComponent(currentAppPath)}`;
 
   const navItems = [
     { to: '/', label: t('今天', 'Today'), icon: <HomeIcon />, end: true },
@@ -157,13 +164,13 @@ export function AppShell({
                 <div className="status-banner-title">{t('登录已过期', 'Session expired')}</div>
                 <div>
                   {t(
-                    '当前未保存的输入已保留，请重新登录。',
-                    'Unsaved inputs are preserved — log in again to continue.',
+                    '登录状态已失效，请重新登录以继续使用。',
+                    'Your session has expired. Log in again to continue.',
                   )}
                 </div>
               </div>
               <div className="status-banner-actions">
-                <a className="btn small primary" href="/_goalcal/login?next=/app/" target="_blank" rel="noreferrer">
+                <a className="btn small primary" href={loginHref}>
                   {t('重新登录', 'Log in')}
                 </a>
                 <button type="button" className="btn small" onClick={() => void handleRecheckSession()}>

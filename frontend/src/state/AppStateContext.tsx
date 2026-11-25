@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { setUnauthorizedHandler } from '../api/client';
+import { setAuthorizedHandler, setUnauthorizedHandler } from '../api/client';
 import type { CreateGoalIntent, Proposal } from '../api/types';
 import { I18nProvider, getActiveLang, pickText } from '../i18n';
 import { ThemeProvider } from '../theme';
@@ -68,7 +68,13 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     setUnauthorizedHandler(() => {
       setAuthExpired(true);
     });
-    return () => setUnauthorizedHandler(null);
+    setAuthorizedHandler(() => {
+      setAuthExpired(false);
+    });
+    return () => {
+      setUnauthorizedHandler(null);
+      setAuthorizedHandler(null);
+    };
   }, []);
 
   const announceStatus = useCallback((msg: string) => {

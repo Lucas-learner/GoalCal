@@ -1416,4 +1416,53 @@ describe('GoalCal critical interactions', () => {
     expect(await screen.findByRole('button', { name: '调整时间' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '换时间' })).not.toBeInTheDocument();
   });
+
+  it('renders same-tab relogin link with current route and clears expired banner on recovery', async () => {
+    let authed = false;
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (!authed) {
+        return jsonResponse({ error: { code: 'unauthenticated', message: '登录已过期，请重新登录。' } }, 401);
+      }
+      if (url === '/api/v1/me') {
+        return jsonResponse({ id: 1, name: 'Yan Li', timezone: 'Asia/Shanghai', lang: 'zh' });
+      }
+      if (url.startsWith('/api/v1/calendar/events')) {
+        return jsonResponse({ events: [], sync_conflicts: [], habits: { items: [], weeks: [] } });
+      }
+      if (url === '/api/v1/availability') {
+        return jsonResponse({
+          available_windows: [],
+          protected_windows: [],
+          preferred_windows: [],
+          buffer_minutes: 10,
+          max_goal_minutes_per_day: 120,
+          version: 'a1',
+        });
+      }
+      if (url === '/api/v1/goals') {
+        return jsonResponse({ goals: [] });
+      }
+      if (url === '/api/v1/habits') {
+        return jsonResponse({ habits: [] });
+      }
+      return jsonResponse({});
+    });
+
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    renderApp('/calendar?view=week');
+
+    const reloginLink = await screen.findByRole('link', { name: '重新登录' });
+    expect(reloginLink).not.toHaveAttribute('target');
+    expect(reloginLink).toHaveAttribute('href', '/_goalcal/login?next=%2Fapp%2Fcalendar%3Fview%3Dweek');
+
+    authed = true;
+    await user.click(screen.getByRole('button', { name: '继续' }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('link', { name: '重新登录' })).not.toBeInTheDocument();
+    });
+  });
 });

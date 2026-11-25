@@ -97,7 +97,7 @@ def test_login_cookie_survives_new_client_and_is_revoked_on_logout():
             )
             assert login.status_code == 303
             cookie = login.headers["set-cookie"]
-            assert all(flag in cookie for flag in ("HttpOnly", "Secure", "SameSite=lax", "Max-Age=43200"))
+            assert all(flag in cookie for flag in ("HttpOnly", "Secure", "SameSite=lax", f"Max-Age={auth.SESSION_SECONDS}"))
             token = client.cookies.get(COOKIE_NAME)
             assert token and token not in login.headers["location"] and token not in page.text
             assert auth.authenticate(token).username == name
@@ -389,5 +389,147 @@ def test_login_reuses_form_cookie_across_tabs_and_recovers_from_missing_cookie(m
             )
             assert tab1_submit.status_code == 303
             assert tab1_submit.headers["location"] == "/app/"
+
+    asyncio.run(scenario())
+
+
+def test_session_lifetime_and_sliding_renewal(monkeypatch, tmp_path):
+    assert auth.SESSION_SECONDS == 30 * 24 * 60 * 60
+    assert auth.session_ttl_seconds() == 30 * 24 * 60 * 60
+
+    monkeypatch.setenv("GOALCAL_SESSION_DAYS", "45")
+    assert auth.session_ttl_seconds() == 45 * 24 * 60 * 60
+    monkeypatch.setenv("GOALCAL_SESSION_DAYS", "999")
+    assert auth.session_ttl_seconds() == 365 * 24 * 60 * 60
+    monkeypatch.setenv("GOALCAL_SESSION_DAYS", "0")
+    assert auth.session_ttl_seconds() == 1 * 24 * 60 * 60
+    monkeypatch.setenv("GOALCAL_SESSION_DAYS", "invalid")
+    assert auth.session_ttl_seconds() == 30 * 24 * 60 * 60
+    monkeypatch.delenv("GOALCAL_SESSION_DAYS", raising=False)
+
+    name = _account()
+    dist = tmp_path / "site" / "frontend" / "dist"
+    dist.mkdir(parents=True)
+    (dist / "index.html").write_text("<!doctype html><title>GoalCal</title>")
+    from goalcal.web import http as web_http
+    monkeypatch.setattr(web_http, "ROOT", tmp_path / "site")
+
+    async def scenario():
+        import time as _time
+
+        transport = httpx2.ASGITransport(app=app)
+        async with httpx2.AsyncClient(transport=transport, base_url="https://goalcal.example") as client:
+            page = await client.get("/_goalcal/login?next=/app/", headers={"Accept": "text/html"})
+            login = await client.post(
+                "/_goalcal/login",
+                data={"username": name, "password": "test-password-long", "csrf": _csrf(page), "next": "/app/"},
+                headers={"Origin": "https://goalcal.example"},
+                follow_redirects=False,
+            )
+            assert login.status_code == 303
+            assert f"Max-Age={auth.SESSION_SECONDS}" in login.headers["set-cookie"]
+            token = client.cookies.get(COOKIE_NAME)
+            assert token
+
+            with storage.connect() as con:
+                row = con.execute("SELECT expires FROM auth_sessions WHERE digest=?", (auth.digest(token),)).fetchone()
+                initial_exp = float(row["expires"])
+            assert initial_exp - _time.time() > 29 * 24 * 60 * 60
+
+            # Fresh session does not emit Set-Cookie on API or app requests.
+            me_fresh = await client.get("/api/v1/me")
+            assert me_fresh.status_code == 200
+            assert "set-cookie" not in me_fresh.headers
+
+            app_fresh = await client.get("/app/")
+            assert app_fresh.status_code == 200
+            assert "set-cookie" not in app_fresh.headers
+
+            # Simulate session older than 24h: next API request renews DB expiry and refreshes cookie.
+            stale_exp = _time.time() + (auth.SESSION_SECONDS - auth.SESSION_RENEW_INTERVAL_SECONDS - 60)
+            with storage.connect() as con:
+                con.execute("UPDATE auth_sessions SET expires=? WHERE digest=?", (stale_exp, auth.digest(token)))
+
+            me_renewed = await client.get("/api/v1/me")
+            assert me_renewed.status_code == 200
+            assert f"Max-Age={auth.SESSION_SECONDS}" in me_renewed.headers.get("set-cookie", "")
+            with storage.connect() as con:
+                new_exp = float(
+                    con.execute("SELECT expires FROM auth_sessions WHERE digest=?", (auth.digest(token),)).fetchone()["expires"]
+                )
+            assert new_exp > stale_exp + 23 * 60 * 60
+
+            # Subsequent immediate request does not renew again.
+            me_after = await client.get("/api/v1/me")
+            assert me_after.status_code == 200
+            assert "set-cookie" not in me_after.headers
+
+            # Frontend entry also triggers sliding renewal when older than 24h.
+            with storage.connect() as con:
+                con.execute("UPDATE auth_sessions SET expires=? WHERE digest=?", (stale_exp, auth.digest(token)))
+            app_renewed = await client.get("/app/goals")
+            assert app_renewed.status_code == 200
+            assert f"Max-Age={auth.SESSION_SECONDS}" in app_renewed.headers.get("set-cookie", "")
+
+            # Disabled/expired sessions cannot be renewed.
+            with storage.connect() as con:
+                con.execute("UPDATE auth_sessions SET expires=? WHERE digest=?", (_time.time() - 10, auth.digest(token)))
+            assert auth.renew_session_if_needed(token) is None
+            auth.manage(name, disabled=True)
+            assert auth.renew_session_if_needed(token) is None
+
+    asyncio.run(scenario())
+
+
+def test_login_preserves_deep_app_next_and_blocks_open_redirects():
+    name = _account()
+
+    async def scenario():
+        transport = httpx2.ASGITransport(app=app)
+        async with httpx2.AsyncClient(transport=transport, base_url="https://goalcal.example") as client:
+            # Deep link with query string is preserved across language switch and login.
+            deep_login = await client.get("/_goalcal/login?next=/app/calendar%3Fview%3Dweek", headers={"Accept": "text/html"})
+            assert deep_login.status_code == 200
+            assert 'name="next" value="/app/calendar?view=week"' in deep_login.text
+            assert 'href="/_goalcal/register?next=/app/calendar%3Fview%3Dweek"' in deep_login.text
+
+            # Switching language keeps the deep next path intact.
+            lang_switch = await client.get(
+                "/_goalcal/lang?lang=zh&next=/_goalcal/login%3Fnext%3D%2Fapp%2Fcalendar%253Fview%253Dweek",
+                follow_redirects=False,
+            )
+            assert lang_switch.status_code == 303
+            assert lang_switch.headers["location"] == "/_goalcal/login?next=/app/calendar%3Fview%3Dweek"
+
+            logged = await client.post(
+                "/_goalcal/login",
+                data={
+                    "username": name,
+                    "password": "test-password-long",
+                    "csrf": _csrf(deep_login),
+                    "next": "/app/calendar?view=week",
+                },
+                headers={"Origin": "https://goalcal.example"},
+                follow_redirects=False,
+            )
+            assert logged.status_code == 303
+            assert logged.headers["location"] == "/app/calendar?view=week"
+
+            # Open-redirect or traversal payloads are rejected and fall back to '/'.
+            for bad_next in ("https://evil.test/app/", "//evil.test/app/", "/app/../secret", "/app/foo\r\nbar"):
+                page = await client.get("/_goalcal/login", headers={"Accept": "text/html"})
+                bad_resp = await client.post(
+                    "/_goalcal/login",
+                    data={
+                        "username": name,
+                        "password": "test-password-long",
+                        "csrf": _csrf(page),
+                        "next": bad_next,
+                    },
+                    headers={"Origin": "https://goalcal.example"},
+                    follow_redirects=False,
+                )
+                assert bad_resp.status_code == 303
+                assert bad_resp.headers["location"] == "/"
 
     asyncio.run(scenario())

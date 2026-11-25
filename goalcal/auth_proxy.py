@@ -37,7 +37,7 @@ COOKIE_NAME = "goalcal_session"
 FORM_COOKIE_NAME = "goalcal_form"
 LANG_COOKIE_NAME = "goalcal_lang"
 THEME_COOKIE_NAME = "goalcal_theme"
-SESSION_SECONDS = 12 * 60 * 60
+SESSION_SECONDS = auth.SESSION_SECONDS
 FORM_COOKIE_SECONDS = 7 * 24 * 60 * 60
 _FORM_TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{32,128}")
 UPSTREAM_PORT = int(os.getenv("GOALCAL_UPSTREAM_PORT", "8518"))
@@ -161,6 +161,7 @@ def _login_page(
     *,
     register: bool = False,
     app_login: bool = False,
+    next_target: str | None = None,
     status_code: int = 200,
 ) -> HTMLResponse:
     lang = _request_lang(request)
@@ -197,12 +198,14 @@ def _login_page(
         action, button = "/_goalcal/login", copy["btn_login"]
         login_current, register_current = ' aria-current="page"', ""
         script = ""
-    return_field = '<input type="hidden" name="next" value="/app/">' if app_login else ""
-    login_href = "/_goalcal/login?next=/app/" if app_login else "/"
-    register_href = "/_goalcal/register?next=/app/" if app_login else "/_goalcal/register"
+    target = next_target if next_target is not None else ("/app/" if app_login else None)
+    return_field = f'<input type="hidden" name="next" value="{html.escape(target, quote=True)}">' if target else ""
+    encoded_target = quote(target, safe="/") if target else ""
+    login_href = f"/_goalcal/login?next={encoded_target}" if target else "/"
+    register_href = f"/_goalcal/register?next={encoded_target}" if target else "/_goalcal/register"
     current_page = register_href if register else login_href
-    zh_href = f"/_goalcal/lang?lang=zh&next={quote(current_page, safe='/?=&')}"
-    en_href = f"/_goalcal/lang?lang=en&next={quote(current_page, safe='/?=&')}"
+    zh_href = f"/_goalcal/lang?lang=zh&next={quote(current_page, safe='/')}"
+    en_href = f"/_goalcal/lang?lang=en&next={quote(current_page, safe='/')}"
     zh_cls = ' class="active"' if lang == "zh" else ""
     en_cls = ' class="active"' if lang == "en" else ""
     brand_html = '<span class="brand-mark" aria-hidden="true"></span><span>GoalCal</span>'
@@ -340,10 +343,24 @@ async def health(request: Request) -> Response:
                         status_code=200 if ok else 503, headers={'Cache-Control': 'no-store'})
 
 
+def _resolve_app_next(next_value: str | None) -> str | None:
+    if next_value is None or next_value == "":
+        return "/app/" if _root_app_enabled() else None
+    if any(ch in next_value for ch in ("\r", "\n", "\\")):
+        return None
+    parsed = urlsplit(next_value)
+    if parsed.scheme or parsed.netloc or parsed.fragment or parsed.path.startswith("//"):
+        return None
+    if parsed.path != "/app" and not parsed.path.startswith("/app/"):
+        return None
+    if ".." in parsed.path.split("/"):
+        return None
+    path = "/app/" if parsed.path == "/app" else parsed.path
+    return path + (f"?{parsed.query}" if parsed.query else "")
+
+
 def _is_app_target(next_value: str | None) -> bool:
-    if next_value is not None and next_value != "":
-        return next_value == "/app/"
-    return _root_app_enabled()
+    return bool(_resolve_app_next(next_value))
 
 
 def _apply_login_lang(token: str, lang: str) -> None:
@@ -362,38 +379,38 @@ async def _parse_auth_form(request: Request, *, register: bool = False):
     if not _same_origin_post(request) or not await _small_form(request):
         return None, PlainTextResponse("Invalid form submission", status_code=403)
     form = await request.form()
-    app_login = _is_app_target(str(form.get("next")) if form.get("next") is not None else None)
+    next_target = _resolve_app_next(str(form.get("next")) if form.get("next") is not None else None)
     lang = _request_lang(request)
     if not _valid_form_token(request, form):
         return None, _login_page(
             request,
             _AUTH_COPY[lang]["form_expired"],
             register=register,
-            app_login=app_login,
+            next_target=next_target,
             status_code=403,
         )
-    return (form, app_login, lang), None
+    return (form, next_target, lang), None
 
 
 async def login(request: Request) -> Response:
     if request.method == "GET":
-        return _login_page(request, app_login=_is_app_target(request.query_params.get("next")))
+        return _login_page(request, next_target=_resolve_app_next(request.query_params.get("next")))
     parsed, error_response = await _parse_auth_form(request)
     if error_response is not None:
         return error_response
-    form, app_login, lang = parsed
+    form, next_target, lang = parsed
     try:
         token = await run_in_threadpool(
             auth.login, str(form.get("username", "")), str(form.get("password", ""))
         )
     except auth.AuthError as exc:
-        return _login_page(request, localize_auth_error(str(exc), lang), app_login=app_login)
+        return _login_page(request, localize_auth_error(str(exc), lang), next_target=next_target)
     cookie_lang = normalize_lang(request.cookies.get(LANG_COOKIE_NAME))
     if cookie_lang:
         await run_in_threadpool(_apply_login_lang, token, cookie_lang)
-    response = RedirectResponse("/app/" if app_login else "/", status_code=303)
+    response = RedirectResponse(next_target or "/", status_code=303)
     response.set_cookie(
-        COOKIE_NAME, token, max_age=SESSION_SECONDS, path="/",
+        COOKIE_NAME, token, max_age=auth.session_ttl_seconds(), path="/",
         secure=_secure_cookie(request), httponly=True, samesite="lax",
     )
     response.headers["Cache-Control"] = "no-store"
@@ -402,11 +419,11 @@ async def login(request: Request) -> Response:
 
 async def register(request: Request) -> Response:
     if request.method == "GET":
-        return _login_page(request, register=True, app_login=_is_app_target(request.query_params.get("next")))
+        return _login_page(request, register=True, next_target=_resolve_app_next(request.query_params.get("next")))
     parsed, error_response = await _parse_auth_form(request, register=True)
     if error_response is not None:
         return error_response
-    form, app_login, lang = parsed
+    form, next_target, lang = parsed
     try:
         await run_in_threadpool(
             auth.create_user,
@@ -415,8 +432,8 @@ async def register(request: Request) -> Response:
             email=str(form.get("email", "")) if form.get("email") is not None else None,
         )
     except auth.AuthError as exc:
-        return _login_page(request, localize_auth_error(str(exc), lang), register=True, app_login=app_login)
-    return _login_page(request, _AUTH_COPY[lang]["created"], app_login=app_login)
+        return _login_page(request, localize_auth_error(str(exc), lang), register=True, next_target=next_target)
+    return _login_page(request, _AUTH_COPY[lang]["created"], next_target=next_target)
 
 
 def _safe_auth_next(target: str | None) -> str:
@@ -624,7 +641,7 @@ async def oauth_start(request: Request) -> Response:
     try:
         principal = await run_in_threadpool(auth.authenticate, token)
     except auth.AuthError:
-        return RedirectResponse("/_goalcal/login?next=/app/settings?section=sync", status_code=303)
+        return RedirectResponse("/_goalcal/login?next=/app/settings%3Fsection%3Dsync", status_code=303)
 
     from .crypto import sign_oauth_state
     from .domain.sync_providers import (
@@ -830,7 +847,7 @@ async def oauth_callback(request: Request) -> Response:
     try:
         principal = await run_in_threadpool(auth.authenticate, token)
     except auth.AuthError:
-        return _clear_redirect("/_goalcal/login?next=/app/settings?section=sync")
+        return _clear_redirect("/_goalcal/login?next=/app/settings%3Fsection%3Dsync")
 
     from .crypto import CredentialError, verify_oauth_state
     from .domain.sync_providers import GoogleCalendarAdapter, OutlookCalendarAdapter, SyncProviderError
