@@ -37,6 +37,9 @@ export default defineConfig(({ mode }) => ({
       '/_goalcal': loadEnv(mode, process.cwd(), 'GOALCAL_').GOALCAL_DEV_BACKEND || 'http://127.0.0.1:8517',
       '/calendar/feed': loadEnv(mode, process.cwd(), 'GOALCAL_').GOALCAL_DEV_BACKEND || 'http://127.0.0.1:8517',
       '/calendar/webhook': loadEnv(mode, process.cwd(), 'GOALCAL_').GOALCAL_DEV_BACKEND || 'http://127.0.0.1:8517',
+      '/favicon.svg': loadEnv(mode, process.cwd(), 'GOALCAL_').GOALCAL_DEV_BACKEND || 'http://127.0.0.1:8517',
+      '/favicon.ico': loadEnv(mode, process.cwd(), 'GOALCAL_').GOALCAL_DEV_BACKEND || 'http://127.0.0.1:8517',
+      '/apple-touch-icon.png': loadEnv(mode, process.cwd(), 'GOALCAL_').GOALCAL_DEV_BACKEND || 'http://127.0.0.1:8517',
     },
   },
 }));

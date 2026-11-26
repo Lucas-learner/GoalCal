@@ -8,6 +8,7 @@ import { useIdempotentAction } from '../lib/useIdempotentMutation';
 import { useI18n } from '../i18n';
 import { loadAssistantDrawer, preloadRoute } from '../lib/routePreload';
 import { useAppState } from '../state/AppStateContext';
+import { BrandMark } from './BrandMark';
 import { CalendarIcon, HomeIcon, RepeatIcon, SettingsIcon, TargetIcon } from './Icons';
 import { ProposalModal } from './ProposalModal';
 import { ErrorBanner } from './StateFeedback';
@@ -118,7 +119,7 @@ export function AppShell({
     <div className={isDocked ? 'app-shell assistant-docked' : 'app-shell'}>
       <aside className="sidebar" aria-label={t('主导航', 'Primary navigation')}>
         <NavLink to="/" className="brand">
-          <span className="brand-mark" aria-hidden="true" />
+          <BrandMark />
           <span>GoalCal</span>
         </NavLink>
 

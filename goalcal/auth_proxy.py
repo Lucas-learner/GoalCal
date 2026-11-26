@@ -190,6 +190,22 @@ _AUTH_COPY = {
 }
 
 
+_BRAND_MARK_SVG = (
+    '<svg viewBox="14 14 92 92" fill="currentColor" focusable="false">'
+    '<path d="M 99.05 42 A 43 43 0 0 0 60 17 A 43 43 0 0 0 17 60 A 43 43 0 0 0 19.70 75 H 41.27 A 24 24 0 0 1 36 60 A 24 24 0 0 1 60 36 A 24 24 0 0 1 75.87 42 Z"/>'
+    '<path d="M 58 55 H 102.71 A 43 43 0 0 1 100.30 75 H 78.73 A 24 24 0 0 0 82.96 67 H 58 Z"/>'
+    '<path d="M 21.83 79.8 A 43 43 0 0 0 27.37 88 H 92.63 A 43 43 0 0 0 98.17 79.8 H 73.56 A 24 24 0 0 1 46.44 79.8 Z"/>'
+    '<path d="M 33.17 93.6 A 43 43 0 0 0 86.83 93.6 Z"/>'
+    "</svg>"
+)
+
+_PUBLIC_BRAND_ICONS = {
+    "/favicon.svg": ("favicon.svg", "image/svg+xml"),
+    "/favicon.ico": ("favicon.ico", "image/x-icon"),
+    "/apple-touch-icon.png": ("apple-touch-icon.png", "image/png"),
+}
+
+
 def _auth_shell_response(
     request: Request,
     *,
@@ -208,9 +224,12 @@ def _auth_shell_response(
     en_href = f"/_goalcal/lang?lang=en&next={quote(current_page, safe='/')}"
     zh_cls = ' class="active"' if lang == "zh" else ""
     en_cls = ' class="active"' if lang == "en" else ""
-    brand_html = '<span class="brand-mark" aria-hidden="true"></span><span>GoalCal</span>'
+    brand_html = f'<span class="brand-mark" aria-hidden="true">{_BRAND_MARK_SVG}</span><span>GoalCal</span>'
     body = f"""<!doctype html><html lang="{copy["html_lang"]}"{theme_attr}><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <title>GoalCal</title><style>
 :root{{color-scheme:light;--bg:#fafaf8;--surface:#fffefd;--surface-soft:#f4f4f1;--ink:#1d1d1f;--muted:#6e6e73;--faint:#a1a1a6;--line:rgba(29,29,31,0.08);--line-strong:rgba(29,29,31,0.16);--accent:#303638;--accent-hover:#23282a;--accent-ink:#fff;--blue:#6b7f89;--tab-shadow:0 1px 2px rgba(20,22,24,0.06);--notice-bg:#fdf3e7;--notice-border:rgba(180,120,40,0.2);--notice-ink:#5c3d15;--info-bg:#f2f5f7;--info-border:rgba(107,127,137,0.24);--info-ink:#32444d;--radius:13px;--control:9px;--shadow:0 1px 2px rgba(20,22,24,0.02),0 8px 24px rgba(20,22,24,0.025)}}
 :root[data-theme="dark"]{{color-scheme:dark;--bg:#131415;--surface:#1b1c1e;--surface-soft:#242629;--ink:#f0f0ee;--muted:#a2a3a8;--faint:#73757a;--line:rgba(255,255,255,0.09);--line-strong:rgba(255,255,255,0.18);--accent:#e5e7e6;--accent-hover:#d4d7d6;--accent-ink:#161819;--blue:#8aa2ad;--tab-shadow:0 1px 2px rgba(0,0,0,0.35);--notice-bg:rgba(218,162,86,0.12);--notice-border:rgba(218,162,86,0.28);--notice-ink:#f2cd98;--info-bg:rgba(138,162,173,0.12);--info-border:rgba(138,162,173,0.28);--info-ink:#d0dce2;--shadow:0 1px 2px rgba(0,0,0,0.28),0 8px 24px rgba(0,0,0,0.34)}}
@@ -221,8 +240,8 @@ main{{min-height:100dvh;display:flex;flex-direction:column;align-items:center;ju
 .shell{{width:100%;max-width:416px}}
 .brand-wrap{{display:flex;flex-direction:column;align-items:center;gap:8px;margin:0 0 24px;text-align:center}}
 .brand{{display:inline-flex;align-items:center;gap:10px;font-size:20px;font-weight:720;letter-spacing:-0.04em;margin:0;color:var(--ink)}}
-.brand-mark{{width:27px;height:27px;border-radius:9px;background:var(--accent);position:relative;flex:0 0 auto}}
-.brand-mark::before{{content:"";position:absolute;width:9px;height:9px;border:2px solid var(--surface);border-radius:50%;left:7px;top:7px}}
+.brand-mark{{width:26px;height:26px;display:inline-flex;align-items:center;justify-content:center;color:var(--ink);flex:0 0 auto}}
+.brand-mark svg{{width:100%;height:100%;display:block}}
 .subtitle{{margin:0;font-size:12.5px;color:var(--muted)}}
 .card{{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:24px}}
 nav{{display:grid;grid-template-columns:1fr 1fr;gap:4px;padding:4px;background:var(--surface-soft);border-radius:11px;margin-bottom:20px}}
@@ -255,7 +274,7 @@ button:hover{{background:var(--accent-hover)}}
     response.headers["Cache-Control"] = "no-store"
     effective_nonce = script_nonce or secrets.token_urlsafe(32)
     response.headers["Content-Security-Policy"] = (
-        f"default-src 'none'; script-src 'nonce-{effective_nonce}'; style-src 'unsafe-inline'; form-action 'self'; "
+        f"default-src 'none'; script-src 'nonce-{effective_nonce}'; style-src 'unsafe-inline'; img-src 'self'; form-action 'self'; "
         "base-uri 'none'; frame-ancestors 'none'"
     )
     # Chrome sends a null Origin for same-origin form posts under no-referrer.
@@ -839,6 +858,23 @@ async def logout(request: Request) -> Response:
     response.delete_cookie(COOKIE_NAME, path="/")
     response.headers["Cache-Control"] = "no-store"
     return response
+
+
+async def public_brand_icon(request: Request) -> Response:
+    spec = _PUBLIC_BRAND_ICONS.get(request.url.path)
+    if spec is None:
+        return PlainTextResponse("Not found", status_code=404)
+    filename, media_type = spec
+    from .config import ROOT
+    for directory in (ROOT / "frontend" / "dist", ROOT / "frontend" / "public"):
+        candidate = directory / filename
+        if candidate.is_file():
+            return FileResponse(candidate, media_type=media_type, headers={
+                "Cache-Control": "public, max-age=86400",
+                "X-Content-Type-Options": "nosniff",
+                "Referrer-Policy": "same-origin",
+            })
+    return PlainTextResponse("Not found", status_code=404)
 
 
 async def landing(request: Request) -> Response:
@@ -1449,6 +1485,9 @@ from .web.http import api as web_api, frontend as web_frontend
 app = Starlette(
     routes=[
         Route("/_goalcal/health", health, methods=["GET", "HEAD"]),
+        Route("/favicon.svg", public_brand_icon, methods=["GET", "HEAD"]),
+        Route("/favicon.ico", public_brand_icon, methods=["GET", "HEAD"]),
+        Route("/apple-touch-icon.png", public_brand_icon, methods=["GET", "HEAD"]),
         Route("/calendar/feed/{filename:str}", calendar_feed, methods=["GET", "HEAD"]),
         Route("/calendar/webhook/google", google_webhook, methods=["POST"]),
         Route("/calendar/webhook/outlook", outlook_webhook, methods=["GET", "POST"]),

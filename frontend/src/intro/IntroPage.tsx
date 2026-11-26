@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { BrandMark } from '../components/BrandMark';
 import { useI18n } from '../i18n';
 import {
   AssistantDemo,
@@ -23,7 +24,7 @@ function useReducedMotion() {
 }
 
 function Brand() {
-  return <span className="intro-brand"><span className="brand-mark" aria-hidden="true" /><span>GoalCal</span></span>;
+  return <span className="intro-brand"><BrandMark /><span>GoalCal</span></span>;
 }
 
 export function IntroPage() {

@@ -123,38 +123,24 @@ a:focus-visible {
 }
 
 .brand-mark {
-  position: relative;
-  display: inline-block;
-  width: 29px;
-  height: 29px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
   flex: 0 0 auto;
-  border-radius: 9px;
-  background: #303638;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  color: currentColor;
 }
 
-.brand-mark::before {
-  content: "";
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 9px;
-  height: 9px;
-  border: 2px solid #fffefd;
-  border-radius: 50%;
-  transform: translate(-50%, -50%);
+.brand-mark svg {
+  width: 100%;
+  height: 100%;
+  display: block;
 }
 
 .brand-mark.small {
-  width: 23px;
-  height: 23px;
-  border-radius: 7px;
-}
-
-.brand-mark.small::before {
-  width: 7px;
-  height: 7px;
-  border-width: 1.5px;
+  width: 22px;
+  height: 22px;
 }
 
 .intro-nav-links {
@@ -1741,11 +1727,7 @@ a:focus-visible {
 }
 
 .focus-demo-nav .brand-mark {
-  background: #dfe4e1;
-}
-
-.focus-demo-nav .brand-mark::before {
-  border-color: #313838;
+  color: #dfe4e1;
 }
 
 .focus-status {
@@ -3190,15 +3172,8 @@ a:focus-visible {
 }
 
 .footer-inner .brand-mark {
-  width: 24px;
-  height: 24px;
-  border-radius: 7px;
-}
-
-.footer-inner .brand-mark::before {
-  width: 7px;
-  height: 7px;
-  border-width: 1.5px;
+  width: 22px;
+  height: 22px;
 }
 
 .footer-inner > p {
@@ -3501,9 +3476,8 @@ a:focus-visible {
   }
 
   .intro-brand .brand-mark {
-    width: 26px;
-    height: 26px;
-    border-radius: 8px;
+    width: 24px;
+    height: 24px;
   }
 
   .intro-nav-actions {
@@ -4420,11 +4394,7 @@ a:focus-visible {
 }
 
 .intro-footer .brand-mark {
-  background: #dfe4e1;
-}
-
-.intro-footer .brand-mark::before {
-  border-color: #313838;
+  color: #dfe4e1;
 }
 
 .intro-footer .footer-inner > p,

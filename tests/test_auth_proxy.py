@@ -740,3 +740,30 @@ def test_migrate_v14_to_v15_creates_password_reset_tokens(tmp_path):
         tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
         assert "password_reset_tokens" in tables
         assert con.execute("SELECT email FROM users WHERE id=1").fetchone()[0] == "bob@example.com"
+
+
+def test_public_brand_icons_and_auth_page_logo():
+    async def scenario():
+        transport = httpx2.ASGITransport(app=app)
+        async with httpx2.AsyncClient(transport=transport, base_url="https://goalcal.example") as client:
+            login_page = await client.get("/_goalcal/login", headers={"Accept": "text/html"})
+            assert login_page.status_code == 200
+            assert 'class="brand-mark"' in login_page.text
+            assert "<svg " in login_page.text
+            assert 'href="/favicon.svg"' in login_page.text
+            assert 'href="/apple-touch-icon.png"' in login_page.text
+            assert "img-src 'self'" in login_page.headers.get("content-security-policy", "")
+
+            for path, expected_prefix in (
+                ("/favicon.svg", "image/svg+xml"),
+                ("/favicon.ico", "image/x-icon"),
+                ("/apple-touch-icon.png", "image/png"),
+            ):
+                resp = await client.get(path)
+                assert resp.status_code == 200
+                assert resp.headers["content-type"].startswith(expected_prefix)
+                assert resp.headers["x-content-type-options"] == "nosniff"
+                head_resp = await client.head(path)
+                assert head_resp.status_code == 200
+
+    asyncio.run(scenario())
