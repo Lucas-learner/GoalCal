@@ -4624,9 +4624,10 @@ a:focus-visible {
 }
 
 .reminder-showcase-channel figcaption {
-  margin-bottom: 8px;
-  color: #838880;
-  font-size: 10px;
+  margin-bottom: 10px;
+  color: #5c635f;
+  font-size: 13px;
+  font-weight: 560;
 }
 
 .reminder-channel-frame {
@@ -4690,6 +4691,10 @@ a:focus-visible {
   .reminder-showcase {
     max-width: none;
     gap: 18px;
+  }
+
+  .reminder-showcase-channel figcaption {
+    font-size: 12px;
   }
 }
 
