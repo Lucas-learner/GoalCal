@@ -169,12 +169,14 @@ a:focus-visible {
 }
 
 .intro-nav-links a,
-.intro-login {
+.intro-login,
+.intro-nav-cta {
   transition: color 180ms ease;
 }
 
 .intro-nav-links a:hover,
-.intro-login:hover {
+.intro-login:hover,
+.intro-nav-cta:hover {
   color: #1d1d1f;
 }
 
@@ -211,30 +213,13 @@ a:focus-visible {
   box-shadow: 0 1px 4px rgba(20, 24, 26, 0.1);
 }
 
-.intro-login {
-  color: #62646a;
-  font-size: 13px;
-  font-weight: 540;
-}
-
+.intro-login,
 .intro-nav-cta {
   display: inline-flex;
   align-items: center;
-  gap: 12px;
-  min-height: 36px;
-  padding: 0 16px;
-  border-radius: 999px;
-  background: #25292b;
-  color: white;
-  font-size: 12.5px;
-  font-weight: 580;
-  box-shadow: 0 5px 14px rgba(30, 35, 37, 0.12);
-  transition: transform 180ms ease, background 180ms ease;
-}
-
-.intro-nav-cta:hover {
-  background: #111415;
-  transform: translateY(-1px);
+  color: #62646a;
+  font-size: 13px;
+  font-weight: 540;
 }
 
 .intro-hero {
@@ -3536,10 +3521,7 @@ a:focus-visible {
   }
 
   .intro-nav-cta {
-    min-height: 33px;
-    padding-inline: 12px;
-    gap: 7px;
-    font-size: 11px;
+    font-size: 12px;
   }
 
   .intro-hero {
@@ -4081,14 +4063,6 @@ a:focus-visible {
 }
 
 @media (max-width: 390px) {
-  .intro-nav-cta span {
-    display: none;
-  }
-
-  .intro-nav-cta {
-    padding-inline: 10px;
-  }
-
   .intro-hero h1 {
     font-size: 41px;
   }

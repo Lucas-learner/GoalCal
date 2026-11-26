@@ -136,7 +136,7 @@ export function IntroPage() {
               <button type="button" className={lang === 'en' ? 'active' : ''} aria-pressed={lang === 'en'} onClick={() => setPreference('en')}>EN</button>
             </div>
             <a className="intro-login" href="/_goalcal/login?next=/app/">{t('登录', 'Log in')}</a>
-            <a className="intro-nav-cta" href="/_goalcal/register?next=/app/">{t('开始规划', 'Start planning')}<span aria-hidden="true">↗</span></a>
+            <a className="intro-nav-cta" href="/_goalcal/register?next=/app/">{t('注册', 'Sign up')}</a>
           </div>
         </div>
       </header>
