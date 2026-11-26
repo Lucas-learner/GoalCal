@@ -143,7 +143,7 @@ export function IntroPage() {
           <div className="hero-orbit orbit-two" aria-hidden="true" />
           <div className="intro-container hero-content">
             <div className="hero-eyebrow"><span className="eyebrow-pulse" />{t('为目标找到节奏', 'A RHYTHM FOR YOUR AMBITIONS')}<span>Goal → Cal</span></div>
-            <h1 id="hero-title">{t('把长期目标，', 'Turn a long-term goal')}<br /><span>{t('变成今天', 'into something')}<br className="hero-title-mobile-break" />{t('能做的一步。', 'you can do today.')}</span></h1>
+            <h1 id="hero-title">{t('把长期目标，', 'Turn a long-term goal')}<br /><span>{t('变成今天', 'into something ')}<br className="hero-title-mobile-break" />{t('能做的一步。', 'you can do today.')}</span></h1>
             <p className="hero-subtitle">{t('说出目标，拆成行动，在日历里安排时间。计划有变时，保留进度，继续向前。', 'Turn your goal into actions and make time for them. When plans change, keep your progress and adjust what’s next.')}</p>
             <div className="hero-actions">
               <a className="intro-button primary" href="/_goalcal/register?next=/app/">{t('开始使用', 'Get started')}<span aria-hidden="true">↗</span></a>

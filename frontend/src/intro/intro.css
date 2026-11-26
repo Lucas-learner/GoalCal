@@ -4840,6 +4840,20 @@ a:focus-visible {
   display: inline-block;
 }
 
+html[lang="en"] .intro-hero h1 {
+  letter-spacing: -0.028em;
+}
+
+html[lang="en"] .section-heading h2,
+html[lang="en"] .story-chapter h3,
+html[lang="en"] .closing-content h2 {
+  letter-spacing: -0.024em;
+}
+
+html[lang="en"] .feature-card-copy h3 {
+  letter-spacing: -0.02em;
+}
+
 .story-chapter h3 {
   text-wrap: balance;
 }

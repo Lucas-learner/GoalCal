@@ -32,7 +32,7 @@ describe('GoalCal public introduction', () => {
     expect(Array.from(container.querySelectorAll('.story-visual')).every(element => element.querySelectorAll('img').length === 1)).toBe(true);
 
     await user.click(screen.getByRole('button', { name: 'EN' }));
-    expect(screen.getByRole('heading', { name: /Turn a long-term goal/ })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /Turn a long-term goal/ })).toHaveTextContent('Turn a long-term goalinto something you can do today.');
     expect(document.documentElement.lang).toBe('en');
     expect(localStorage.getItem('goalcal.lang')).toBe('en');
     expect(container.querySelector('.hero-screenshot')?.getAttribute('src')).toContain('hero-en');
