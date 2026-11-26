@@ -4573,17 +4573,18 @@ a:focus-visible {
 }
 
 .reminder-feature {
-  grid-template-columns: minmax(320px, 0.96fr) minmax(420px, 1.04fr);
-  grid-template-rows: 1fr auto auto 1fr;
-  column-gap: 36px;
+  grid-template-columns: minmax(320px, 1fr) minmax(380px, 500px);
+  grid-template-rows: 0.42fr auto auto 1fr;
+  column-gap: 44px;
   row-gap: 0;
-  padding: 42px;
+  padding: 40px 42px;
   align-items: center;
 }
 
 .reminder-feature .feature-card-copy {
   grid-column: 1;
   grid-row: 2;
+  max-width: 500px;
   padding-top: 0;
 }
 
@@ -4599,12 +4600,26 @@ a:focus-visible {
 .reminder-channel-calendar {
   grid-column: 1;
   grid-row: 3;
-  margin-top: 28px;
+  width: 100%;
+  max-width: 490px;
+  margin-top: 26px;
+}
+
+.reminder-channel-calendar .reminder-channel-frame {
+  padding: 14px 16px;
+  background: #f6f7f5;
+}
+
+.reminder-channel-calendar .reminder-channel-frame img {
+  border-radius: 8px;
 }
 
 .reminder-channel-email {
   grid-column: 2;
   grid-row: 1 / span 4;
+  width: 100%;
+  max-width: 500px;
+  justify-self: end;
   align-self: center;
 }
 
@@ -4657,7 +4672,9 @@ a:focus-visible {
   .reminder-channel-email {
     grid-column: auto;
     grid-row: auto;
+    max-width: none;
     margin-top: 0;
+    justify-self: stretch;
     align-self: auto;
   }
 }
