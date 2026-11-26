@@ -4574,18 +4574,18 @@ a:focus-visible {
 
 .reminder-feature {
   grid-template-columns: minmax(320px, 1fr) minmax(380px, 500px);
-  grid-template-rows: 0.42fr auto auto 1fr;
+  grid-template-rows: auto 1fr;
   column-gap: 44px;
-  row-gap: 0;
+  row-gap: 24px;
   padding: 40px 42px;
-  align-items: center;
+  align-items: start;
 }
 
 .reminder-feature .feature-card-copy {
   grid-column: 1;
-  grid-row: 2;
-  max-width: 500px;
-  padding-top: 0;
+  grid-row: 1;
+  max-width: 520px;
+  padding-top: 16px;
 }
 
 .reminder-showcase {
@@ -4599,14 +4599,15 @@ a:focus-visible {
 
 .reminder-channel-calendar {
   grid-column: 1;
-  grid-row: 3;
+  grid-row: 2;
   width: 100%;
-  max-width: 490px;
-  margin-top: 26px;
+  max-width: 560px;
+  margin-top: 0;
+  align-self: end;
 }
 
 .reminder-channel-calendar .reminder-channel-frame {
-  padding: 14px 16px;
+  padding: 12px 14px;
   background: #f6f7f5;
 }
 
@@ -4616,11 +4617,11 @@ a:focus-visible {
 
 .reminder-channel-email {
   grid-column: 2;
-  grid-row: 1 / span 4;
+  grid-row: 1 / span 2;
   width: 100%;
   max-width: 500px;
   justify-self: end;
-  align-self: center;
+  align-self: end;
 }
 
 .reminder-showcase-channel figcaption {
