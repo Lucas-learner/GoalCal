@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 
 test('habits have a mobile entry and keep Today, Calendar and history in sync', async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 760 });
-  await page.goto('/');
+  await page.goto('/_goalcal/login?next=/app/');
   await page.getByRole('textbox', { name: '用户名或邮箱', exact: true }).fill('preview');
   await page.getByRole('textbox', { name: '密码', exact: true }).fill('GoalCal-preview-2026!');
   await page.getByRole('button', { name: '登录', exact: true }).click();
@@ -65,7 +65,7 @@ test('habits have a mobile entry and keep Today, Calendar and history in sync', 
 });
 
 test('the habit assistant opens a prefilled draft for a weekly routine', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/_goalcal/login?next=/app/');
   await page.getByRole('textbox', { name: '用户名或邮箱', exact: true }).fill('preview');
   await page.getByRole('textbox', { name: '密码', exact: true }).fill('GoalCal-preview-2026!');
   await page.getByRole('button', { name: '登录', exact: true }).click();
@@ -93,7 +93,7 @@ test('the habit assistant opens a prefilled draft for a weekly routine', async (
 });
 
 test('Calendar creates a timed habit and edits only the selected session', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/_goalcal/login?next=/app/');
   await page.getByRole('textbox', { name: '用户名或邮箱', exact: true }).fill('preview');
   await page.getByRole('textbox', { name: '密码', exact: true }).fill('GoalCal-preview-2026!');
   await page.getByRole('button', { name: '登录', exact: true }).click();

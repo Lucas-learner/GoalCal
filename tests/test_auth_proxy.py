@@ -38,6 +38,45 @@ def _csrf(page):
     return re.search(r'name="csrf" value="([^"]+)"', page.text).group(1)
 
 
+def test_public_landing_and_authenticated_root_redirect(monkeypatch, tmp_path):
+    monkeypatch.setenv("GOALCAL_ROOT_APP", "1")
+    from goalcal import config
+    dist = tmp_path / "frontend" / "dist"
+    dist.mkdir(parents=True)
+    (dist / "intro.html").write_text("<!doctype html><html lang=\"en\"><title>GoalCal intro</title><main>Big goals. One small next step.</main>")
+    monkeypatch.setattr(config, "ROOT", tmp_path)
+
+    async def scenario():
+        transport = httpx2.ASGITransport(app=app)
+        async with httpx2.AsyncClient(transport=transport, base_url="https://goalcal.example") as client:
+            page = await client.get("/")
+            assert page.status_code == 200
+            assert "Big goals. One small next step." in page.text
+            assert 'action="/_goalcal/login"' not in page.text
+            assert page.headers["cache-control"] == "no-store"
+            assert "script-src 'self'" in page.headers["content-security-policy"]
+
+            name = _account()
+            login_page = await client.get("/_goalcal/login?next=/app/")
+            login = await client.post(
+                "/_goalcal/login",
+                data={"username": name, "password": "test-password-long", "csrf": _csrf(login_page), "next": "/app/"},
+                follow_redirects=False,
+            )
+            assert login.status_code == 303
+            root = await client.get("/", follow_redirects=False)
+            assert root.status_code == 307
+            assert root.headers["location"] == "/app/"
+
+            client.cookies.clear()
+            client.cookies.set(COOKIE_NAME, "invalid-session")
+            invalid = await client.get("/")
+            assert invalid.status_code == 200
+            assert "GoalCal intro" in invalid.text
+
+    asyncio.run(scenario())
+
+
 def test_websocket_accepts_public_origin_and_uses_internal_origin(monkeypatch):
     public = "https://goalcal.example"
 
@@ -78,7 +117,7 @@ def test_login_cookie_survives_new_client_and_is_revoked_on_logout():
     async def scenario():
         transport = httpx2.ASGITransport(app=app)
         async with httpx2.AsyncClient(transport=transport, base_url="https://goalcal.example") as client:
-            page = await client.get("/", headers={"Accept": "text/html"})
+            page = await client.get("/_goalcal/login?next=/app/", headers={"Accept": "text/html"})
             assert "action=\"/_goalcal/login\"" in page.text
             assert '<html lang="en">' in page.text
             assert "Username" in page.text and "Log in" in page.text
@@ -110,7 +149,7 @@ def test_login_cookie_survives_new_client_and_is_revoked_on_logout():
             assert "Max-Age=0" in logout.headers["set-cookie"]
             with pytest.raises(auth.AuthError):
                 auth.authenticate(token)
-            page = await client.get("/", headers={"Accept": "text/html"})
+            page = await client.get("/_goalcal/login?next=/app/", headers={"Accept": "text/html"})
             assert "action=\"/_goalcal/login\"" in page.text
 
     asyncio.run(scenario())
@@ -122,7 +161,7 @@ def test_account_disable_invalidates_existing_cookie():
     async def scenario():
         transport = httpx2.ASGITransport(app=app)
         async with httpx2.AsyncClient(transport=transport, base_url="http://127.0.0.1:8512") as client:
-            page = await client.get("/", headers={"Accept": "text/html"})
+            page = await client.get("/_goalcal/login?next=/app/", headers={"Accept": "text/html"})
             login = await client.post(
                 "/_goalcal/login", data={"username": name, "password": "test-password-long", "csrf": _csrf(page)},
                 follow_redirects=False,
@@ -133,7 +172,7 @@ def test_account_disable_invalidates_existing_cookie():
             auth.manage(name, disabled=True)
             with pytest.raises(auth.AuthError):
                 auth.authenticate(token)
-            page = await client.get("/", headers={"Accept": "text/html"})
+            page = await client.get("/_goalcal/login?next=/app/", headers={"Accept": "text/html"})
             assert "action=\"/_goalcal/login\"" in page.text
             post = await client.post("/_stcore/upload_file", headers={"Origin": "http://127.0.0.1:8512"})
             assert post.status_code == 401
@@ -167,7 +206,7 @@ def test_logout_ignores_expired_form_cookie_and_clears_stale_session():
     async def scenario():
         transport = httpx2.ASGITransport(app=app)
         async with httpx2.AsyncClient(transport=transport, base_url="https://goalcal.example") as client:
-            page = await client.get("/", headers={"Accept": "text/html"})
+            page = await client.get("/_goalcal/login?next=/app/", headers={"Accept": "text/html"})
             login = await client.post(
                 "/_goalcal/login", data={"username": name, "password": "test-password-long", "csrf": _csrf(page)},
                 follow_redirects=False,
@@ -192,7 +231,7 @@ def test_logout_ignores_expired_form_cookie_and_clears_stale_session():
             client.cookies.set(COOKIE_NAME, "garbage-token")
             stale = await client.post("/_goalcal/logout", data={}, follow_redirects=False)
             assert stale.status_code == 303
-            page = await client.get("/", headers={"Accept": "text/html"})
+            page = await client.get("/_goalcal/login?next=/app/", headers={"Accept": "text/html"})
             assert "action=\"/_goalcal/login\"" in page.text
 
     asyncio.run(scenario())
@@ -202,7 +241,7 @@ def test_login_page_matches_app_shell_style():
     async def scenario():
         transport = httpx2.ASGITransport(app=app)
         async with httpx2.AsyncClient(transport=transport, base_url="https://goalcal.example") as client:
-            page = await client.get("/", headers={"Accept": "text/html"})
+            page = await client.get("/_goalcal/login", headers={"Accept": "text/html"})
             assert 'class="brand-mark"' in page.text
             assert "GoalCal" in page.text
             assert "📅" not in page.text
@@ -221,7 +260,7 @@ def test_logout_rejects_cross_site_post_without_revoking_session():
     async def scenario():
         transport = httpx2.ASGITransport(app=app)
         async with httpx2.AsyncClient(transport=transport, base_url="https://goalcal.example") as client:
-            page = await client.get("/", headers={"Accept": "text/html"})
+            page = await client.get("/_goalcal/login?next=/app/", headers={"Accept": "text/html"})
             await client.post("/_goalcal/login", data={
                 "username": name, "password": "test-password-long", "csrf": _csrf(page),
             })
@@ -255,7 +294,7 @@ def test_register_page_timezone_select_and_nonce_csp():
                 assert f'<option value="{tz}"' in register.text
 
             # Login page also has nonce in CSP, but no register script or select
-            login = await client.get("/", headers={"Accept": "text/html"})
+            login = await client.get("/_goalcal/login?next=/app/", headers={"Accept": "text/html"})
             login_csp = login.headers.get("content-security-policy", "")
             login_match = re.search(r"script-src 'nonce-([^']+)'", login_csp)
             assert login_match
@@ -271,7 +310,7 @@ def test_auth_pages_follow_accept_language_and_cookie_override():
     async def scenario():
         transport = httpx2.ASGITransport(app=app)
         async with httpx2.AsyncClient(transport=transport, base_url="https://goalcal.example") as client:
-            zh_login = await client.get("/", headers={"Accept": "text/html", "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"})
+            zh_login = await client.get("/_goalcal/login?next=/app/", headers={"Accept": "text/html", "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"})
             assert zh_login.status_code == 200
             assert '<html lang="zh-CN">' in zh_login.text
             assert "让计划适应你的生活节奏" in zh_login.text
@@ -279,7 +318,7 @@ def test_auth_pages_follow_accept_language_and_cookie_override():
             assert "Plans that adapt" not in zh_login.text
             assert "试运行期间" not in zh_login.text
 
-            en_login = await client.get("/", headers={"Accept": "text/html", "Accept-Language": "en-US,en;q=0.9,zh;q=0.5"})
+            en_login = await client.get("/_goalcal/login?next=/app/", headers={"Accept": "text/html", "Accept-Language": "en-US,en;q=0.9,zh;q=0.5"})
             assert en_login.status_code == 200
             assert '<html lang="en">' in en_login.text
             assert "Plans that adapt to the rhythm of your life" in en_login.text
@@ -290,7 +329,7 @@ def test_auth_pages_follow_accept_language_and_cookie_override():
             switched = await client.get("/_goalcal/lang?lang=zh&next=/", follow_redirects=False)
             assert switched.status_code == 303
             assert switched.headers["location"] == "/"
-            overridden = await client.get("/", headers={"Accept": "text/html", "Accept-Language": "en-US,en;q=0.9"})
+            overridden = await client.get("/_goalcal/login?next=/app/", headers={"Accept": "text/html", "Accept-Language": "en-US,en;q=0.9"})
             assert "让计划适应你的生活节奏" in overridden.text
 
             # Selecting a language on the login page persists it onto the user account on login.
@@ -317,16 +356,16 @@ def test_auth_pages_support_theme_cookie_and_system_dark_mode():
     async def scenario():
         transport = httpx2.ASGITransport(app=app)
         async with httpx2.AsyncClient(transport=transport, base_url="https://goalcal.example") as client:
-            auto_page = await client.get("/", headers={"Accept": "text/html"})
+            auto_page = await client.get("/_goalcal/login?next=/app/", headers={"Accept": "text/html"})
             assert auto_page.status_code == 200
             assert "prefers-color-scheme:dark" in auto_page.text
             assert '<html lang="en">' in auto_page.text
 
-            dark_page = await client.get("/", headers={"Accept": "text/html"}, cookies={"goalcal_theme": "dark"})
+            dark_page = await client.get("/_goalcal/login?next=/app/", headers={"Accept": "text/html"}, cookies={"goalcal_theme": "dark"})
             assert dark_page.status_code == 200
             assert '<html lang="en" data-theme="dark">' in dark_page.text
 
-            light_page = await client.get("/", headers={"Accept": "text/html"}, cookies={"goalcal_theme": "light"})
+            light_page = await client.get("/_goalcal/login?next=/app/", headers={"Accept": "text/html"}, cookies={"goalcal_theme": "light"})
             assert light_page.status_code == 200
             assert '<html lang="en" data-theme="light">' in light_page.text
 

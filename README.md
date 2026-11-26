@@ -2,7 +2,7 @@
 
 让计划适应你的生活节奏。通过目标澄清、计划草稿、可解释排期、执行签到和滚动续阶，把长期目标变成下一步行动。
 
-正式入口：**https://goalcal.zhang.sarl**。当前唯一正式版本为 React Web + Python API；源码在本仓库根目录维护。原 Streamlit/ngrok 部署已经退役，旧资料位于 `docs/archive/`。
+正式入口：**https://goalcal.zhang.sarl**。匿名访问 `/` 展示中英文官网介绍页，产品应用位于 `/app/`，登录用户访问根路径会直接进入应用。当前唯一正式版本为 React Web + Python API；源码在本仓库根目录维护。原 Streamlit/ngrok 部署已经退役，旧资料位于 `docs/archive/`。
 
 ## 当前能力
 
@@ -29,7 +29,7 @@ make frontend
 make dev
 ```
 
-打开 http://127.0.0.1:8517/app/，使用预览账号 `preview` / `GoalCal-preview-2026!`。预览数据在 `var/development/preview.db`，默认关闭真实 AI，自动使用规则/模板；不会读取生产环境或生产库。
+打开 http://127.0.0.1:8517/ 查看官网介绍页；产品应用位于 http://127.0.0.1:8517/app/，使用预览账号 `preview` / `GoalCal-preview-2026!`。预览数据在 `var/development/preview.db`，默认关闭真实 AI，自动使用规则/模板；不会读取生产环境或生产库。
 
 需要前端热更新时，保留上述后端，再在另一终端运行 `cd frontend && npm run dev`，打开 Vite 输出的 `/app/` 地址。开发代理默认连接 8517，可在 `frontend/.env.local` 设置 `GOALCAL_DEV_BACKEND=http://127.0.0.1:其他开发端口`。
 
@@ -57,7 +57,7 @@ E2E 需要本机 Google Chrome，使用专用 8537 端口。测试不使用生�
 
 ## 代码结构
 
-- `frontend/src/`：React 页面、组件、API 客户端、语言与样式；`frontend/e2e/` 为浏览器测试。
+- `frontend/src/`：React 页面、组件、API 客户端、语言与样式；`frontend/src/intro/` 为独立公开官网，不加载应用 API 或 FullCalendar；`frontend/e2e/` 为浏览器测试。
 - `goalcal/auth_proxy.py`：同源认证、静态前端、API 挂载和健康检查。
 - `goalcal/web/`：API DTO、请求校验、幂等、事务、执行会话、提议、撤销及助手。
 - `goalcal/domain/`、`goalcal/agent.py`、`goalcal/llm/`：复用的业务、排期、规划与语言理解。

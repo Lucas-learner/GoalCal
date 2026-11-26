@@ -26,7 +26,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.middleware import Middleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response, JSONResponse
+from starlette.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse, Response, JSONResponse
 from starlette.routing import Route, WebSocketRoute, Mount
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
@@ -516,7 +516,11 @@ async def health(request: Request) -> Response:
         try:
             with get_engine().connect() as con:
                 schema = con.exec_driver_sql('PRAGMA user_version').scalar()
-            return schema == VERSION and (ROOT / 'frontend/dist/index.html').is_file()
+            return (
+                schema == VERSION
+                and (ROOT / 'frontend/dist/index.html').is_file()
+                and (ROOT / 'frontend/dist/intro.html').is_file()
+            )
         except Exception:
             return False
 
@@ -837,11 +841,29 @@ async def logout(request: Request) -> Response:
     return response
 
 
+async def landing(request: Request) -> Response:
+    token = _browser_token(request)
+    if token is not None:
+        try:
+            await run_in_threadpool(auth.authenticate, token)
+            return RedirectResponse("/app/", status_code=307)
+        except auth.AuthError:
+            pass
+    from .config import ROOT
+    page = ROOT / "frontend" / "dist" / "intro.html"
+    if not page.is_file():
+        return PlainTextResponse("Frontend not built. Run npm ci && npm run build in frontend/.", status_code=503)
+    return FileResponse(page, headers={
+        "Cache-Control": "no-store",
+        "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "same-origin",
+    })
+
+
 async def proxy_http(request: Request) -> Response:
     if _root_app_enabled() and request.url.path == "/" and request.method in {"GET", "HEAD"}:
-        if _browser_token(request) is None:
-            return _login_page(request, app_login=True)
-        return RedirectResponse("/app/", status_code=307)
+        return await landing(request)
     if not _legacy_ui_enabled():
         return PlainTextResponse("Not found", status_code=404)
     if request.method not in {"GET", "HEAD", "OPTIONS"} and _browser_token(request) is None:
