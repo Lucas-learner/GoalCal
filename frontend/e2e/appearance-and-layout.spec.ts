@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 
 test('theme applies to Habits, and the compact Calendar keeps its controls in one row', async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'dark' });
-  await page.goto('/');
+  await page.goto('/_goalcal/login?next=/app/');
   expect(await page.locator('html').evaluate(root => getComputedStyle(root).colorScheme)).toBe('dark');
   await page.getByRole('textbox', { name: '用户名或邮箱', exact: true }).fill('preview');
   await page.getByRole('textbox', { name: '密码', exact: true }).fill('GoalCal-preview-2026!');

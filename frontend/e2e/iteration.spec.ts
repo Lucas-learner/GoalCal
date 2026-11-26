@@ -11,7 +11,7 @@ async function generateDraft(page: Page) {
 }
 
 test.beforeEach(async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/_goalcal/login?next=/app/');
   await page.getByRole('textbox', { name: '用户名或邮箱', exact: true }).fill('preview');
   await page.getByRole('textbox', { name: '密码', exact: true }).fill('GoalCal-preview-2026!');
   await page.getByRole('button', { name: '登录', exact: true }).click();

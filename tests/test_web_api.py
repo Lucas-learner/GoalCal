@@ -36,6 +36,8 @@ def test_web_readiness_and_retired_legacy_routes(accounts, tmp_path, monkeypatch
             dist = tmp_path / 'frontend' / 'dist'
             dist.mkdir(parents=True)
             (dist / 'index.html').write_text('<div id="root"></div>')
+            assert (await c.get('/_goalcal/health')).status_code == 503
+            (dist / 'intro.html').write_text('<div id="root"></div>')
             result = await c.get('/_goalcal/health')
             assert result.status_code == 200
             assert result.json() == {'status': 'ok', 'application': 'goalcal-web'}
@@ -533,7 +535,7 @@ def test_root_app_redirects_root_to_app_and_trusts_local_forwarded_proto(account
 
     async def run():
         async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=app), base_url='https://goalcal.zhang.sarl') as c:
-            landing = await c.get('/', headers={'Accept': 'text/html', 'X-Forwarded-Proto': 'https'})
+            landing = await c.get('/_goalcal/login?next=/app/', headers={'Accept': 'text/html', 'X-Forwarded-Proto': 'https'})
             assert landing.status_code == 200
             assert 'name="next" value="/app/"' in landing.text
             csrf = re.search(r'name="csrf" value="([^"]+)"', landing.text).group(1)
@@ -582,7 +584,7 @@ def test_open_registration_requires_unique_email_and_allows_email_login(accounts
 
     async def run():
         async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=app), base_url='https://goalcal.zhang.sarl') as c:
-            login_page = await c.get('/', headers={'Accept': 'text/html', 'X-Forwarded-Proto': 'https'})
+            login_page = await c.get('/_goalcal/login?next=/app/', headers={'Accept': 'text/html', 'X-Forwarded-Proto': 'https'})
             assert 'Username or email' in login_page.text
 
             reg_page = await c.get('/_goalcal/register?next=/app/')

@@ -1,7 +1,7 @@
 # GoalCal 待办清单（TODO）
 
-> 更新日期：2026-11-25
-> 当前已上线版本：主动提醒阶段 0/1 + 自助密码重置 + AI 阶段提示 + 多目标全局每周平衡排期 Phase 1（`goalcal.zhang.sarl` / Cloudflare Tunnel `goalcal-v2` / 正式数据库 `var/production/goalcal.db` Schema `v16`）
+> 更新日期：2026-11-26
+> 当前已上线版本：中英文公开官网介绍页 + 主动提醒阶段 0/1 + 自助密码重置 + AI 阶段提示 + 多目标全局每周平衡排期 Phase 1（`goalcal.zhang.sarl` / Cloudflare Tunnel `goalcal-v2` / 正式数据库 `var/production/goalcal.db` Schema `v16`）
 
 ---
 
@@ -13,6 +13,9 @@
 ---
 
 ## 二、近期已完成里程碑
+
+- [x] **中英文公开官网介绍页（`/`）**
+  - 已在 [frontend/src/intro/](../frontend/src/intro/) 与 [auth_proxy.py](../goalcal/auth_proxy.py) 实现独立构建入口（`frontend/intro.html`，不加载应用 API 或 FullCalendar）：匿名访问 `/` 展示中英文真实产品截图官网，已登录用户自动跳转 `/app/`。
 
 - [x] **多目标全局每周平衡排期（Phase 1）**
   - 已上线确定性周排期引擎（[weekly_planner.py](../goalcal/domain/weekly_planner.py)）、Schema `v16` `web_weekly_plans`、日历周视图幽灵块预览与批量采纳/一键撤销（基于置顶 `pinned`、截止日期、剩余工作量与防饿死加权）。

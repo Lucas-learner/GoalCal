@@ -4,6 +4,8 @@ test('root, open email registration, email login, language and feedback', async 
   const suffix = Date.now().toString();
   const email = `audit-${suffix}@example.test`;
   await page.goto('/');
+  await expect(page.getByRole('heading', { name: /目标很大/ })).toBeVisible();
+  await page.getByRole('banner').getByRole('link', { name: '登录', exact: true }).click();
   await expect(page.getByRole('textbox', { name: '用户名或邮箱', exact: true })).toBeVisible();
   await page.getByRole('link', { name: '注册', exact: true }).click();
   await expect(page.getByRole('textbox', { name: '邮箱', exact: true })).toBeVisible();
