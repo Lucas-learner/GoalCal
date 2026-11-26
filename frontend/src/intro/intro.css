@@ -1020,7 +1020,7 @@ a:focus-visible {
 .story-chapter {
   display: flex;
   min-height: 76vh;
-  padding: clamp(130px, 20vh, 210px) 0 80px;
+  padding: clamp(185px, 27vh, 265px) 0 80px;
   flex-direction: column;
   justify-content: flex-start;
   scroll-margin-top: 16px;

@@ -13,8 +13,8 @@ test('public intro supports bilingual content, chapter navigation and local demo
   await expect(page.locator('.story-progress button').nth(2)).toHaveAttribute('aria-current', 'step');
   await expect(page.locator('.story-stage-visual img')).toHaveAttribute('src', /story-zh-2/);
   const step2HeadingTop = await page.locator('#story-2 h3').evaluate(el => el.getBoundingClientRect().top);
-  expect(step2HeadingTop).toBeGreaterThan(180);
-  expect(step2HeadingTop).toBeLessThan(330);
+  expect(step2HeadingTop).toBeGreaterThan(220);
+  expect(step2HeadingTop).toBeLessThan(390);
   expect(await page.locator('.story-stage-visual').evaluate(element => {
     const image = element.querySelector('img')!.getBoundingClientRect();
     const frame = element.querySelector('.story-visual')!.getBoundingClientRect();
