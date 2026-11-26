@@ -34,10 +34,10 @@ test('public intro supports bilingual content, chapter navigation and local demo
     const email = card.querySelector('.reminder-channel-email')!.getBoundingClientRect();
     return (
       calendar.top >= copy.bottom - 1 &&
+      calendar.top - copy.bottom < 48 &&
       Math.abs(calendar.left - copy.left) < 2 &&
       email.left >= copy.right - 1 &&
-      email.left >= calendar.right - 1 &&
-      Math.abs(calendar.bottom - email.bottom) < 2
+      email.left >= calendar.right - 1
     );
   })).toBe(true);
 
