@@ -459,4 +459,63 @@ describe('Calendar backlog drag-and-drop', () => {
 
     expect(await screen.findByText(/预计 25 分钟 · 自动推算结束：15:25/)).toBeInTheDocument();
   });
+
+  it('renders source filters above calendar-layout so calendar card aligns flush with sidebar', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url.startsWith('/api/v1/calendar/events')) {
+        return jsonResponse({
+          events: [
+            {
+              id: 101,
+              title: '研一课程',
+              kind: 'external',
+              source: 'sync',
+              status: 'planned',
+              start: '2026-11-23T09:00:00Z',
+              end: '2026-11-23T11:00:00Z',
+              version: 'ev101',
+              sync_source_id: 7,
+              sync_source_name: '研一上',
+            },
+          ],
+        });
+      }
+      if (url === '/api/v1/availability') {
+        return jsonResponse({
+          version: 'a1',
+          available_windows: [],
+          protected_windows: [],
+          buffer_minutes: 10,
+          max_goal_minutes_per_day: 240,
+          preferred_block_minutes: 45,
+          energy_curve: 'morning',
+        });
+      }
+      if (url === '/api/v1/goals') return jsonResponse({ goals: [] });
+      if (url === '/api/v1/habits') return jsonResponse({ habits: [] });
+      return jsonResponse({});
+    });
+
+    vi.stubGlobal('fetch', fetchMock);
+    const qc = createAppQueryClient();
+    const { container } = render(
+      <QueryClientProvider client={qc}>
+        <AppStateProvider>
+          <MemoryRouter>
+            <CalendarPage timezone="Asia/Shanghai" />
+          </MemoryRouter>
+        </AppStateProvider>
+      </QueryClientProvider>,
+    );
+
+    const filters = await screen.findByRole('group', { name: '筛选日历来源' });
+    const layout = container.querySelector('.calendar-layout');
+    expect(layout).not.toBeNull();
+    expect(layout!.contains(filters)).toBe(false);
+
+    const leftCol = layout!.firstElementChild;
+    expect(leftCol?.firstElementChild?.classList.contains('calendar-card')).toBe(true);
+    expect(layout!.querySelector('aside.backlog')).not.toBeNull();
+  });
 });

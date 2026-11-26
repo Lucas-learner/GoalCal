@@ -981,33 +981,33 @@ export function CalendarPage({ timezone }: { timezone: string }) {
         </div>
       ) : null}
 
+      {syncedSources.length > 0 ? (
+        <div className="calendar-source-filters" role="group" aria-label={t('筛选日历来源', 'Filter calendar sources')}>
+          {syncedSources.map((src) => {
+            const isHidden = hiddenSourceIds.includes(src.id);
+            return (
+              <button
+                key={src.id}
+                type="button"
+                className={`calendar-filter-chip${isHidden ? ' hidden-source' : ''}`}
+                aria-pressed={!isHidden}
+                onClick={() => toggleSourceVisibility(src.id)}
+              >
+                <span>{src.name}</span>
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+
+      {!eventsQuery.isLoading && !eventsQuery.isError && visibleEvents.length === 0 ? (
+        <div className="status-banner info" role="status">
+          <div className="status-banner-body">{emptyBannerText}</div>
+        </div>
+      ) : null}
+
       <div className={`calendar-layout${isMobile ? ' is-mobile' : ''}`}>
         <div>
-          {syncedSources.length > 0 ? (
-            <div className="calendar-source-filters" role="group" aria-label={t('筛选日历来源', 'Filter calendar sources')}>
-              {syncedSources.map((src) => {
-                const isHidden = hiddenSourceIds.includes(src.id);
-                return (
-                  <button
-                    key={src.id}
-                    type="button"
-                    className={`calendar-filter-chip${isHidden ? ' hidden-source' : ''}`}
-                    aria-pressed={!isHidden}
-                    onClick={() => toggleSourceVisibility(src.id)}
-                  >
-                    <span>{src.name}</span>
-                  </button>
-                );
-              })}
-            </div>
-          ) : null}
-
-          {!eventsQuery.isLoading && !eventsQuery.isError && visibleEvents.length === 0 ? (
-            <div className="status-banner info" role="status">
-              <div className="status-banner-body">{emptyBannerText}</div>
-            </div>
-          ) : null}
-
           <div className="card-flat calendar-card gc-fc">
             <FullCalendar
               ref={calendarRef}
