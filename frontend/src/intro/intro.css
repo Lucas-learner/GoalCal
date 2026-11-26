@@ -4562,6 +4562,11 @@ a:focus-visible {
   grid-template-columns: minmax(290px, 0.9fr) minmax(380px, 1.1fr);
   gap: 36px;
   padding: 34px 42px;
+  align-items: start;
+}
+
+.reminder-feature .feature-card-copy {
+  padding-top: 24px;
 }
 
 .reminder-showcase {
@@ -4603,6 +4608,10 @@ a:focus-visible {
     grid-template-columns: 1fr;
     gap: 24px;
     padding: 32px;
+  }
+
+  .reminder-feature .feature-card-copy {
+    padding-top: 0;
   }
 
   .reminder-showcase {

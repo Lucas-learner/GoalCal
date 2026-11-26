@@ -1,8 +1,6 @@
 import { useI18n } from '../i18n';
 import heroZh from './assets/hero-zh.webp';
-import heroZhMobile from './assets/hero-zh-mobile.webp';
 import heroEn from './assets/hero-en.webp';
-import heroEnMobile from './assets/hero-en-mobile.webp';
 import storyZh0 from './assets/story-zh-0.webp';
 import storyZh1 from './assets/story-zh-1.webp';
 import storyZh2 from './assets/story-zh-2.webp';
@@ -28,8 +26,8 @@ export type StoryIndex = 0 | 1 | 2 | 3 | 4;
 type FeatureName = 'calendar' | 'habit' | 'assistant' | 'reminders';
 
 const heroImages = {
-  zh: { desktop: heroZh, mobile: heroZhMobile },
-  en: { desktop: heroEn, mobile: heroEnMobile },
+  zh: heroZh,
+  en: heroEn,
 };
 
 const storyImages = {
@@ -74,14 +72,11 @@ export function HeroProduct() {
       <div className="hero-product-glow" />
       <div className="product-window hero-window real-product-window">
         <WindowBar />
-        <picture>
-          <source media="(max-width: 640px)" srcSet={heroImages[lang].mobile} />
-          <img
-            className="hero-screenshot"
-            src={heroImages[lang].desktop}
-            alt={t('GoalCal 的「今天」页，显示首次 10 公里目标的训练时间和开始按钮', 'GoalCal Today with the time and Start button for the first 10K training session')}
-          />
-        </picture>
+        <img
+          className="hero-screenshot"
+          src={heroImages[lang]}
+          alt={t('GoalCal 的「今天」页，显示首次 10 公里目标的训练时间和开始按钮', 'GoalCal Today with the time and Start button for the first 10K training session')}
+        />
       </div>
     </div>
   );
