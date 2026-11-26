@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import { CalendarIcon, SyncIcon } from '../components/Icons';
 import { useI18n } from '../i18n';
 import {
   AssistantDemo,
@@ -190,7 +189,7 @@ export function IntroPage() {
             </div>
             <div className="feature-bento">
               <article className="feature-card sync-feature" data-reveal>
-                <div className="feature-card-copy"><span className="feature-icon"><SyncIcon /></span><span className="section-kicker">CALENDAR SYNC</span><h3>{t('你的日历，终于一起工作。', 'Your calendars, finally working together.')}</h3><p>{t('在同一日历查看外部日程和 GoalCal 行动。', 'See external events and GoalCal actions together.')}</p><div className="feature-point-list"><span><b>01</b>{t('专属 GoalCal 子日历', 'A dedicated GoalCal calendar')}</span><span><b>02</b>{t('来源配色与排期避让', 'Source colors and scheduling controls')}</span><span><b>03</b>{t('冲突检测与一键重排', 'Conflict detection and one-click replanning')}</span></div></div>
+                <div className="feature-card-copy"><span className="section-kicker">CALENDAR SYNC</span><h3>{t('你的日历，终于一起工作。', 'Your calendars, finally working together.')}</h3><p>{t('在同一日历查看外部日程和 GoalCal 行动。', 'See external events and GoalCal actions together.')}</p><div className="feature-point-list"><span><b>01</b>{t('专属 GoalCal 子日历', 'A dedicated GoalCal calendar')}</span><span><b>02</b>{t('来源配色与排期避让', 'Source colors and scheduling controls')}</span><span><b>03</b>{t('冲突检测与一键重排', 'Conflict detection and one-click replanning')}</span></div></div>
                 <CalendarSyncDemo />
               </article>
               <article className="feature-card habit-feature" data-reveal>
@@ -202,7 +201,7 @@ export function IntroPage() {
                 <AssistantDemo />
               </article>
               <article className="feature-card reminder-feature" data-reveal>
-                <div className="feature-card-copy"><span className="feature-icon"><CalendarIcon /></span><span className="section-kicker">GENTLE REMINDERS</span><h3>{t('提醒，但不轰炸。', 'A nudge, not a notification storm.')}</h3><p>{t('系统日历到点提醒，邮件发送早晚摘要与每周复盘。支持免打扰和合并发送。', 'Calendar alarms, daily email digests, and weekly reviews—with quiet hours and grouped delivery.')}</p></div>
+                <div className="feature-card-copy"><span className="section-kicker">GENTLE REMINDERS</span><h3>{t('提醒，但不轰炸。', 'A nudge, not a notification storm.')}</h3><p>{t('系统日历到点提醒，邮件发送早晚摘要与每周复盘。支持免打扰和合并发送。', 'Calendar alarms, daily email digests, and weekly reviews—with quiet hours and grouped delivery.')}</p></div>
                 <ReminderDemo />
               </article>
             </div>

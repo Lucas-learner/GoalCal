@@ -4558,6 +4558,14 @@ a:focus-visible {
   height: auto;
 }
 
+.sync-feature {
+  align-items: start;
+}
+
+.sync-feature .feature-card-copy {
+  padding-top: 28px;
+}
+
 .reminder-feature {
   grid-template-columns: minmax(290px, 0.9fr) minmax(380px, 1.1fr);
   gap: 36px;
@@ -4566,7 +4574,7 @@ a:focus-visible {
 }
 
 .reminder-feature .feature-card-copy {
-  padding-top: 24px;
+  padding-top: 72px;
 }
 
 .reminder-showcase {
@@ -4610,6 +4618,7 @@ a:focus-visible {
     padding: 32px;
   }
 
+  .sync-feature .feature-card-copy,
   .reminder-feature .feature-card-copy {
     padding-top: 0;
   }
