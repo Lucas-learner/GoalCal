@@ -4573,24 +4573,22 @@ a:focus-visible {
 }
 
 .reminder-feature {
-  grid-template-columns: minmax(290px, 0.9fr) minmax(380px, 1.1fr);
-  gap: 36px;
-  padding: 34px 42px;
+  grid-template-columns: minmax(320px, 0.92fr) minmax(420px, 1.08fr);
+  grid-template-rows: auto 1fr;
+  column-gap: 36px;
+  row-gap: 28px;
+  padding: 42px;
   align-items: start;
 }
 
 .reminder-feature .feature-card-copy {
-  padding-top: 72px;
+  grid-column: 1;
+  grid-row: 1;
+  padding-top: 12px;
 }
 
 .reminder-showcase {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 14px;
-  width: 100%;
-  max-width: 480px;
-  justify-self: end;
-  min-width: 0;
+  display: contents;
 }
 
 .reminder-showcase-channel {
@@ -4598,8 +4596,20 @@ a:focus-visible {
   margin: 0;
 }
 
+.reminder-channel-calendar {
+  grid-column: 1;
+  grid-row: 2;
+  align-self: end;
+}
+
+.reminder-channel-email {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: end;
+}
+
 .reminder-showcase-channel figcaption {
-  margin-bottom: 6px;
+  margin-bottom: 8px;
   color: #838880;
   font-size: 10px;
 }
@@ -4621,19 +4631,34 @@ a:focus-visible {
   .sync-feature,
   .reminder-feature {
     grid-template-columns: 1fr;
+    grid-template-rows: auto;
     gap: 24px;
     padding: 32px;
   }
 
   .sync-feature .feature-card-copy,
   .reminder-feature .feature-card-copy {
+    grid-column: auto;
+    grid-row: auto;
     padding-top: 0;
     padding-right: 0;
   }
 
   .reminder-showcase {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 18px;
+    width: 100%;
     max-width: 540px;
     justify-self: start;
+    min-width: 0;
+  }
+
+  .reminder-channel-calendar,
+  .reminder-channel-email {
+    grid-column: auto;
+    grid-row: auto;
+    align-self: auto;
   }
 }
 

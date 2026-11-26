@@ -30,10 +30,15 @@ test('public intro supports bilingual content, chapter navigation and local demo
   await page.locator('.reminder-feature').scrollIntoViewIfNeeded();
   expect(await page.locator('.reminder-feature').evaluate(card => {
     const copy = card.querySelector('.feature-card-copy')!.getBoundingClientRect();
-    const showcase = card.querySelector('.reminder-showcase')!.getBoundingClientRect();
     const calendar = card.querySelector('.reminder-channel-calendar')!.getBoundingClientRect();
     const email = card.querySelector('.reminder-channel-email')!.getBoundingClientRect();
-    return showcase.left >= copy.right - 1 && email.top >= calendar.bottom - 1 && Math.abs(calendar.left - email.left) < 2;
+    return (
+      calendar.top >= copy.bottom - 1 &&
+      Math.abs(calendar.left - copy.left) < 2 &&
+      email.left >= copy.right - 1 &&
+      email.left >= calendar.right - 1 &&
+      Math.abs(calendar.bottom - email.bottom) < 2
+    );
   })).toBe(true);
 
   await page.getByRole('button', { name: 'EN', exact: true }).click();
