@@ -23,6 +23,22 @@
 | 卡片 / 控件圆角 | 13px / 9px |
 | 字体 | 系统字体，含 PingFang SC |
 
+## 品牌标识与 Logo
+
+GoalCal 采用 **地平线 G（Horizon G）** 作为统一品牌标志——*在平静的生活节奏里，让长期目标稳稳落地（A long-term goal, grounded in the calm rhythm of today）。*
+
+- **几何隐喻**：
+  1. **正圆与字母 G**：以同心正圆构成清晰的品牌首字母 **G**，象征目标与习惯沿着生活节律持续循环、稳步推进的轨道。
+  2. **纯水平切口与横杠**：摒弃锐角箭头与斜切加速感，通篇使用平直水平切线，将长期目标收束为日历中清晰可达的「今日下一步」。
+  3. **底部双水纹切片**：以两道微渐宽的水平留白切出三段平稳弧面，兼顾晨光倒影般的平静秩序与日历时间行／阶段拆解刻度。
+- **视觉与工程规范**：
+  - **无框留白、纯粹单色**：不使用厚重封闭外框或浮夸渐变，主图形仅以深墨（`#1d1d1f`）与暖白（`#f0f0ee` / `#fafaf8`）呈现，应用与官网内通过 `currentColor` 自动匹配文字与主题色（官网页脚继承 `#1d1d1f`）。
+  - **纯解析矢量路径**：图形仅由 4 条无遮罩 ID 的解析 `<path>` 构成（`viewBox="14 14 92 92"`），避免同页多实例碰撞并在 `16px` 标签页至 `180px` 桌面图标全尺寸下保持锐利。
+- **实现与资源位置**：
+  - 前端共享组件：`frontend/src/components/BrandMark.tsx`（接入官网导航/页脚与 Web 应用侧边栏）。
+  - 静态图标：`frontend/public/favicon.svg`（内置浅/深色 `prefers-color-scheme` 适配）、`frontend/public/favicon.ico`（16px / 32px）、`frontend/public/apple-touch-icon.png`（180px）。
+  - 登录/注册网关：`goalcal/auth_proxy.py` 内联同款 `<svg>` 并通过 `/favicon.svg`、`/favicon.ico`、`/apple-touch-icon.png` 公开提供图标资源。
+
 ## 页面与交互
 
 - 今天：当前行动、下一步、同步冲突重排提示与恢复事项；按今日排期及目标优先顺序组织。
