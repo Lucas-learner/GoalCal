@@ -61,6 +61,6 @@ describe('GoalCal public introduction', () => {
     const schedule = container.querySelectorAll<HTMLButtonElement>('.story-progress button')[2];
     await user.click(schedule);
     expect(schedule).toHaveAttribute('aria-current', 'step');
-    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'auto', block: 'center' });
+    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'auto', block: 'start' });
   });
 });

@@ -90,7 +90,7 @@ export function IntroPage() {
     let frame = 0;
     const update = () => {
       frame = 0;
-      const center = window.innerHeight * 0.52;
+      const center = window.innerHeight * 0.42;
       const nearest = chapters.reduce<{ index: StoryIndex; distance: number }>((best, chapter) => {
         const rect = chapter.getBoundingClientRect();
         const distance = rect.top <= center && rect.bottom >= center
@@ -117,7 +117,7 @@ export function IntroPage() {
 
   const goToStory = (index: StoryIndex) => {
     setActiveStory(index);
-    document.getElementById(`story-${index}`)?.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'center' });
+    document.getElementById(`story-${index}`)?.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'start' });
   };
 
   return (
@@ -126,10 +126,6 @@ export function IntroPage() {
       <header className="intro-nav">
         <div className="intro-nav-inner">
           <a href="#top" aria-label={t('GoalCal 首页', 'GoalCal home')}><Brand /></a>
-          <nav className="intro-nav-links" aria-label={t('首页导航', 'Main navigation')}>
-            <a href="#how-it-works">{t('如何工作', 'How it works')}</a>
-            <a href="#features">{t('更多能力', 'Features')}</a>
-          </nav>
           <div className="intro-nav-actions">
             <div className="intro-language" role="group" aria-label={t('语言', 'Language')}>
               <button type="button" className={lang === 'zh' ? 'active' : ''} aria-pressed={lang === 'zh'} onClick={() => setPreference('zh')}>中</button>

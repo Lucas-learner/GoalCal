@@ -184,6 +184,7 @@ a:focus-visible {
   display: flex;
   align-items: center;
   gap: 17px;
+  margin-left: auto;
 }
 
 .intro-language {
@@ -1018,11 +1019,11 @@ a:focus-visible {
 
 .story-chapter {
   display: flex;
-  min-height: 78vh;
-  padding: 80px 0;
+  min-height: 76vh;
+  padding: clamp(130px, 20vh, 210px) 0 80px;
   flex-direction: column;
-  justify-content: center;
-  scroll-margin-top: 100px;
+  justify-content: flex-start;
+  scroll-margin-top: 16px;
 }
 
 .story-chapter-number {
