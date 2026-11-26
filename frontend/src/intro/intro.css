@@ -4446,7 +4446,7 @@ a:focus-visible {
   width: 100%;
   height: auto;
   min-height: 0;
-  margin-top: 20px;
+  margin-top: 0;
   border: 1px solid #e0e3df;
   border-radius: 14px;
   aspect-ratio: 1.3;
@@ -4559,11 +4559,17 @@ a:focus-visible {
 }
 
 .sync-feature {
+  padding: 42px;
   align-items: start;
 }
 
 .sync-feature .feature-card-copy {
   padding-top: 56px;
+}
+
+.habit-feature,
+.assistant-feature {
+  padding: 34px;
 }
 
 .reminder-feature {
@@ -4612,6 +4618,7 @@ a:focus-visible {
 }
 
 @media (max-width: 1050px) {
+  .sync-feature,
   .reminder-feature {
     grid-template-columns: 1fr;
     gap: 24px;
@@ -4621,6 +4628,7 @@ a:focus-visible {
   .sync-feature .feature-card-copy,
   .reminder-feature .feature-card-copy {
     padding-top: 0;
+    padding-right: 0;
   }
 
   .reminder-showcase {
@@ -4630,6 +4638,9 @@ a:focus-visible {
 }
 
 @media (max-width: 640px) {
+  .sync-feature,
+  .habit-feature,
+  .assistant-feature,
   .reminder-feature {
     padding: 25px;
   }
