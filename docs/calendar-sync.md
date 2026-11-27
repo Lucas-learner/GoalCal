@@ -1,7 +1,7 @@
 # 日历同步设计与演进（V2.2）
 
 > 更新日期：2026-11-24
-> Schema 版本：`v13`
+> V2.2 的同步表结构于 Schema `v13` 引入。整个应用当前使用 Schema `v16`。
 
 GoalCal 已完成 **V1（双向 `.ics` 订阅）→ V2.0（排期冲突联动与来源控制）→ V2.1（Apple iCloud / CalDAV 原生双向同步）→ V2.2（Google Calendar OAuth 实时双向同步）** 的全链路接入。
 
@@ -37,7 +37,7 @@ GoalCal 已完成 **V1（双向 `.ics` 订阅）→ V2.0（排期冲突联动与
 
 ---
 
-## 二、数据模型（Schema `v13`）
+## 二、日历同步数据模型（引入版本 v13）
 
 - `calendar_connections`：加密凭证容器（`provider`、`account_label`、`server_url`、`username`、`encrypted_secrets`、`token_expires_at`、`status`、`last_error`）。
 - `calendar_sources`：同步日历配置（在 v12 基础上新增 `connection_id`、`remote_calendar_id`、`color`、`blocks_scheduling`、`all_day_mode`、`writable`、`is_goalcal_calendar`、`webhook_channel_id`、`webhook_resource_id`、`webhook_secret`、`webhook_expires_at`）。

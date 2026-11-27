@@ -2,7 +2,7 @@
 
 让计划适应你的生活节奏。通过目标澄清、计划草稿、可解释排期、执行签到和滚动续阶，把长期目标变成下一步行动。
 
-正式入口：**https://goalcal.zhang.sarl**。匿名访问 `/` 展示中英文官网介绍页，产品应用位于 `/app/`，登录用户访问根路径会直接进入应用。当前唯一正式版本为 React Web + Python API；源码在本仓库根目录维护。原 Streamlit/ngrok 部署已经退役，旧资料位于 `docs/archive/`。
+正式入口：**https://goalcal.zhang.sarl**。匿名访问 `/` 展示中英文官网介绍页，产品应用位于 `/app/`，登录用户访问根路径会直接进入应用。当前唯一正式版本为 React Web + Python API；源码在本仓库根目录维护。原 Streamlit/ngrok 部署已经退役。
 
 ## 当前能力
 
@@ -49,7 +49,7 @@ E2E 需要本机 Google Chrome，使用专用 8537 端口。测试不使用生�
 
 ## 部署与维护
 
-完整资料见 [文档索引](docs/README.md)，历史文档单独归档。
+完整资料见 [文档索引](docs/README.md)。
 
 [生产手册](docs/production.md) · [试用说明](docs/trial.md) · [系统架构](docs/系统架构图.md) · [接口契约](docs/接口契约.md) · [设计](docs/DESIGN.md) · [整合记录](docs/records/consolidation-2026-11-17.md)
 
@@ -61,7 +61,7 @@ E2E 需要本机 Google Chrome，使用专用 8537 端口。测试不使用生�
 - `goalcal/auth_proxy.py`：同源认证、静态前端、API 挂载和健康检查。
 - `goalcal/web/`：API DTO、请求校验、幂等、事务、执行会话、提议、撤销及助手。
 - `goalcal/domain/`、`goalcal/agent.py`、`goalcal/llm/`：复用的业务、排期、规划与语言理解。
-- `goalcal/models.py`、`migrations.py`、`storage.py`：SQLite schema 15、迁移和备份。
+- `goalcal/models.py`、`migrations.py`、`storage.py`：SQLite schema 16、迁移和备份。
 - `deploy/`：生成可审查的 launchd/Cloudflare 配置；`tools/web_preview.py`：隔离预览。
 - `app.py`、`routes/`、`goalcal/ui/`：仅保留的 Streamlit 兼容回归代码，生产不启动、不开放旧路由。
 - `var/`：运行数据、日志和归档，不进入 Git；正式源码不得再放在此目录。

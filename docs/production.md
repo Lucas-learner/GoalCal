@@ -48,7 +48,18 @@ Cloudflare Tunnel 的凭据留在主机原凭据目录，不进入 Git。以下�
 cloudflared tunnel --config "$PWD/deploy/generated/cloudflared.yml" ingress validate
 ```
 
-`--gateway-port` 必须与环境文件 `GOALCAL_GATEWAY_PORT` 一致。检查生成的绝对路径后，把三个 plist 安装到 `~/Library/LaunchAgents/`；首次加载使用 `launchctl bootstrap gui/$(id -u) <plist绝对路径>`。服务名称保留 `local.goalcal-v2`，防止与已退役的 V1 标签混淆。
+`--gateway-port` 必须与环境文件 `GOALCAL_GATEWAY_PORT` 一致。生成器默认将三个服务的 `WorkingDirectory` 指向源码工作区。安装前，从仓库根目录执行以下命令，将应用与备份任务指向本次已验证的发布目录。示例使用上表的当前发布，升级时替换为新目录。
+
+```sh
+release_dir="$PWD/var/releases/brand-logo-footer-fix-v16-20261126"
+for service in app backup; do
+  plist="$PWD/deploy/generated/local.goalcal-v2.$service.plist"
+  /usr/libexec/PlistBuddy -c "Set :WorkingDirectory $release_dir" "$plist"
+  /usr/libexec/PlistBuddy -c "Print :WorkingDirectory" "$plist"
+done
+```
+
+核对两行输出都指向包含 `goalcal/`、`frontend/dist/index.html` 和 `frontend/dist/intro.html` 的发布目录，隧道仍使用源码工作区。确认后把三个 plist 安装到 `~/Library/LaunchAgents/`；首次加载使用 `launchctl bootstrap gui/$(id -u) <plist绝对路径>`。服务名称保留 `local.goalcal-v2`，防止与已退役的 V1 标签混淆。
 
 应用/隧道异常自动重启；备份登录加载时和每天 03:15 运行，保留 14 天 daily 备份。用户退出 macOS、断电、断网仍会影响可用性。隧道只绑定网关的 loopback 端口。
 
