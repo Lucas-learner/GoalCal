@@ -2,7 +2,7 @@
 
 让计划适应你的生活节奏。通过目标澄清、计划草稿、可解释排期、执行签到和滚动续阶，把长期目标变成下一步行动。
 
-正式入口：https://goalcal.zhang.sarl。`/` 展示中英文官网介绍页，产品应用位于 `/app/`，登录用户访问根路径会直接进入应用。当前唯一正式版本为 React Web + Python API；源码在本仓库根目录维护。原 Streamlit/ngrok 部署已经退役。
+正式入口：https://goalcal.zhang.sarl 。匿名访问`/`展示中英文官网介绍页，产品应用位于 `/app/`，登录用户访问根路径会直接进入应用。当前唯一正式版本为 React Web + Python API；源码在本仓库根目录维护。原 Streamlit/ngrok 部署已经退役。
 
 ## 当前能力
 
